@@ -1,8 +1,12 @@
 import argparse
 from core.utils.arg_validator import validate_args
 from core.utils.mode_utils import handle_manual_mode, handle_csv_mode
+from core.utils.db_utils import init_db
 
 def main():
+    # Initialize the database
+    init_db()
+    
     parser = argparse.ArgumentParser(description='Deploy Docker containers for users from a CSV file.')
     parser.add_argument('--mode', type=str, choices=['group', 'single', 'manual'], required=True, 
                         help='Deployment mode: group (all users), single (one user), or manual (direct params)')
@@ -15,10 +19,20 @@ def main():
     parser.add_argument('--cpu', type=str, default="4", help='CPU limit for containers (default: 4 cores)')
     parser.add_argument('--ram', type=str, default="8g", help='RAM limit for containers (default: 8GB)')
     parser.add_argument('--storage', type=str, default="50g", help='Storage limit for containers (default: 50GB)')
+    parser.add_argument('--list-containers', action='store_true', help='List all containers in the database')
     args = parser.parse_args()
     
     # Validate arguments based on mode
     args = validate_args(args)
+
+    # Handle listing containers if requested
+    if hasattr(args, 'list_containers') and args.list_containers:
+        from core.utils.db_utils import get_all_containers
+        containers = get_all_containers()
+        print(f"Total containers: {len(containers)}")
+        for container in containers:
+            print(f"Name: {container['container_name']}, User: {container['username']}, Port: {container['port']}, Status: {container['status']}")
+        return
 
     mode = args.mode 
     start_port = args.port
