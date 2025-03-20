@@ -59,42 +59,51 @@ uv pip install -r requirements.txt
 
 ### 3. Build the Docker Image
 ```bash
-docker build -t custom-ssh .
+docker build -t custom-ssh -f core/docker/Dockerfile .
 ```
 
 ## Usage
 The system uses a Python script to deploy containers from a CSV roster file:
 
 ```bash
-python all.py [OPTIONS]
+python main.py --mode MODE [OPTIONS]
 ```
 
 ### Command Line Options
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--mode MODE` | Deployment mode: 'group' (all users), 'single' (one user), or 'manual' (direct params) | (required) |
 | `--image IMAGE` | Docker image to deploy | custom-ssh |
 | `--port PORT` | Starting host port number | 50000 |
-| `--user USER_ID` | Deploy container for a specific user by OrgDefinedId | (all users) |
+| `--user USER_ID` | Deploy container for a specific user by OrgDefinedId (for single mode) | (none) |
+| `--manual-username USERNAME` | Username for manual deployment | (none) |
+| `--manual-password PASSWORD` | Password for manual deployment | (none) |
+| `--manual-docker-name NAME` | Docker container name for manual deployment | (none) |
 | `--cpu LIMIT` | CPU limit for containers | 4 |
 | `--ram LIMIT` | RAM limit for containers | 8g |
 | `--storage LIMIT` | Storage limit for containers | 50g |
 
 ### Examples
 
-Deploy containers for all users in the CSV file:
+Deploy containers for all users in the CSV file (group mode):
 ```bash
-python all.py --image debian-ssh
+python main.py --mode group --image debian-ssh
 ```
 
-Deploy a container for a specific user:
+Deploy a container for a specific user (single mode):
 ```bash
-python all.py --user 811000000 --port 51000
+python main.py --mode single --user 811000000 --port 51000
+```
+
+Deploy a container with manual parameters (manual mode):
+```bash
+python main.py --mode manual --manual-username student01 --manual-password pass123 --manual-docker-name container01 --port 51000
 ```
 
 Deploy with custom resource limits:
 ```bash
-python all.py --cpu 2 --ram 4g --storage 20g
+python main.py --mode group --cpu 2 --ram 4g --storage 20g
 ```
 
 ## Contributing
