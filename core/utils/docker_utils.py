@@ -1,4 +1,5 @@
 import subprocess
+from .arg_validator import validate_port, validate_docker_storage_filesystem
 
 def check_and_remove_container(container_name):
     """Check if container exists and remove it."""
@@ -23,7 +24,11 @@ def deploy_container(username, password, port, docker_name, image_name, cpu_limi
     # First check and remove existing container if it exists
     if not check_and_remove_container(docker_name):
         return False, ""
-    
+    # then validate the port
+    port = validate_port(port)
+    # and the storage filesystem
+    file_system_check = validate_docker_storage_filesystem('/var/lib/docker')
+
     docker_cmd = [
         "docker", "run", "-d",
         "--name", docker_name,
@@ -32,14 +37,21 @@ def deploy_container(username, password, port, docker_name, image_name, cpu_limi
         "--runtime=nvidia",
         "--cpus", cpu_limit,
         "--memory", ram_limit,
-        # "--storage-opt", f"size={storage_limit}",
+    ]
+    
+    # Add storage option only if filesystem check passes
+    if file_system_check:
+        docker_cmd.extend(["--storage-opt", f"size={storage_limit}"])
+    
+    # Add remaining options
+    docker_cmd.extend([
         "-e", f"USERNAME={username}",
         "-e", f"PASSWORD={password}",
         "-e", "ENABLE_PASSWORD_AUTH=true",
         "-e", "PERMIT_ROOT_LOGIN=true",
         "--restart", "unless-stopped",
         image_name
-    ]
+    ])
     
     print(f"Deploying container for {username} on host port {port}...")
     try:

@@ -6,10 +6,10 @@ from core.utils.arg_validator import validate_args
 
 def main():
     parser = argparse.ArgumentParser(description='Deploy Docker containers for users from a CSV file.')
+    parser.add_argument('--mode', type=str, choices=['group', 'single', 'manual'], required=True, 
+                        help='Deployment mode: group (all users), single (one user), or manual (direct params)')
     parser.add_argument('--image', type=str, default="custom-ssh", help='Docker image to deploy (default: custom-ssh)')
     parser.add_argument('--port', type=int, default=50000, help='Starting host port number (default: 50000)')
-    parser.add_argument('--mode', type=str, choices=['group', 'single', 'manual'], default='group', 
-                        help='Deployment mode: group (all users), single (one user), or manual (direct params)')
     parser.add_argument('--user', type=str, help='Deploy container for a specific user by OrgDefinedId (for single mode)')
     parser.add_argument('--manual-username', type=str, help='Username for manual deployment')
     parser.add_argument('--manual-password', type=str, help='Password for manual deployment')
