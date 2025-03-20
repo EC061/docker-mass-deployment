@@ -1,8 +1,6 @@
 import argparse
-import sys
-from core.utils.csv_utils import find_input_csv, process_csv_and_deploy, save_updated_csv
-from core.utils.docker_utils import deploy_container
 from core.utils.arg_validator import validate_args
+from core.utils.mode_utils import handle_manual_mode, handle_csv_mode
 
 def main():
     parser = argparse.ArgumentParser(description='Deploy Docker containers for users from a CSV file.')
@@ -30,32 +28,12 @@ def main():
     storage_limit = args.storage
 
     if mode == 'manual':
-        print(f"Manual mode: Deploying container for {args.manual_username}")
-        success, _ = deploy_container(args.manual_username, args.manual_password, start_port, 
-                                      args.manual_docker_name, image_name, cpu_limit, ram_limit, storage_limit)
-        if success:
-            print(f"Container for {args.manual_docker_name} deployed successfully on port {start_port}")
-        else:
-            print(f"Failed to deploy container for {args.manual_docker_name}")
+        handle_manual_mode(args.manual_username, args.manual_password, start_port, 
+                           args.manual_docker_name, image_name, cpu_limit, ram_limit, storage_limit)
     else:
         # Group or Single mode - process CSV
-        input_file, output_file = find_input_csv()
-        print(f"Processing input CSV: {input_file}")
-        
         user_id = args.user if mode == 'single' else None
-        
-        if user_id:
-            print(f"Single user mode: Deploying container only for user with ID '{user_id}'")
-            output_file = f"{user_id}_container.csv"
-        
-        updated_df = process_csv_and_deploy(input_file, start_port, image_name, user_id, 
-                                           cpu_limit, ram_limit, storage_limit)
-        
-        if updated_df is not None and not updated_df.empty:
-            save_updated_csv(updated_df, output_file)
-            print(f"Deployment complete. CSV saved as '{output_file}'.")
-        else:
-            print("No containers were deployed.")
+        handle_csv_mode(start_port, image_name, user_id, cpu_limit, ram_limit, storage_limit)
 
 if __name__ == "__main__":
     main()
