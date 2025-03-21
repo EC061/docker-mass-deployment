@@ -64,3 +64,6 @@ pip-delete-this-directory.txt
 .vscode/
 *.swp
 *.swo
+
+# sqlite database
+*.db

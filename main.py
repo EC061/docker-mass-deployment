@@ -45,9 +45,7 @@ def main():
         handle_manual_mode(args.manual_username, args.manual_password, start_port, 
                            args.manual_docker_name, image_name, cpu_limit, ram_limit, storage_limit)
     else:
-        # Group or Single mode - process CSV
-        user_id = args.user if mode == 'single' else None
-        handle_csv_mode(start_port, image_name, user_id, cpu_limit, ram_limit, storage_limit)
+        handle_csv_mode(args)
 
 if __name__ == "__main__":
     main()
