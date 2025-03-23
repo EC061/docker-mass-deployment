@@ -1,15 +1,15 @@
 import sqlite3
 import os
 import datetime
-import pathlib
 
-# Database location
-DB_PATH = pathlib.Path(__file__).parent.parent.parent / "data" / "containers.db"
+# DB_PATH changed to use os.path.join
+DATA_DIR = os.path.join(os.path.dirname(__file__), "..", "data")
+DB_PATH = os.path.join(DATA_DIR, "containers.db")
 
 def ensure_data_dir():
     """Ensure the data directory exists"""
-    data_dir = DB_PATH.parent
-    if not data_dir.exists():
+    data_dir = os.path.dirname(DB_PATH)
+    if not os.path.exists(data_dir):
         os.makedirs(data_dir)
 
 def init_db():

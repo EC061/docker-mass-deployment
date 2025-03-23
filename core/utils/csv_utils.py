@@ -53,5 +53,5 @@ def process_csv_and_deploy(input_file, start_port, image_name, user_id=None, cpu
 
 def save_updated_csv(df, output_file):
     """Save the updated DataFrame to a CSV file."""
-    df.to_csv(output_file, sep="\t", index=False)
+    df.to_csv(output_file, sep=",", index=False)
     print(f"Deployment complete. Updated CSV saved as '{output_file}'.")

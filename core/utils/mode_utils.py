@@ -1,6 +1,5 @@
 from core.utils.csv_utils import find_input_csv, process_csv_and_deploy, save_updated_csv
 from core.utils.docker_utils import deploy_container
-import os
 
 def handle_manual_mode(args):
     """

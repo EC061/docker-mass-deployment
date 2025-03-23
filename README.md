@@ -59,7 +59,8 @@ uv pip install -r requirements.txt
 
 ### 3. Build the Docker Image
 ```bash
-docker build -t custom-ssh -f core/docker/Dockerfile .
+cd core/docker
+docker build -t custom-ssh .
 ```
 
 ## Usage
