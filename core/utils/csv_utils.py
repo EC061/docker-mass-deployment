@@ -3,6 +3,7 @@ import os
 import sys
 import pandas as pd
 from .docker_utils import deploy_container
+from core.utils.db_utils import add_container
 
 
 def find_input_csv():
@@ -49,7 +50,7 @@ def process_csv_and_deploy(
         docker_name = f"{last_name}_{first_name}_{password}"
         username = f"{last_name}"
 
-        success, _ = deploy_container(
+        success, container_id = deploy_container(
             username,
             password,
             current_port,
@@ -62,6 +63,18 @@ def process_csv_and_deploy(
         if not success:
             print(f"Error deploying container for {docker_name}. Exiting...")
             sys.exit(1)
+        add_container(
+            container_name=docker_name,
+            username=username,
+            password=password,
+            port=current_port,
+            image_name=image_name,
+            cpu_limit=cpu_limit,
+            ram_limit=ram_limit,
+            storage_limit=storage_limit,
+            container_id=container_id,
+            status="running",
+        )
         df.at[index, "HostPort"] = current_port
         current_port += 1
 

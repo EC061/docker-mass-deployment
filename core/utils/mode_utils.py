@@ -4,6 +4,7 @@ from core.utils.csv_utils import (
     save_updated_csv,
 )
 from core.utils.docker_utils import deploy_container
+from core.utils.db_utils import add_container
 
 
 def handle_manual_mode(args):
@@ -17,7 +18,7 @@ def handle_manual_mode(args):
         bool: True if deployment was successful, False otherwise
     """
     print(f"Manual mode: Deploying container for {args.manual_username}")
-    success, _ = deploy_container(
+    success, container_id = deploy_container(
         args.manual_username,
         args.manual_password,
         args.port,
@@ -31,6 +32,18 @@ def handle_manual_mode(args):
     if success:
         print(
             f"Container for {args.manual_docker_name} deployed successfully on port {args.port}"
+        )
+        add_container(
+            container_name=args.manual_docker_name,
+            username=args.manual_username,
+            password=args.manual_password,
+            port=args.port,
+            image_name=args.image,
+            cpu_limit=args.cpu,
+            ram_limit=args.ram,
+            storage_limit=args.storage,
+            container_id=container_id,
+            status="running",
         )
     else:
         print(f"Failed to deploy container for {args.manual_docker_name}")
