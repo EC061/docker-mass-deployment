@@ -4,6 +4,7 @@ import sys
 import pandas as pd
 from .docker_utils import deploy_container
 
+
 def find_input_csv():
     """Find the first CSV file in the current directory."""
     csv_files = glob.glob("*.csv")
@@ -13,13 +14,22 @@ def find_input_csv():
     output_file = f"{os.path.splitext(input_file)[0]}_updated.csv"
     return input_file, output_file
 
-def process_csv_and_deploy(input_file, start_port, image_name, user_id=None, cpu_limit="4", ram_limit="8g", storage_limit="50g"):
+
+def process_csv_and_deploy(
+    input_file,
+    start_port,
+    image_name,
+    user_id=None,
+    cpu_limit="4",
+    ram_limit="8g",
+    storage_limit="50g",
+):
     """Process the CSV file and deploy containers for each user."""
     df = pd.read_csv(input_file, delimiter=",")
     df["HostPort"] = None
 
     current_port = start_port
-    
+
     # If a specific user is requested, filter the DataFrame
     if user_id:
         user_row = df[df["OrgDefinedId"].str.strip() == ("#" + user_id)]
@@ -39,17 +49,25 @@ def process_csv_and_deploy(input_file, start_port, image_name, user_id=None, cpu
         docker_name = f"{last_name}_{first_name}_{password}"
         username = f"{last_name}"
 
-        
-        success, _ = deploy_container(username, password, current_port, docker_name, image_name,
-                                     cpu_limit, ram_limit, storage_limit)
+        success, _ = deploy_container(
+            username,
+            password,
+            current_port,
+            docker_name,
+            image_name,
+            cpu_limit,
+            ram_limit,
+            storage_limit,
+        )
         if not success:
-            print(f'Error deploying container for {docker_name}. Exiting...')
+            print(f"Error deploying container for {docker_name}. Exiting...")
             sys.exit(1)
         df.at[index, "HostPort"] = current_port
         current_port += 1
-    
+
     filtered_df = df[["First Name", "Last Name", "HostPort"]]
     return filtered_df
+
 
 def save_updated_csv(df, output_file):
     """Save the updated DataFrame to a CSV file."""
