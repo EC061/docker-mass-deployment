@@ -80,7 +80,10 @@ def handle_csv_mode(args):
     )
 
     # Save the results
-    if updated_df is not None and not updated_df.empty:
+    if user_id:
+        print(f"Deployment completefor user with ID '{user_id}'")
+        return True
+    elif updated_df is not None and not updated_df.empty:
         save_updated_csv(updated_df, output_file)
         print(f"Deployment complete. CSV saved as '{output_file}'.")
         return True
