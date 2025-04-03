@@ -31,6 +31,7 @@ else
         mkdir -p "/home/$usr/sample_project_tf"
         cd "/home/$usr/sample_project_tf"
         echo -e "tensorflow[and-cuda]==2.19.0\npandas\nmatplotlib\nipython\nipykernel" >> "requirements.txt"
+        chown -R "$usr:$usr" "/home/$usr"
     }
 
     # Only create users if the corresponding username variables are set

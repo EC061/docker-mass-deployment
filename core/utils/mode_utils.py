@@ -17,12 +17,27 @@ def handle_manual_mode(args):
     Returns:
         bool: True if deployment was successful, False otherwise
     """
-    print(f"Manual mode: Deploying container for {args.manual_username}")
+    # Create a unique docker name
+    docker_name = f"manual_{args.manual_username1}"
+
+    # Create team members list
+    team_members = []
+    if args.manual_username1:
+        team_members.append({"username": args.manual_username1, "password": "password"})
+    if args.manual_username2:
+        team_members.append({"username": args.manual_username2, "password": "password"})
+    if args.manual_username3:
+        team_members.append({"username": args.manual_username3, "password": "password"})
+
+    if not team_members:
+        print("Error: No usernames provided for manual deployment")
+        return False
+
+    print(f"Manual mode: Deploying container for {args.manual_username1}")
     success, container_id = deploy_container(
-        args.manual_username,
-        args.manual_password,
+        team_members,
         args.port,
-        args.manual_docker_name,
+        docker_name,
         args.image,
         args.cpu,
         args.ram,
@@ -30,13 +45,10 @@ def handle_manual_mode(args):
     )
 
     if success:
-        print(
-            f"Container for {args.manual_docker_name} deployed successfully on port {args.port}"
-        )
+        print(f"Container for {docker_name} deployed successfully on port {args.port}")
         add_container(
-            container_name=args.manual_docker_name,
-            username=args.manual_username,
-            password=args.manual_password,
+            group_name=docker_name,
+            members=team_members,
             port=args.port,
             image_name=args.image,
             cpu_limit=args.cpu,
@@ -46,7 +58,7 @@ def handle_manual_mode(args):
             status="running",
         )
     else:
-        print(f"Failed to deploy container for {args.manual_docker_name}")
+        print(f"Failed to deploy container for {docker_name}")
 
     return success
 
@@ -66,22 +78,23 @@ def handle_csv_mode(args):
     print(f"Processing input CSV: {input_file}")
 
     # Determine if this is single user mode
-    user_id = args.user if args.mode == "single" else None
+    group_id = args.groupID if args.mode == "single" else None
 
-    if user_id:
+    if group_id:
         print(
-            f"Single user mode: Deploying container only for user with ID '{user_id}'"
+            f"Single user mode: Deploying container only for group with ID '{group_id}'"
         )
-        output_file = f"{user_id}_container.csv"
+        output_file = f"{group_id}_container.csv"
 
     # Process CSV and deploy containers
     updated_df = process_csv_and_deploy(
-        input_file, args.port, args.image, user_id, args.cpu, args.ram, args.storage
+        input_file, args.port, args.image, group_id, args.cpu, args.ram, args.storage
     )
 
     # Save the results
-    if user_id:
-        print(f"Deployment completefor user with ID '{user_id}'")
+    if group_id:
+        print(f"Deployment completefor group with ID '{group_id}'")
+        save_updated_csv(updated_df, output_file)
         return True
     elif updated_df is not None and not updated_df.empty:
         save_updated_csv(updated_df, output_file)

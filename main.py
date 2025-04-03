@@ -17,7 +17,7 @@ def main():
         type=str,
         choices=["group", "single", "manual", "list"],
         required=True,
-        help="Deployment mode: group (all users), single (one user), manual (direct params), or list (show all containers)",
+        help="Deployment mode: group (all groups), single (one group), manual (direct params for group), or list (show all containers)",
     )
     parser.add_argument(
         "--image",
@@ -31,21 +31,26 @@ def main():
         default=50000,
         help="Starting host port number (default: 50000)",
     )
+
     parser.add_argument(
-        "--user",
+        "--groupID",
+        type=int,
+        help="Deploy container for a specific group by index in CSV (for single mode)",
+    )
+    parser.add_argument(
+        "--manual-username1",
         type=str,
-        help="Deploy container for a specific user by OrgDefinedId (for single mode)",
+        help="First username for manual group deployment",
     )
     parser.add_argument(
-        "--manual-username", type=str, help="Username for manual deployment"
-    )
-    parser.add_argument(
-        "--manual-password", type=str, help="Password for manual deployment"
-    )
-    parser.add_argument(
-        "--manual-docker-name",
+        "--manual-username2",
         type=str,
-        help="Docker container name for manual deployment",
+        help="Second username for manual group deployment",
+    )
+    parser.add_argument(
+        "--manual-username3",
+        type=str,
+        help="Third username for manual group deployment",
     )
     parser.add_argument(
         "--cpu",
@@ -68,11 +73,6 @@ def main():
     args = validate_args(args)
 
     mode = args.mode
-    start_port = args.port
-    image_name = args.image
-    cpu_limit = args.cpu
-    ram_limit = args.ram
-    storage_limit = args.storage
 
     match mode:
         case "list":
@@ -80,27 +80,17 @@ def main():
             print(f"Total containers: {len(containers)}")
             table = PrettyTable(["Name", "User", "Port", "Status"])
             for container in containers:
-                table.add_row(
-                    [
-                        container["container_name"],
-                        container["username"],
-                        container["port"],
-                        container["status"],
-                    ]
-                )
+                # Handle missing keys gracefully
+                name = container.get("group_name", "Unknown")
+                user = container.get("username1", "Unknown")
+                port = container.get("port", "Unknown")
+                status = container.get("status", "Unknown")
+                table.add_row([name, user, port, status])
             print(table)
             return
         case "manual":
-            handle_manual_mode(
-                args.manual_username,
-                args.manual_password,
-                start_port,
-                args.manual_docker_name,
-                image_name,
-                cpu_limit,
-                ram_limit,
-                storage_limit,
-            )
+            # Pass args directly to handle_manual_mode for proper parameter handling
+            handle_manual_mode(args)
         case _:
             handle_csv_mode(args)
 

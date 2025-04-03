@@ -30,8 +30,7 @@ def check_and_remove_container(container_name):
 
 
 def deploy_container(
-    username,
-    password,
+    team_members,
     port,
     docker_name,
     image_name,
@@ -39,14 +38,14 @@ def deploy_container(
     ram_limit="8g",
     storage_limit="50g",
 ):
-    """Deploy a Docker container for a single user."""
+    """Deploy a Docker container for a team with at most three members."""
     # First check and remove existing container if it exists
     if not check_and_remove_container(docker_name):
         return False, ""
     # then validate the port
     port = validate_port(port)
     # and the storage filesystem
-    file_system_check = validate_docker_storage_filesystem("/var/lib/docker")
+    file_system_check = validate_docker_storage_filesystem("/home/edward/docker")
 
     docker_cmd = [
         "docker",
@@ -69,33 +68,37 @@ def deploy_container(
     if file_system_check:
         docker_cmd.extend(["--storage-opt", f"size={storage_limit}"])
 
-    # Add remaining options
+    # Add team members environment variables (up to 3)
+    if team_members and len(team_members) > 0:
+        for i, member in enumerate(team_members[:3], 1):
+            docker_cmd.extend(
+                [
+                    "-e",
+                    f"USERNAME{i}={member['username']}",
+                    "-e",
+                    f"PASSWORD{i}={member['password']}",
+                ]
+            )
+    else:
+        return False, ""
+    # Add restart policy and image name
     docker_cmd.extend(
         [
-            "-e",
-            f"USERNAME={username}",
-            "-e",
-            f"PASSWORD={password}",
-            "-e",
-            "ENABLE_PASSWORD_AUTH=true",
-            "-e",
-            "PERMIT_ROOT_LOGIN=true",
             "--restart",
             "unless-stopped",
             image_name,
         ]
     )
 
-    print(f"Deploying container for {username} on host port {port}...")
     try:
         result = subprocess.run(docker_cmd, capture_output=True, text=True, check=True)
         container_id = result.stdout.strip()
         print(
-            f"Container {container_id} deployed for {username} with {cpu_limit} CPUs, {ram_limit} RAM, and {storage_limit} storage."
+            f"Container {container_id} deployed for {docker_name} with {cpu_limit} CPUs, {ram_limit} RAM, and {storage_limit} storage."
         )
         success = True
     except subprocess.CalledProcessError as e:
-        print(f"Error deploying container for {username}: {e.stderr}")
+        print(f"Error deploying container for {docker_name}: {e.stderr}")
         container_id = ""
         success = False
 

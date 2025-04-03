@@ -10,31 +10,28 @@ def validate_args(args):
         validate_manual_mode_args(args)
     elif args.mode == "single":
         validate_single_mode_args(args)
-    validate_resource_limits(args)
-
+    elif args.mode == "group":
+        pass
     return args
 
 
 def validate_manual_mode_args(args):
     """Validate arguments required for manual deployment mode."""
-    if not all([args.manual_username, args.manual_password, args.manual_docker_name]):
+    # Check if three manual usernames are provided
+    if not all([args.manual_username1, args.manual_username2, args.manual_username3]):
         print(
-            "Error: Manual mode requires --manual-username, --manual-password, and --manual-docker-name"
+            "Error: Manual mode requires --manual-username1, --manual-username2, and --manual-username3"
         )
         sys.exit(1)
 
 
 def validate_single_mode_args(args):
-    """Validate arguments required for single user deployment mode."""
-    if not args.user:
-        print("Error: Single mode requires --user parameter with OrgDefinedId")
+    """Validate arguments required for single group deployment mode."""
+    if not args.groupID:
+        print(
+            "Error: Single mode requires --groupID parameter with the index of the group in the CSV"
+        )
         sys.exit(1)
-
-
-def validate_resource_limits(args):
-    """Validate resource limit arguments."""
-    # Can be expanded with specific validations for CPU, RAM, and storage formats
-    pass
 
 
 def validate_port(port):
