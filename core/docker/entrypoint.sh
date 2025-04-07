@@ -10,6 +10,14 @@ if [ -f "$INIT_FLAG" ]; then
 else
     echo "Initializing container for group: $GROUP"
 
+    mkdir -p "/data/sample_project_torch"
+    cd "/data/sample_project_torch"
+    echo -e "torch==2.6.0\ntorchvision==0.21.0\ntorchaudio==2.6.0\npandas\nmatplotlib\nipython\nipykernel" >> "requirements.txt"
+    
+    mkdir -p "/data/sample_project_tf"
+    cd "/data/sample_project_tf"
+    echo -e "tensorflow[and-cuda]==2.19.0\npandas\nmatplotlib\nipython\nipykernel" >> "requirements.txt"
+
     function create_user() {
         local usr="$1"
         local pwd="$2"
@@ -25,12 +33,14 @@ else
             echo "Setting password for $usr..."
             echo "$usr:$pwd" | chpasswd
         fi
-        mkdir -p "/home/$usr/sample_project_torch"
-        cd "/home/$usr/sample_project_torch"
-        echo -e "torch==2.6.0\ntorchvision==0.21.0\ntorchaudio==2.6.0\npandas\nmatplotlib\nipython\nipykernel" >> "requirements.txt"
-        mkdir -p "/home/$usr/sample_project_tf"
-        cd "/home/$usr/sample_project_tf"
-        echo -e "tensorflow[and-cuda]==2.19.0\npandas\nmatplotlib\nipython\nipykernel" >> "requirements.txt"
+        
+        # Create data directory link
+        mkdir -p "/data"
+        ln -sf "/data" "/home/$usr/data"
+        
+        # Add umask 000 to user's .bashrc
+        echo -e "\n# Set umask to allow full permissions\numask 000" >> "/home/$usr/.bashrc"
+        
         chown -R "$usr:$usr" "/home/$usr"
     }
 

@@ -88,7 +88,15 @@ def handle_csv_mode(args):
 
     # Process CSV and deploy containers
     updated_df = process_csv_and_deploy(
-        input_file, args.port, args.image, group_id, args.cpu, args.ram, args.storage
+        input_file,
+        args.port,
+        args.image,
+        args.data_path,
+        group_id,
+        args.cpu,
+        args.ram,
+        args.storage,
+        args.fs_path,
     )
 
     # Save the results

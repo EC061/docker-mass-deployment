@@ -67,6 +67,18 @@ def main():
         default="50g",
         help="Storage limit for containers (default: 50GB)",
     )
+    parser.add_argument(
+        "--data-path",
+        type=str,
+        default="/home/edward/docker-files",
+        help="Path to the data folder for each team's container",
+    )
+    parser.add_argument(
+        "--fs-path",
+        type=str,
+        default="/home/edward/docker-storage",
+        help="Path to the Docker filesystem directory",
+    )
     args = parser.parse_args()
 
     # Validate arguments based on mode
@@ -76,17 +88,17 @@ def main():
 
     match mode:
         case "list":
-            containers = get_all_containers()
-            print(f"Total containers: {len(containers)}")
-            table = PrettyTable(["Name", "User", "Port", "Status"])
-            for container in containers:
-                # Handle missing keys gracefully
-                name = container.get("group_name", "Unknown")
-                user = container.get("username1", "Unknown")
-                port = container.get("port", "Unknown")
-                status = container.get("status", "Unknown")
-                table.add_row([name, user, port, status])
-            print(table)
+            # containers = get_all_containers()
+            # print(f"Total containers: {len(containers)}")
+            # table = PrettyTable(["Name", "User", "Port", "Status"])
+            # for container in containers:
+            #     # Handle missing keys gracefully
+            #     name = container.get("group_name", "Unknown")
+            #     user = container.get("username1", "Unknown")
+            #     port = container.get("port", "Unknown")
+            #     status = container.get("status", "Unknown")
+            #     table.add_row([name, user, port, status])
+            # print(table)
             return
         case "manual":
             # Pass args directly to handle_manual_mode for proper parameter handling

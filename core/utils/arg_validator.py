@@ -112,3 +112,20 @@ def validate_docker_storage_filesystem(path):
     except subprocess.CalledProcessError as e:
         print(f"Error checking file system type: {e}")
         return False
+
+
+def validate_group_data_path(args):
+    """
+    Validate that the group data path exists and is writable.
+    If it exists but is not writable, it will exit the program.
+
+    Args:
+        args: Command line arguments
+    """
+    if not os.path.exists(args.data_path):
+        print(f"Error: Data path {args.data_path} does not exist")
+        sys.exit(1)
+
+    if not os.access(args.data_path, os.W_OK):
+        print(f"Error: Data path {args.data_path} is not writable")
+        sys.exit(1)

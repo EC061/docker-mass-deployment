@@ -1,5 +1,5 @@
 import subprocess
-from .arg_validator import validate_port, validate_docker_storage_filesystem
+from .arg_validator import validate_docker_storage_filesystem
 
 
 def check_and_remove_container(container_name):
@@ -34,18 +34,19 @@ def deploy_container(
     port,
     docker_name,
     image_name,
+    docker_data_path,
     cpu_limit="4",
     ram_limit="8g",
     storage_limit="50g",
+    docker_fs_path="/home/edward/docker-storage",
 ):
     """Deploy a Docker container for a team with at most three members."""
     # First check and remove existing container if it exists
     if not check_and_remove_container(docker_name):
         return False, ""
-    # then validate the port
-    port = validate_port(port)
+
     # and the storage filesystem
-    file_system_check = validate_docker_storage_filesystem("/home/edward/docker")
+    file_system_check = validate_docker_storage_filesystem(docker_fs_path)
 
     docker_cmd = [
         "docker",
@@ -62,6 +63,8 @@ def deploy_container(
         cpu_limit,
         "--memory",
         ram_limit,
+        "-v",
+        f"{docker_data_path}:/data",
     ]
 
     # Add storage option only if filesystem check passes

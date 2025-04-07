@@ -6,6 +6,7 @@ import random
 import string
 from .docker_utils import deploy_container
 from core.utils.db_utils import add_container
+from .arg_validator import validate_port
 
 
 def generate_random_password(length=8):
@@ -28,10 +29,12 @@ def process_csv_and_deploy(
     input_file,
     start_port,
     image_name,
+    data_path,
     group_id=None,
     cpu_limit="4",
     ram_limit="8g",
     storage_limit="50g",
+    fs_path="/home/edward/docker-storage",
 ):
     """Process the CSV file and deploy containers for each team."""
     df = pd.read_csv(input_file, delimiter=",")
@@ -50,7 +53,7 @@ def process_csv_and_deploy(
 
     # Prepare output data
     output_data = []
-    member_cols = [col for col in df.columns if col.startswith("Member")]
+    member_cols = [col for col in df.columns if col.strip().startswith("Member")]
     for index, row in df.iterrows():
         group_name = row["Group ID"]
 
@@ -61,39 +64,43 @@ def process_csv_and_deploy(
                 first_name = member_name.split(" ")[0].strip()
                 password = generate_random_password(8)
                 team_members.append({"username": first_name, "password": password})
-
+        print(f"Team members for group {group_name}: {team_members}")
         if not team_members:
             print(f"No valid members found for team {group_name}. Skipping...")
             continue
 
-        # Create docker name from team number and name
+        current_port = validate_port(current_port)
         docker_name = f"team_{group_name}"
-
+        temp_path = os.path.join(data_path, docker_name)
+        if not os.path.exists(temp_path):
+            os.makedirs(temp_path)
         success, container_id = deploy_container(
             team_members,
             current_port,
             docker_name,
             image_name,
+            temp_path,
             cpu_limit,
             ram_limit,
             storage_limit,
+            fs_path,
         )
 
         if not success:
             print(f"Error deploying container for {docker_name}. Exiting...")
             sys.exit(1)
 
-        add_container(
-            group_name=docker_name,
-            members=team_members,
-            port=current_port,
-            image_name=image_name,
-            cpu_limit=cpu_limit,
-            ram_limit=ram_limit,
-            storage_limit=storage_limit,
-            container_id=container_id,
-            status="running",
-        )
+        # add_container(
+        #     group_name=docker_name,
+        #     members=team_members,
+        #     port=current_port,
+        #     image_name=image_name,
+        #     cpu_limit=cpu_limit,
+        #     ram_limit=ram_limit,
+        #     storage_limit=storage_limit,
+        #     container_id=container_id,
+        #     status="running",
+        # )
 
         # Add team info to output data
         group_info = {
