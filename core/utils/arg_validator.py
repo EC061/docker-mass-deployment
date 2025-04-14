@@ -11,17 +11,15 @@ def validate_args(args):
     elif args.mode == "single":
         validate_single_mode_args(args)
     elif args.mode == "group":
-        pass
+        validate_group_data_path(args)
     return args
 
 
 def validate_manual_mode_args(args):
     """Validate arguments required for manual deployment mode."""
-    # Check if three manual usernames are provided
-    if not all([args.manual_username1, args.manual_username2, args.manual_username3]):
-        print(
-            "Error: Manual mode requires --manual-username1, --manual-username2, and --manual-username3"
-        )
+    # Check if the first manual username is provided
+    if not args.manual_username1:
+        print("Error: Manual mode requires --manual-username1")
         sys.exit(1)
 
 
@@ -128,4 +126,8 @@ def validate_group_data_path(args):
 
     if not os.access(args.data_path, os.W_OK):
         print(f"Error: Data path {args.data_path} is not writable")
+        sys.exit(1)
+
+    if not os.path.exists(args.fs_path):
+        print(f"Error: Docker filesystem path {args.fs_path} does not exist")
         sys.exit(1)

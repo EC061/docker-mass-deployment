@@ -34,10 +34,23 @@ def process_csv_and_deploy(
     ram_limit="8g",
     storage_limit="50g",
     fs_path="/home/edward/docker-storage",
+    dataframe=None,  # Add optional dataframe parameter
 ):
-    """Process the CSV file and deploy containers for each team."""
-    df = pd.read_csv(input_file, delimiter=",")
-    df["Group ID"] = df.index + 1
+    """Process the CSV file or DataFrame and deploy containers."""
+    if dataframe is not None:
+        df = dataframe
+        print("Processing provided DataFrame for deployment.")
+    elif input_file:
+        df = pd.read_csv(input_file, delimiter=",")
+        print(f"Processing input CSV: {input_file}")
+    else:
+        print("Error: No input file or DataFrame provided.")
+        return None
+
+    # Assign Group ID if not present
+    if "Group ID" not in df.columns:
+        df["Group ID"] = df.index + 1
+
     current_port = start_port
 
     # If a specific group is requested, filter the DataFrame
@@ -45,34 +58,51 @@ def process_csv_and_deploy(
         # Filter by Group ID (index-based) instead of Team Number
         team_row = df[df["Group ID"] == int(group_id)]
         if team_row.empty:
-            print(f"Group with Group ID '{group_id}' not found in the CSV file.")
+            print(f"Group with Group ID '{group_id}' not found.")
             return None
         df = team_row.copy()
         print(f"Found group {group_id}. Processing single group deployment.")
 
     # Prepare output data
     output_data = []
+    # Dynamically find member columns based on pattern 'Member' followed by digits or just 'Member'
     member_cols = [col for col in df.columns if col.strip().startswith("Member")]
+
     for index, row in df.iterrows():
         group_name = row["Group ID"]
 
         team_members = []
         for member_col in member_cols:
-            if pd.notna(row.get(member_col)) and row.get(member_col, "").strip():
-                member_name = row[member_col].strip()
-                first_name = member_name.split(" ")[0].strip()
+            # Check if column exists and value is not NaN/empty
+            if (
+                member_col in row
+                and pd.notna(row[member_col])
+                and str(row[member_col]).strip()
+            ):
+                member_name = str(row[member_col]).strip()
+                # Use first name logic if space exists, otherwise use full name
+                first_name = (
+                    member_name.split(" ")[0].strip()
+                    if " " in member_name
+                    else member_name
+                )
                 password = generate_random_password(8)
                 team_members.append({"username": first_name, "password": password})
-        print(f"Team members for group {group_name}: {team_members}")
+
         if not team_members:
-            print(f"No valid members found for team {group_name}. Skipping...")
+            print(f"No valid members found for group {group_name}. Skipping...")
             continue
 
         current_port = validate_port(current_port)
-        docker_name = f"team_{group_name}"
+        # Use a consistent naming scheme, prefixing with 'team_' if it's numeric
+        docker_name = (
+            f"team_{group_name}" if str(group_name).isdigit() else str(group_name)
+        )
+
         temp_path = os.path.join(data_path, docker_name)
         if not os.path.exists(temp_path):
             os.makedirs(temp_path)
+            os.chmod(temp_path, 0o777)  # Set permissions to rwxrwxrwx (777)
         success, container_id = deploy_container(
             team_members,
             current_port,

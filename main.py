@@ -65,13 +65,13 @@ def main():
     parser.add_argument(
         "--data-path",
         type=str,
-        default="/home/edward/docker-files",
+        default="/nvme_data2/class_data",
         help="Path to the data folder for each team's container",
     )
     parser.add_argument(
         "--fs-path",
         type=str,
-        default="/home/edward/docker-storage",
+        default="/nvme_data1/docker.service",
         help="Path to the Docker filesystem directory",
     )
     args = parser.parse_args()

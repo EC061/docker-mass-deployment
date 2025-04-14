@@ -1,14 +1,15 @@
+import sys
 from core.utils.csv_utils import (
     find_input_csv,
     process_csv_and_deploy,
     save_updated_csv,
 )
-from core.utils.docker_utils import deploy_container
+import pandas as pd  # Add pandas import
 
 
 def handle_manual_mode(args):
     """
-    Handle manual mode deployment with directly provided parameters.
+    Handle manual mode deployment by preparing data and calling process_csv_and_deploy.
 
     Args:
         args: Command line arguments
@@ -16,39 +17,56 @@ def handle_manual_mode(args):
     Returns:
         bool: True if deployment was successful, False otherwise
     """
-    # Create a unique docker name
-    docker_name = f"manual_{args.manual_username1}"
+    print("Manual mode: Preparing deployment...")
 
-    # Create team members list
-    team_members = []
+    # Create team members list from args
+    members = []
     if args.manual_username1:
-        team_members.append({"username": args.manual_username1, "password": "password"})
+        members.append(args.manual_username1)
     if args.manual_username2:
-        team_members.append({"username": args.manual_username2, "password": "password"})
+        members.append(args.manual_username2)
     if args.manual_username3:
-        team_members.append({"username": args.manual_username3, "password": "password"})
+        members.append(args.manual_username3)
 
-    if not team_members:
+    if not members:
         print("Error: No usernames provided for manual deployment")
         return False
 
-    print(f"Manual mode: Deploying container for {args.manual_username1}")
-    success, container_id = deploy_container(
-        team_members,
-        args.port,
-        docker_name,
-        args.image,
-        args.cpu,
-        args.ram,
-        args.storage,
+    # Create a DataFrame mimicking the structure expected by process_csv_and_deploy
+    manual_data = {"Group ID": [f"manual_{args.manual_username1}"]}
+    for i, member in enumerate(members, 1):
+        manual_data[f"Member{i}"] = [member]
+
+    manual_df = pd.DataFrame(manual_data)
+
+    # Call process_csv_and_deploy with the DataFrame
+    updated_df = process_csv_and_deploy(
+        input_file=None,  # No input file for manual mode
+        start_port=args.port,
+        image_name=args.image,
+        data_path=args.data_path,
+        group_id=None,  # Process the single group in the DataFrame
+        cpu_limit=args.cpu,
+        ram_limit=args.ram,
+        storage_limit=args.storage,
+        fs_path=args.fs_path,
+        dataframe=manual_df,  # Pass the created DataFrame
     )
 
-    if success:
-        print(f"Container for {docker_name} deployed successfully on port {args.port}")
+    # Check if the deployment was successful (updated_df should contain the deployed group)
+    if updated_df is not None and not updated_df.empty:
+        deployed_group = updated_df.iloc[0]
+        print(
+            f"Manual container '{deployed_group['Group ID']}' deployed successfully on port {deployed_group['Port']}."
+        )
+        # Optionally save the details to a file
+        output_file = f"{deployed_group['Group ID']}_container.csv"
+        save_updated_csv(updated_df, output_file)
+        print(f"Deployment details saved to '{output_file}'.")
+        return True
     else:
-        print(f"Failed to deploy container for {docker_name}")
-
-    return success
+        print(f"Failed to deploy manual container for user {args.manual_username1}")
+        return False
 
 
 def handle_csv_mode(args):
@@ -62,8 +80,11 @@ def handle_csv_mode(args):
         bool: True if at least one container was deployed, False otherwise
     """
     # Find CSV files
-    input_file, output_file = find_input_csv()
-    print(f"Processing input CSV: {input_file}")
+    try:
+        input_file, output_file = find_input_csv()
+    except FileNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
     # Determine if this is single user mode
     group_id = args.groupID if args.mode == "single" else None
@@ -72,30 +93,37 @@ def handle_csv_mode(args):
         print(
             f"Single user mode: Deploying container only for group with ID '{group_id}'"
         )
-        output_file = f"{group_id}_container.csv"
+        # Adjust output file name for single group deployment
+        output_file = f"group_{group_id}_container.csv"
 
     # Process CSV and deploy containers
     updated_df = process_csv_and_deploy(
-        input_file,
-        args.port,
-        args.image,
-        args.data_path,
-        group_id,
-        args.cpu,
-        args.ram,
-        args.storage,
-        args.fs_path,
+        input_file=input_file,  # Pass the found CSV file path
+        start_port=args.port,
+        image_name=args.image,
+        data_path=args.data_path,
+        group_id=group_id,  # Pass group_id for filtering if in single mode
+        cpu_limit=args.cpu,
+        ram_limit=args.ram,
+        storage_limit=args.storage,
+        fs_path=args.fs_path,
+        dataframe=None,  # Explicitly set dataframe to None when using input_file
     )
 
     # Save the results
-    if group_id:
-        print(f"Deployment completefor group with ID '{group_id}'")
+    if updated_df is not None and not updated_df.empty:
+        if group_id:
+            print(f"Deployment complete for group with ID '{group_id}'.")
+        else:
+            print("Deployment complete for all groups.")
         save_updated_csv(updated_df, output_file)
         return True
-    elif updated_df is not None and not updated_df.empty:
-        save_updated_csv(updated_df, output_file)
-        print(f"Deployment complete. CSV saved as '{output_file}'.")
-        return True
+    elif group_id and (updated_df is None or updated_df.empty):
+        # Specific message if the single group wasn't found or failed
+        print(
+            f"Could not deploy container for group ID '{group_id}'. Check CSV or logs."
+        )
+        return False
     else:
-        print("No containers were deployed.")
+        print("No containers were deployed based on the CSV.")
         return False
