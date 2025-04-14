@@ -4,7 +4,6 @@ from core.utils.csv_utils import (
     save_updated_csv,
 )
 from core.utils.docker_utils import deploy_container
-from core.utils.db_utils import add_container
 
 
 def handle_manual_mode(args):
@@ -46,17 +45,6 @@ def handle_manual_mode(args):
 
     if success:
         print(f"Container for {docker_name} deployed successfully on port {args.port}")
-        add_container(
-            group_name=docker_name,
-            members=team_members,
-            port=args.port,
-            image_name=args.image,
-            cpu_limit=args.cpu,
-            ram_limit=args.ram,
-            storage_limit=args.storage,
-            container_id=container_id,
-            status="running",
-        )
     else:
         print(f"Failed to deploy container for {docker_name}")
 

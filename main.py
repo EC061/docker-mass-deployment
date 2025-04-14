@@ -1,23 +1,18 @@
 import argparse
 from core.utils.arg_validator import validate_args
 from core.utils.mode_utils import handle_manual_mode, handle_csv_mode
-from core.utils.db_utils import init_db, get_all_containers
-from prettytable import PrettyTable
 
 
 def main():
-    # Initialize the database
-    init_db()
-
     parser = argparse.ArgumentParser(
         description="Deploy Docker containers for users from a CSV file."
     )
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["group", "single", "manual", "list"],
+        choices=["group", "single", "manual"],
         required=True,
-        help="Deployment mode: group (all groups), single (one group), manual (direct params for group), or list (show all containers)",
+        help="Deployment mode: group (all groups), single (one group), or manual (direct params for group)",
     )
     parser.add_argument(
         "--image",
@@ -87,19 +82,6 @@ def main():
     mode = args.mode
 
     match mode:
-        case "list":
-            # containers = get_all_containers()
-            # print(f"Total containers: {len(containers)}")
-            # table = PrettyTable(["Name", "User", "Port", "Status"])
-            # for container in containers:
-            #     # Handle missing keys gracefully
-            #     name = container.get("group_name", "Unknown")
-            #     user = container.get("username1", "Unknown")
-            #     port = container.get("port", "Unknown")
-            #     status = container.get("status", "Unknown")
-            #     table.add_row([name, user, port, status])
-            # print(table)
-            return
         case "manual":
             # Pass args directly to handle_manual_mode for proper parameter handling
             handle_manual_mode(args)

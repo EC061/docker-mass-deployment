@@ -5,7 +5,6 @@ import pandas as pd
 import random
 import string
 from .docker_utils import deploy_container
-from core.utils.db_utils import add_container
 from .arg_validator import validate_port
 
 
@@ -89,18 +88,6 @@ def process_csv_and_deploy(
         if not success:
             print(f"Error deploying container for {docker_name}. Exiting...")
             sys.exit(1)
-
-        # add_container(
-        #     group_name=docker_name,
-        #     members=team_members,
-        #     port=current_port,
-        #     image_name=image_name,
-        #     cpu_limit=cpu_limit,
-        #     ram_limit=ram_limit,
-        #     storage_limit=storage_limit,
-        #     container_id=container_id,
-        #     status="running",
-        # )
 
         # Add team info to output data
         group_info = {
