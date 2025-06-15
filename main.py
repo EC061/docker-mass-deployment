@@ -8,10 +8,14 @@ def main():
         description="Deploy Docker containers for users from a CSV file."
     )
     parser.add_argument(
+        "--gui",
+        action="store_true",
+        help="Launch the terminal GUI interface",
+    )
+    parser.add_argument(
         "--mode",
         type=str,
         choices=["group", "single", "manual"],
-        required=True,
         help="Deployment mode: group (all groups), single (one group), or manual (direct params for group)",
     )
     parser.add_argument(
@@ -75,6 +79,29 @@ def main():
         help="Path to the Docker filesystem directory",
     )
     args = parser.parse_args()
+
+    # Check if GUI mode is requested
+    if args.gui:
+        try:
+            from gui import main as gui_main
+
+            gui_main()
+            return
+        except ImportError as e:
+            print(
+                "GUI dependencies not installed. Please run: pip install -r requirements.txt"
+            )
+            print(f"Error: {e}")
+            return
+        except Exception as e:
+            print(f"Error launching GUI: {e}")
+            return
+
+    # Existing CLI functionality
+    if not args.mode:
+        print("Error: --mode is required when not using --gui")
+        parser.print_help()
+        return
 
     # Validate arguments based on mode
     args = validate_args(args)
