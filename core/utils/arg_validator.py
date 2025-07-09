@@ -4,6 +4,36 @@ import os
 import subprocess
 
 
+def check_nvidia_runtime():
+    """Check if NVIDIA Docker runtime is available."""
+    try:
+        # Check if nvidia-docker2 or nvidia-container-runtime is available
+        result = subprocess.run(
+            ["docker", "info", "--format", "{{.Runtimes}}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return "nvidia" in result.stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
+def check_nvidia_gpu():
+    """Check if NVIDIA GPUs are available."""
+    try:
+        # Check if nvidia-smi command exists and returns GPUs
+        result = subprocess.run(
+            ["nvidia-smi", "-L"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return "GPU" in result.stdout
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        return False
+
+
 def validate_args(args):
     """Validate command-line arguments based on the selected mode."""
     if args.mode == "manual":

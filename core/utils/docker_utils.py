@@ -1,5 +1,9 @@
 import subprocess
-from .arg_validator import validate_docker_storage_filesystem
+from .arg_validator import (
+    validate_docker_storage_filesystem,
+    check_nvidia_runtime,
+    check_nvidia_gpu,
+)
 
 
 def check_and_remove_container(container_name):
@@ -48,6 +52,11 @@ def deploy_container(
     # and the storage filesystem
     file_system_check = validate_docker_storage_filesystem(docker_fs_path)
 
+    # Check for NVIDIA runtime and GPU availability
+    has_nvidia_runtime = check_nvidia_runtime()
+    has_nvidia_gpu = check_nvidia_gpu()
+
+    # Build the complete Docker command
     docker_cmd = [
         "docker",
         "run",
@@ -56,20 +65,35 @@ def deploy_container(
         docker_name,
         "-p",
         f"{port}:22",
-        "--gpus",
-        "all",
-        "--runtime=nvidia",
-        "--cpus",
-        cpu_limit,
-        "--memory",
-        ram_limit,
-        "-v",
-        f"{docker_data_path}:/data",
     ]
+
+    # Add GPU and NVIDIA runtime options only if available
+    if has_nvidia_runtime and has_nvidia_gpu:
+        docker_cmd.extend(["--gpus", "all", "--runtime=nvidia"])
+        print(
+            f"NVIDIA runtime and GPU detected - enabling GPU support for {docker_name}"
+        )
+    else:
+        print(
+            f"NVIDIA runtime or GPU not detected - deploying {docker_name} without GPU support"
+        )
+
+    # Add resource limits
+    docker_cmd.extend(
+        [
+            "--cpus",
+            cpu_limit,
+            "--memory",
+            ram_limit,
+        ]
+    )
 
     # Add storage option only if filesystem check passes
     if file_system_check:
         docker_cmd.extend(["--storage-opt", f"size={storage_limit}"])
+
+    # Add data volume mount
+    docker_cmd.extend(["-v", f"{docker_data_path}:/data"])
 
     # Add team members environment variables (up to 3)
     if team_members and len(team_members) > 0:
@@ -84,6 +108,7 @@ def deploy_container(
             )
     else:
         return False, ""
+
     # Add restart policy and image name
     docker_cmd.extend(
         [
