@@ -85,6 +85,8 @@ def deploy_container(
             cpu_limit,
             "--memory",
             ram_limit,
+            "--shm-size",
+            "1g",
         ]
     )
 
