@@ -640,16 +640,21 @@ class DockerContainerManager:
             return f"Docker filesystem path does not exist: {self.form_fields['fs_path']}"
         
         # Validate Docker filesystem path matches Docker Root Dir
-        result = subprocess.run(
-            ['docker', 'info', '--format', '{{.DockerRootDir}}'],
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        docker_root_dir = os.path.normpath(result.stdout.strip())
-        fs_path_normalized = os.path.normpath(self.form_fields["fs_path"])
-        if docker_root_dir and fs_path_normalized != docker_root_dir:
-            return f"Docker filesystem path does not match Docker Root Dir. Expected: {docker_root_dir}, Got: {fs_path_normalized}"
+        try:
+            result = subprocess.run(
+                ['docker', 'info', '--format', '{{.DockerRootDir}}'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            docker_root_dir = os.path.normpath(result.stdout.strip())
+            fs_path_normalized = os.path.normpath(self.form_fields["fs_path"])
+            if docker_root_dir and fs_path_normalized != docker_root_dir:
+                return f"Docker filesystem path does not match Docker Root Dir. Expected: {docker_root_dir}, Got: {fs_path_normalized}"
+        except subprocess.CalledProcessError as e:
+            return f"Failed to get Docker info: {e}"
+        except FileNotFoundError:
+            return "Docker is not installed or not in PATH"
         
         # Mode-specific validation
         if mode == "single":
