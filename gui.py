@@ -6,8 +6,12 @@ import curses
 import subprocess
 import json
 import sys
+import os
 from typing import List, Dict
 import time
+import argparse
+from core.utils.arg_validator import validate_args
+from core.utils.mode_utils import handle_manual_mode, handle_csv_mode
 
 
 class DockerContainerManager:
@@ -15,13 +19,22 @@ class DockerContainerManager:
         self.stdscr = stdscr
         self.containers = []
         self.selected_index = 0
-        self.menu_items = ["View Running Containers", "Exit"]
+        self.menu_items = ["View Running Containers", "Create New Containers", "Exit"]
         self.in_container_view = False
         self.in_stats_view = False
+        self.in_create_view = False
+        self.in_create_form = False
         self.container_selected_index = 0
         self.current_stats = None
         self.status_message = ""
         self.status_timeout = 0
+        self.create_mode = "group"  # Default creation mode
+        self.create_modes = ["group", "single", "manual"]
+        self.create_selected_index = 0
+        self.form_fields = {}
+        self.form_selected_field = 0
+        self.form_editing = False
+        self.form_edit_buffer = ""
         
         # Initialize colors
         curses.start_color()
@@ -34,6 +47,9 @@ class DockerContainerManager:
         # Set up the screen
         curses.curs_set(0)  # Hide cursor
         self.stdscr.keypad(True)
+        
+        # Initialize form fields with default values
+        self.initialize_form_fields()
         
     def get_running_containers(self) -> List[Dict]:
         """Get list of running Docker containers"""
@@ -421,6 +437,319 @@ class DockerContainerManager:
         self.draw_status_message()
         self.stdscr.refresh()
 
+    def initialize_form_fields(self):
+        """Initialize form fields with default values from main.py argument parser"""
+        self.form_fields = {
+            "image": "custom-ssh",
+            "port": "50000",
+            "cpu": "4",
+            "ram": "8g",
+            "storage": "50g",
+            "data_path": "/nvme_data2/class_data",
+            "fs_path": "/nvme_data1/docker.service",
+            "groupID": "",
+            "manual_username1": "",
+            "manual_username2": "",
+            "manual_username3": ""
+        }
+        
+        # Field order for form navigation
+        self.form_field_order = [
+            "image", "port", "cpu", "ram", "storage", 
+            "data_path", "fs_path", "groupID", 
+            "manual_username1", "manual_username2", "manual_username3"
+        ]
+        
+        # Labels for form fields
+        self.form_field_labels = {
+            "image": "Docker Image",
+            "port": "Starting Port",
+            "cpu": "CPU Limit",
+            "ram": "RAM Limit",
+            "storage": "Storage Limit", 
+            "data_path": "Data Path",
+            "fs_path": "Docker FS Path",
+            "groupID": "Group ID (single mode)",
+            "manual_username1": "Username 1 (manual)",
+            "manual_username2": "Username 2 (manual)",
+            "manual_username3": "Username 3 (manual)"
+        }
+        
+        # Help text for form fields
+        self.form_field_help = {
+            "image": "Docker image to deploy (default: custom-ssh)",
+            "port": "Starting host port number (default: 50000)",
+            "cpu": "CPU limit for containers (default: 4 cores)",
+            "ram": "RAM limit for containers (default: 8GB)",
+            "storage": "Storage limit for containers (default: 50GB)",
+            "data_path": "Path to the data folder for each team's container",
+            "fs_path": "Path to the Docker filesystem directory",
+            "groupID": "Deploy container for specific group by CSV index",
+            "manual_username1": "First username for manual group deployment",
+            "manual_username2": "Second username for manual group deployment",
+            "manual_username3": "Third username for manual group deployment"
+        }
+        
+    def get_relevant_fields_for_mode(self, mode):
+        """Get relevant fields for the current mode"""
+        common_fields = ["image", "port", "cpu", "ram", "storage", "data_path", "fs_path"]
+        
+        if mode == "group":
+            return common_fields
+        elif mode == "single":
+            return common_fields + ["groupID"]
+        elif mode == "manual":
+            return common_fields + ["manual_username1", "manual_username2", "manual_username3"]
+        else:
+            return common_fields
+    
+    def draw_create_menu(self):
+        """Draw the create containers mode selection menu"""
+        self.stdscr.clear()
+        height, width = self.stdscr.getmaxyx()
+        
+        # Title
+        title = "Create New Containers"
+        self.stdscr.addstr(1, (width - len(title)) // 2, title, curses.A_BOLD)
+        
+        # Mode selection
+        start_y = 4
+        self.stdscr.addstr(start_y, 2, "Select deployment mode:", curses.A_BOLD)
+        
+        for i, mode in enumerate(self.create_modes):
+            mode_desc = {
+                "group": "Deploy for all groups in CSV",
+                "single": "Deploy for a specific group", 
+                "manual": "Manual deployment with usernames"
+            }
+            
+            if i == self.create_selected_index:
+                self.stdscr.addstr(start_y + 2 + i, 2, f"> {mode.upper()}: {mode_desc[mode]}", curses.color_pair(1))
+            else:
+                self.stdscr.addstr(start_y + 2 + i, 2, f"  {mode.upper()}: {mode_desc[mode]}")
+        
+        # Instructions
+        instructions = [
+            "",
+            "Controls:",
+            "↑/↓ - Navigate",
+            "Enter - Select mode",
+            "b - Back to main menu",
+            "q - Quit"
+        ]
+        
+        for i, instruction in enumerate(instructions):
+            self.stdscr.addstr(start_y + len(self.create_modes) + 3 + i, 2, instruction)
+        
+        self.draw_status_message()
+        self.stdscr.refresh()
+    
+    def draw_create_form(self):
+        """Draw the create containers configuration form"""
+        self.stdscr.clear()
+        height, width = self.stdscr.getmaxyx()
+        
+        # Title
+        title = f"Create New Containers - {self.create_modes[self.create_selected_index].upper()} Mode"
+        self.stdscr.addstr(1, (width - len(title)) // 2, title, curses.A_BOLD)
+        
+        # Get relevant fields for current mode
+        relevant_fields = self.get_relevant_fields_for_mode(self.create_modes[self.create_selected_index])
+        
+        # Form fields
+        start_y = 3
+        for i, field in enumerate(relevant_fields):
+            label = self.form_field_labels[field]
+            value = self.form_fields[field]
+            
+            # Show current field being edited
+            if i == self.form_selected_field:
+                if self.form_editing:
+                    # Show edit buffer when editing
+                    display_value = self.form_edit_buffer
+                    self.stdscr.addstr(start_y + i, 2, f"> {label:20}: {display_value}_", curses.color_pair(1))
+                else:
+                    self.stdscr.addstr(start_y + i, 2, f"> {label:20}: {value}", curses.color_pair(1))
+            else:
+                self.stdscr.addstr(start_y + i, 2, f"  {label:20}: {value}")
+        
+        # Help text for current field
+        if relevant_fields:
+            current_field = relevant_fields[self.form_selected_field]
+            help_text = self.form_field_help[current_field]
+            help_y = start_y + len(relevant_fields) + 1
+            self.stdscr.addstr(help_y, 2, "Help:", curses.A_BOLD)
+            self.stdscr.addstr(help_y + 1, 2, help_text)
+        
+        # Instructions
+        instructions_y = height - 7
+        self.stdscr.addstr(instructions_y, 2, "Controls:")
+        if self.form_editing:
+            self.stdscr.addstr(instructions_y + 1, 2, "Enter - Save field")
+            self.stdscr.addstr(instructions_y + 2, 2, "Esc - Cancel editing")
+        else:
+            self.stdscr.addstr(instructions_y + 1, 2, "↑/↓ - Navigate fields")
+            self.stdscr.addstr(instructions_y + 2, 2, "Enter - Edit field")
+            self.stdscr.addstr(instructions_y + 3, 2, "c - Create containers")
+            self.stdscr.addstr(instructions_y + 4, 2, "b - Back to mode selection")
+            self.stdscr.addstr(instructions_y + 5, 2, "q - Quit")
+        
+        self.draw_status_message()
+        self.stdscr.refresh()
+    
+    def validate_form_fields(self):
+        """Validate form fields before creating containers"""
+        mode = self.create_modes[self.create_selected_index]
+        
+        # Validate common required fields
+        if not self.form_fields["image"].strip():
+            return "Docker image cannot be empty"
+        
+        if not self.form_fields["port"].strip():
+            return "Port cannot be empty"
+        
+        try:
+            port = int(self.form_fields["port"])
+            if port < 1 or port > 65535:
+                return "Port must be between 1 and 65535"
+        except ValueError:
+            return "Port must be a valid number"
+        
+        if not self.form_fields["cpu"].strip():
+            return "CPU limit cannot be empty"
+        
+        if not self.form_fields["ram"].strip():
+            return "RAM limit cannot be empty"
+        
+        if not self.form_fields["storage"].strip():
+            return "Storage limit cannot be empty"
+        
+        if not self.form_fields["data_path"].strip():
+            return "Data path cannot be empty"
+        
+        if not self.form_fields["fs_path"].strip():
+            return "Docker filesystem path cannot be empty"
+        
+        # Validate paths exist
+        import os
+        if not os.path.exists(self.form_fields["data_path"]):
+            return f"Data path does not exist: {self.form_fields['data_path']}"
+        
+        if not os.access(self.form_fields["data_path"], os.W_OK):
+            return f"Data path is not writable: {self.form_fields['data_path']}"
+        
+        if not os.path.exists(self.form_fields["fs_path"]):
+            return f"Docker filesystem path does not exist: {self.form_fields['fs_path']}"
+        
+        # Validate Docker filesystem path matches Docker Root Dir
+        try:
+            result = subprocess.run(
+                ['docker', 'info', '--format', '{{.DockerRootDir}}'],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            docker_root_dir = result.stdout.strip()
+            if docker_root_dir and self.form_fields["fs_path"] != docker_root_dir:
+                return f"Docker filesystem path does not match Docker Root Dir. Expected: {docker_root_dir}, Got: {self.form_fields['fs_path']}"
+        except subprocess.CalledProcessError:
+            # If we can't get Docker info, just warn but don't fail validation
+            pass
+        except FileNotFoundError:
+            # Docker not available, skip this validation
+            pass
+        
+        # Mode-specific validation
+        if mode == "single":
+            if not self.form_fields["groupID"].strip():
+                return "Group ID is required for single mode"
+            try:
+                group_id = int(self.form_fields["groupID"])
+                if group_id < 0:
+                    return "Group ID must be a positive number"
+            except ValueError:
+                return "Group ID must be a valid number"
+        
+        elif mode == "manual":
+            if not self.form_fields["manual_username1"].strip():
+                return "At least one username is required for manual mode"
+            
+            # Check for duplicate usernames
+            usernames = [
+                self.form_fields["manual_username1"],
+                self.form_fields["manual_username2"],
+                self.form_fields["manual_username3"]
+            ]
+            non_empty_usernames = [u.strip() for u in usernames if u.strip()]
+            if len(non_empty_usernames) != len(set(non_empty_usernames)):
+                return "Duplicate usernames are not allowed"
+        
+        return None  # No validation errors
+    
+    def create_containers(self):
+        """Create containers based on current form configuration"""
+        try:
+            # Validate form fields first
+            validation_error = self.validate_form_fields()
+            if validation_error:
+                self.set_status_message(validation_error, "error")
+                return
+            
+            # Create argparse Namespace object from form data
+            args = argparse.Namespace()
+            args.mode = self.create_modes[self.create_selected_index]
+            args.image = self.form_fields["image"]
+            args.port = int(self.form_fields["port"])
+            args.cpu = self.form_fields["cpu"]
+            args.ram = self.form_fields["ram"]
+            args.storage = self.form_fields["storage"]
+            args.data_path = self.form_fields["data_path"]
+            args.fs_path = self.form_fields["fs_path"]
+            
+            # Set mode-specific arguments
+            if args.mode == "single":
+                args.groupID = int(self.form_fields["groupID"]) if self.form_fields["groupID"] else None
+            else:
+                args.groupID = None
+                
+            if args.mode == "manual":
+                args.manual_username1 = self.form_fields["manual_username1"]
+                args.manual_username2 = self.form_fields["manual_username2"]
+                args.manual_username3 = self.form_fields["manual_username3"]
+            else:
+                args.manual_username1 = None
+                args.manual_username2 = None
+                args.manual_username3 = None
+            
+            # Show creating message
+            self.set_status_message("Creating containers...", "info")
+            self.stdscr.refresh()
+            
+            # Call appropriate handler without validate_args to avoid sys.exit()
+            success = False
+            if args.mode == "manual":
+                success = handle_manual_mode(args)
+            else:
+                success = handle_csv_mode(args)
+            
+            if success:
+                self.set_status_message("Containers created successfully!", "success")
+                # Refresh container list
+                self.containers = self.get_running_containers()
+            else:
+                self.set_status_message("Failed to create containers", "error")
+                
+        except ValueError as e:
+            self.set_status_message(f"Invalid input: {e}", "error")
+        except FileNotFoundError as e:
+            self.set_status_message(f"File not found: {e}", "error")
+        except PermissionError as e:
+            self.set_status_message(f"Permission denied: {e}", "error")
+        except subprocess.CalledProcessError as e:
+            self.set_status_message(f"Command failed: {e}", "error")
+        except Exception as e:
+            self.set_status_message(f"Error: {e}", "error")
+    
     def run(self):
         """Main application loop"""
         while True:
@@ -429,6 +758,10 @@ class DockerContainerManager:
                     self.draw_stats_view()
                 elif self.in_container_view:
                     self.draw_container_view()
+                elif self.in_create_form:
+                    self.draw_create_form()
+                elif self.in_create_view:
+                    self.draw_create_menu()
                 else:
                     self.draw_main_menu()
                 
@@ -437,7 +770,7 @@ class DockerContainerManager:
                 if key == ord('q'):
                     break
                 
-                elif not self.in_container_view and not self.in_stats_view:
+                elif not self.in_container_view and not self.in_stats_view and not self.in_create_view and not self.in_create_form:
                     # Main menu navigation
                     if key == curses.KEY_UP:
                         self.selected_index = (self.selected_index - 1) % len(self.menu_items)
@@ -448,8 +781,67 @@ class DockerContainerManager:
                             self.containers = self.get_running_containers()
                             self.in_container_view = True
                             self.container_selected_index = 0
-                        elif self.selected_index == 1:  # Exit
+                        elif self.selected_index == 1:  # Create New Containers
+                            self.in_create_view = True
+                            self.create_selected_index = 0
+                        elif self.selected_index == 2:  # Exit
                             break
+                
+                elif self.in_create_view and not self.in_create_form:
+                    # Create mode selection navigation
+                    if key == ord('b'):
+                        self.in_create_view = False
+                        self.selected_index = 0
+                    elif key == curses.KEY_UP:
+                        self.create_selected_index = (self.create_selected_index - 1) % len(self.create_modes)
+                    elif key == curses.KEY_DOWN:
+                        self.create_selected_index = (self.create_selected_index + 1) % len(self.create_modes)
+                    elif key == curses.KEY_ENTER or key == 10:
+                        self.in_create_form = True
+                        self.form_selected_field = 0
+                        self.form_editing = False
+                
+                elif self.in_create_form:
+                    # Create form navigation
+                    if key == ord('b') and not self.form_editing:
+                        self.in_create_form = False
+                    elif key == ord('c') and not self.form_editing:
+                        self.create_containers()
+                    elif key == 27:  # Escape key
+                        if self.form_editing:
+                            self.form_editing = False
+                            self.form_edit_buffer = ""
+                        else:
+                            self.in_create_form = False
+                    elif not self.form_editing:
+                        # Form field navigation
+                        relevant_fields = self.get_relevant_fields_for_mode(self.create_modes[self.create_selected_index])
+                        if key == curses.KEY_UP:
+                            self.form_selected_field = (self.form_selected_field - 1) % len(relevant_fields)
+                        elif key == curses.KEY_DOWN:
+                            self.form_selected_field = (self.form_selected_field + 1) % len(relevant_fields)
+                        elif key == curses.KEY_ENTER or key == 10:
+                            # Start editing field
+                            field_name = relevant_fields[self.form_selected_field]
+                            self.form_editing = True
+                            self.form_edit_buffer = self.form_fields[field_name]
+                            curses.curs_set(1)  # Show cursor
+                    else:
+                        # Field editing
+                        if key == curses.KEY_ENTER or key == 10:
+                            # Save field
+                            relevant_fields = self.get_relevant_fields_for_mode(self.create_modes[self.create_selected_index])
+                            field_name = relevant_fields[self.form_selected_field]
+                            self.form_fields[field_name] = self.form_edit_buffer
+                            self.form_editing = False
+                            self.form_edit_buffer = ""
+                            curses.curs_set(0)  # Hide cursor
+                        elif key == curses.KEY_BACKSPACE or key == 127:
+                            # Delete character
+                            if self.form_edit_buffer:
+                                self.form_edit_buffer = self.form_edit_buffer[:-1]
+                        elif 32 <= key <= 126:  # Printable characters
+                            self.form_edit_buffer += chr(key)
                 
                 elif self.in_container_view and not self.in_stats_view:
                     # Container view navigation
