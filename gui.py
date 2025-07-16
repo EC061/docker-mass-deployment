@@ -28,7 +28,6 @@ class DockerContainerManager:
         self.current_stats = None
         self.status_message = ""
         self.status_timeout = 0
-        self.create_mode = "group"  # Default creation mode
         self.create_modes = ["group", "single", "manual"]
         self.create_selected_index = 0
         self.form_fields = {}
@@ -631,7 +630,6 @@ class DockerContainerManager:
             return "Docker filesystem path cannot be empty"
         
         # Validate paths exist
-        import os
         if not os.path.exists(self.form_fields["data_path"]):
             return f"Data path does not exist: {self.form_fields['data_path']}"
         
@@ -642,22 +640,16 @@ class DockerContainerManager:
             return f"Docker filesystem path does not exist: {self.form_fields['fs_path']}"
         
         # Validate Docker filesystem path matches Docker Root Dir
-        try:
-            result = subprocess.run(
-                ['docker', 'info', '--format', '{{.DockerRootDir}}'],
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            docker_root_dir = result.stdout.strip()
-            if docker_root_dir and self.form_fields["fs_path"] != docker_root_dir:
-                return f"Docker filesystem path does not match Docker Root Dir. Expected: {docker_root_dir}, Got: {self.form_fields['fs_path']}"
-        except subprocess.CalledProcessError:
-            # If we can't get Docker info, just warn but don't fail validation
-            pass
-        except FileNotFoundError:
-            # Docker not available, skip this validation
-            pass
+        result = subprocess.run(
+            ['docker', 'info', '--format', '{{.DockerRootDir}}'],
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        docker_root_dir = os.path.normpath(result.stdout.strip())
+        fs_path_normalized = os.path.normpath(self.form_fields["fs_path"])
+        if docker_root_dir and fs_path_normalized != docker_root_dir:
+            return f"Docker filesystem path does not match Docker Root Dir. Expected: {docker_root_dir}, Got: {fs_path_normalized}"
         
         # Mode-specific validation
         if mode == "single":
@@ -680,7 +672,7 @@ class DockerContainerManager:
                 self.form_fields["manual_username2"],
                 self.form_fields["manual_username3"]
             ]
-            non_empty_usernames = [u.strip() for u in usernames if u.strip()]
+            non_empty_usernames = [stripped for stripped in (u.strip() for u in usernames) if stripped]
             if len(non_empty_usernames) != len(set(non_empty_usernames)):
                 return "Duplicate usernames are not allowed"
         
@@ -725,7 +717,6 @@ class DockerContainerManager:
             self.set_status_message("Creating containers...", "info")
             self.stdscr.refresh()
             
-            # Call appropriate handler without validate_args to avoid sys.exit()
             success = False
             if args.mode == "manual":
                 success = handle_manual_mode(args)
