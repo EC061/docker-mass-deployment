@@ -5,6 +5,7 @@ from core.utils.csv_utils import (
     save_updated_csv,
 )
 import pandas as pd  # Add pandas import
+from core.modes.base import collect_members, build_single_group_df
 
 
 def handle_manual_mode(args):
@@ -19,25 +20,13 @@ def handle_manual_mode(args):
     """
     print("Manual mode: Preparing deployment...")
 
-    # Create team members list from args
-    members = []
-    if args.manual_username1:
-        members.append(args.manual_username1)
-    if args.manual_username2:
-        members.append(args.manual_username2)
-    if args.manual_username3:
-        members.append(args.manual_username3)
-
+    # Use shared helpers to collect members and build DataFrame
+    members = collect_members(args, prefer="manual")
     if not members:
         print("Error: No usernames provided for manual deployment")
         return False
 
-    # Create a DataFrame mimicking the structure expected by process_csv_and_deploy
-    manual_data = {"Group ID": [f"manual_{args.manual_username1}"]}
-    for i, member in enumerate(members, 1):
-        manual_data[f"Member{i}"] = [member]
-
-    manual_df = pd.DataFrame(manual_data)
+    manual_df = build_single_group_df(members, prefix="manual")
 
     # Call process_csv_and_deploy with the DataFrame
     updated_df = process_csv_and_deploy(

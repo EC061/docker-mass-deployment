@@ -83,13 +83,35 @@ python main.py --mode MODE [OPTIONS]
 
 | Option                         | Description                                                                                                              | Default                    |
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
-| `--mode MODE`                  | Deployment mode: 'group' (all groups from CSV), 'single' (one group from CSV), or 'manual' (direct params for one group) | (required)                 |
+| `--mode MODE`                  | Deployment mode: 'group', 'single', 'manual', or 'lab' (lab mirrors manual for now) | (required)                 |
 | `--image IMAGE`                | Docker image to deploy                                                                                                   | custom-ssh                 |
 | `--port PORT`                  | Starting host port number                                                                                                | 50000                      |
 | `--groupID GROUP_ID`           | Deploy container for a specific group by index in CSV (for single mode)                                                  | (none)                     |
 | `--manual-username1 USERNAME1` | First username for manual group deployment                                                                               | (none)                     |
 | `--manual-username2 USERNAME2` | Second username for manual group deployment                                                                              | (none)                     |
 | `--manual-username3 USERNAME3` | Third username for manual group deployment                                                                               | (none)                     |
+| `--lab-username1 USERNAME1`    | First username for lab group deployment (alias of manual)                                                                | (none)                     |
+| `--lab-username2 USERNAME2`    | Second username for lab group deployment (alias of manual)                                                               | (none)                     |
+| `--lab-username3 USERNAME3`    | Third username for lab group deployment (alias of manual)                                                                | (none)                     |
+### Examples
+
+Lab mode (preferred lab flags):
+
+```bash
+python main.py --mode lab --lab-username1 alice --lab-username2 bob --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
+```
+
+Lab mode (fallback to manual flags):
+
+```bash
+python main.py --mode lab --manual-username1 alice --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
+```
+
+Manual mode (unchanged):
+
+```bash
+python main.py --mode manual --manual-username1 alice --manual-username2 bob --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
+```
 | `--cpu LIMIT`                  | CPU limit for containers (e.g., '4')                                                                                     | 4                          |
 | `--ram LIMIT`                  | RAM limit for containers (e.g., '8g')                                                                                    | 8g                         |
 | `--storage LIMIT`              | Storage limit for containers (e.g., '50g')                                                                               | 50g                        |

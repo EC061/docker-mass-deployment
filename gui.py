@@ -12,6 +12,7 @@ import time
 import argparse
 from core.utils.arg_validator import validate_args
 from core.utils.mode_utils import handle_manual_mode, handle_csv_mode
+from core.modes.lab import handle_lab_mode
 
 
 class DockerContainerManager:
@@ -28,7 +29,7 @@ class DockerContainerManager:
         self.current_stats = None
         self.status_message = ""
         self.status_timeout = 0
-        self.create_modes = ["group", "single", "manual"]
+        self.create_modes = ["group", "single", "manual", "lab"]
         self.create_selected_index = 0
         self.form_fields = {}
         self.form_selected_field = 0
@@ -499,6 +500,11 @@ class DockerContainerManager:
             return common_fields + ["groupID"]
         elif mode == "manual":
             return common_fields + ["manual_username1", "manual_username2", "manual_username3"]
+        elif mode == "manual":
+            return common_fields + ["manual_username1", "manual_username2", "manual_username3"]
+        elif mode == "lab":
+            # Reuse the same username inputs for lab mode
+            return common_fields + ["manual_username1", "manual_username2", "manual_username3"]
         else:
             return common_fields
     
@@ -519,7 +525,8 @@ class DockerContainerManager:
             mode_desc = {
                 "group": "Deploy for all groups in CSV",
                 "single": "Deploy for a specific group", 
-                "manual": "Manual deployment with usernames"
+                "manual": "Manual deployment with usernames",
+                "lab": "Lab deployment (mirrors manual for now)"
             }
             
             if i == self.create_selected_index:
@@ -713,6 +720,14 @@ class DockerContainerManager:
                 args.manual_username1 = self.form_fields["manual_username1"]
                 args.manual_username2 = self.form_fields["manual_username2"]
                 args.manual_username3 = self.form_fields["manual_username3"]
+            elif args.mode == "lab":
+                # Map form fields to lab-specific args while keeping manual None
+                args.lab_username1 = self.form_fields["manual_username1"]
+                args.lab_username2 = self.form_fields["manual_username2"]
+                args.lab_username3 = self.form_fields["manual_username3"]
+                args.manual_username1 = None
+                args.manual_username2 = None
+                args.manual_username3 = None
             else:
                 args.manual_username1 = None
                 args.manual_username2 = None
@@ -725,6 +740,8 @@ class DockerContainerManager:
             success = False
             if args.mode == "manual":
                 success = handle_manual_mode(args)
+            elif args.mode == "lab":
+                success = handle_lab_mode(args)
             else:
                 success = handle_csv_mode(args)
             

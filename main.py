@@ -1,6 +1,7 @@
 import argparse
 from core.utils.arg_validator import validate_args
 from core.utils.mode_utils import handle_manual_mode, handle_csv_mode
+from core.modes.lab import handle_lab_mode
 
 
 def main():
@@ -10,9 +11,9 @@ def main():
     parser.add_argument(
         "--mode",
         type=str,
-        choices=["group", "single", "manual"],
+        choices=["group", "single", "manual", "lab"],
         required=True,
-        help="Deployment mode: group (all groups), single (one group), or manual (direct params for group)",
+        help="Deployment mode: group (all groups), single (one group), manual (direct params), or lab (alias of manual)",
     )
     parser.add_argument(
         "--image",
@@ -46,6 +47,21 @@ def main():
         "--manual-username3",
         type=str,
         help="Third username for manual group deployment",
+    )
+    parser.add_argument(
+        "--lab-username1",
+        type=str,
+        help="First username for lab group deployment (alias of manual)",
+    )
+    parser.add_argument(
+        "--lab-username2",
+        type=str,
+        help="Second username for lab group deployment (alias of manual)",
+    )
+    parser.add_argument(
+        "--lab-username3",
+        type=str,
+        help="Third username for lab group deployment (alias of manual)",
     )
     parser.add_argument(
         "--cpu",
@@ -85,6 +101,8 @@ def main():
         case "manual":
             # Pass args directly to handle_manual_mode for proper parameter handling
             handle_manual_mode(args)
+        case "lab":
+            handle_lab_mode(args)
         case _:
             handle_csv_mode(args)
 

@@ -38,6 +38,8 @@ def validate_args(args):
     """Validate command-line arguments based on the selected mode."""
     if args.mode == "manual":
         validate_manual_mode_args(args)
+    elif args.mode == "lab":
+        validate_lab_mode_args(args)
     elif args.mode == "single":
         validate_single_mode_args(args)
     elif args.mode == "group":
@@ -59,6 +61,18 @@ def validate_single_mode_args(args):
         print(
             "Error: Single mode requires --groupID parameter with the index of the group in the CSV"
         )
+        sys.exit(1)
+
+
+def validate_lab_mode_args(args):
+    """Validate arguments required for lab deployment mode.
+
+    Accept either lab_username1 or manual_username1, with lab preferred.
+    """
+    # Prefer lab_username1, fallback to manual_username1
+    primary = getattr(args, "lab_username1", None) or getattr(args, "manual_username1", None)
+    if not primary:
+        print("Error: Lab mode requires --lab-username1 (or --manual-username1 as fallback)")
         sys.exit(1)
 
 
