@@ -1,0 +1,10 @@
+[project]
+name = "docker-mass-deployment"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.3.3",
+    "prettytable>=3.17.0",
+]

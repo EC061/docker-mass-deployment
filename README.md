@@ -34,35 +34,18 @@ git clone https://github.com/EC061/docker-mass-deployment.git
 cd docker-mass-deployment
 ```
 
-### 2. Set Up Python Environment (Choose one option)
+### 2. Set Up Python Environment
 
-#### Option A: Using pip (standard)
-
-```bash
-# Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-#### Option B: Using uv [[Link]](https://github.com/astral-sh/uv) (faster alternative)
-
-First, install uv if you don't have it already:
+This project uses `uv` for dependency management. First, install uv if you don't have it already:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-Then, create and activate a virtual environment:
+Then, sync the project dependencies (this will automatically create a virtual environment and install the required packages):
 
 ```bash
-uv venv
-source .venv/bin/activate
-
-# Install dependencies
-uv pip install -r requirements.txt
+uv sync
 ```
 
 ### 3. Build the Docker Image
@@ -76,7 +59,7 @@ cd core/docker && docker build -t custom-ssh . && cd ../..
 The system uses a Python script to deploy containers from a CSV roster file:
 
 ```bash
-python main.py --mode MODE [OPTIONS]
+uv run main.py --mode MODE [OPTIONS]
 ```
 
 ### Command Line Options
@@ -98,19 +81,19 @@ python main.py --mode MODE [OPTIONS]
 Lab mode (preferred lab flags):
 
 ```bash
-python main.py --mode lab --lab-username1 alice --lab-username2 bob --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
+uv run main.py --mode lab --lab-username1 alice --lab-username2 bob --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
 ```
 
 Lab mode (fallback to manual flags):
 
 ```bash
-python main.py --mode lab --manual-username1 alice --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
+uv run main.py --mode lab --manual-username1 alice --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
 ```
 
 Manual mode (unchanged):
 
 ```bash
-python main.py --mode manual --manual-username1 alice --manual-username2 bob --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
+uv run main.py --mode manual --manual-username1 alice --manual-username2 bob --image custom-ssh --port 50000 --data-path /nvme_data2/class_data --fs-path /nvme_data1/docker.service
 ```
 | `--cpu LIMIT`                  | CPU limit for containers (e.g., '4')                                                                                     | 4                          |
 | `--ram LIMIT`                  | RAM limit for containers (e.g., '8g')                                                                                    | 8g                         |
