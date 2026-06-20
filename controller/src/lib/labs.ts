@@ -92,6 +92,9 @@ export function createLab(input: CreateLabInput): Lab {
       lab: input.name,
       fast_quota_bytes: input.fastQuotaBytes,
       slow_quota_bytes: input.slowQuotaBytes,
+      image: input.image,
+      ssh_port: input.sshPort,
+      container_options: input.containerOptions ?? {},
     },
     input.actor,
   );

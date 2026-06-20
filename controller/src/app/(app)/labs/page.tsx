@@ -70,6 +70,32 @@ export default function LabsPage() {
               <label>Slow quota (TB)</label>
               <input name="slowTb" type="number" step="0.5" defaultValue={settings.slowQuotaDefaultBytes / TIB} />
             </div>
+            <div style={{ gridColumn: "1 / -1", marginTop: 4 }}>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Container options below are set once at creation; changing them later requires
+                &ldquo;recreate container&rdquo; (data is preserved). All GPUs are always attached.
+              </span>
+            </div>
+            <div>
+              <label>CPUs</label>
+              <input name="cpus" defaultValue="4" />
+            </div>
+            <div>
+              <label>RAM</label>
+              <input name="memory" defaultValue="8g" />
+            </div>
+            <div>
+              <label>Shared memory</label>
+              <input name="shmSize" defaultValue="1g" />
+            </div>
+            <div>
+              <label>Image size quota</label>
+              <input name="imageQuota" defaultValue="50g" />
+            </div>
+            <div>
+              <label>Restart policy</label>
+              <input name="restart" defaultValue="unless-stopped" />
+            </div>
             <div style={{ gridColumn: "1 / -1" }}>
               <button type="submit" style={{ width: 160 }}>
                 Create lab

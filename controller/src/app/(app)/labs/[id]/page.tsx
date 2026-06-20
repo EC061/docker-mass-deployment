@@ -2,8 +2,16 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { ago, fmtBytes, pct } from "@/lib/format";
 import { getLab } from "@/lib/labs";
+import { listMembers } from "@/lib/students";
 import { TIB } from "@/lib/settings";
-import { destroyLabAction, rescanAction, setQuotaAction } from "../actions";
+import {
+  addMemberAction,
+  destroyLabAction,
+  recreateContainerAction,
+  removeMemberAction,
+  rescanAction,
+  setQuotaAction,
+} from "../actions";
 
 export const dynamic = "force-dynamic";
 
@@ -31,10 +39,17 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
-export default function LabDetail({ params }: { params: { id: string } }) {
+export default function LabDetail({
+  params,
+  searchParams,
+}: {
+  params: { id: string };
+  searchParams: { newuser?: string; pw?: string; emailed?: string };
+}) {
   const labId = Number(params.id);
   const lab = getLab(labId);
   if (!lab) notFound();
+  const members = listMembers(labId);
 
   const fast = samples(labId, "fast");
   const slow = samples(labId, "slow");
@@ -105,6 +120,79 @@ export default function LabDetail({ params }: { params: { id: string } }) {
       </div>
 
       <div className="card">
+        <h3 style={{ marginTop: 0 }}>Members</h3>
+        {searchParams.newuser && searchParams.pw && (
+          <div
+            style={{
+              background: "var(--panel-2)",
+              border: "1px solid var(--accent)",
+              borderRadius: 7,
+              padding: "10px 12px",
+              marginBottom: 12,
+            }}
+          >
+            Added <b>{searchParams.newuser}</b> — password <code>{searchParams.pw}</code>{" "}
+            <span className="muted">
+              (shown once{searchParams.emailed ? "; also emailed" : "; SMTP not configured, not emailed"})
+            </span>
+          </div>
+        )}
+        <form action={addMemberAction} style={{ display: "flex", gap: 10, alignItems: "end", marginBottom: 14, flexWrap: "wrap" }}>
+          <input type="hidden" name="labId" value={lab.id} />
+          <div>
+            <label>Username</label>
+            <input name="username" required placeholder="alice" />
+          </div>
+          <div>
+            <label>Email</label>
+            <input name="email" type="email" placeholder="alice@uga.edu" />
+          </div>
+          <div>
+            <label>Name</label>
+            <input name="name" placeholder="Alice A." />
+          </div>
+          <button type="submit" style={{ width: 130, marginTop: 0 }}>
+            Add student
+          </button>
+        </form>
+        {members.length === 0 ? (
+          <p className="muted">No students yet.</p>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Username</th>
+                <th>Email</th>
+                <th>Name</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {members.map((m) => (
+                <tr key={m.member_id}>
+                  <td>{m.username}</td>
+                  <td>{m.email ?? "—"}</td>
+                  <td>{m.name ?? "—"}</td>
+                  <td style={{ textAlign: "right" }}>
+                    <form action={removeMemberAction} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                      <input type="hidden" name="labId" value={lab.id} />
+                      <input type="hidden" name="studentId" value={m.id} />
+                      <label className="muted" style={{ margin: 0, display: "inline-flex", gap: 4, alignItems: "center" }}>
+                        <input type="checkbox" name="deleteData" style={{ width: "auto" }} /> delete data
+                      </label>
+                      <button type="submit" style={{ width: "auto", marginTop: 0, padding: "6px 10px", background: "var(--panel-2)" }}>
+                        Remove
+                      </button>
+                    </form>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      <div className="card">
         <h3 style={{ marginTop: 0 }}>Old files</h3>
         <form action={rescanAction} style={{ marginBottom: 12 }}>
           <input type="hidden" name="labId" value={lab.id} />
@@ -143,7 +231,13 @@ export default function LabDetail({ params }: { params: { id: string } }) {
         )}
       </div>
 
-      <div className="card">
+      <div className="card" style={{ display: "flex", gap: 12 }}>
+        <form action={recreateContainerAction}>
+          <input type="hidden" name="labId" value={lab.id} />
+          <button type="submit" style={{ width: 200, marginTop: 0, background: "var(--panel-2)" }}>
+            Recreate container
+          </button>
+        </form>
         <form action={destroyLabAction}>
           <input type="hidden" name="labId" value={lab.id} />
           <button type="submit" style={{ width: 200, marginTop: 0, background: "var(--err)" }}>

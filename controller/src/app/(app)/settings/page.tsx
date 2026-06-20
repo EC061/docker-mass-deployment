@@ -1,9 +1,9 @@
 import { getSettings, TIB } from "@/lib/settings";
-import { saveStorageSettingsAction } from "./actions";
+import { saveSmtpSettingsAction, saveStorageSettingsAction, testEmailAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export default function SettingsPage() {
+export default function SettingsPage({ searchParams }: { searchParams: { smtp?: string } }) {
   const s = getSettings();
   return (
     <>
@@ -41,10 +41,56 @@ export default function SettingsPage() {
       </div>
 
       <div className="card">
-        <p className="muted">
-          External SMTP, WebDAV backup, GPU idle policy, and the log-level alert threshold are added in
-          later phases.
-        </p>
+        <h3 style={{ marginTop: 0 }}>Email (external SMTP)</h3>
+        {searchParams.smtp && <p style={{ color: "var(--accent)" }}>{searchParams.smtp}</p>}
+        <form action={saveSmtpSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
+          <div>
+            <label>SMTP host</label>
+            <input name="smtpHost" defaultValue={s.smtpHost} placeholder="smtp.uga.edu" />
+          </div>
+          <div>
+            <label>Port</label>
+            <input name="smtpPort" type="number" defaultValue={s.smtpPort} />
+          </div>
+          <div>
+            <label>Username</label>
+            <input name="smtpUser" defaultValue={s.smtpUser} />
+          </div>
+          <div>
+            <label>Password</label>
+            <input name="smtpPass" type="password" placeholder={s.smtpPass ? "•••••• (unchanged)" : ""} />
+          </div>
+          <div>
+            <label>From address</label>
+            <input name="smtpFrom" defaultValue={s.smtpFrom} placeholder="labs@uga.edu" />
+          </div>
+          <div>
+            <label>SSH host override (optional)</label>
+            <input name="sshHostOverride" defaultValue={s.sshHostOverride} placeholder="gpu.uga.edu" />
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" name="smtpSecure" defaultChecked={s.smtpSecure} style={{ width: "auto" }} />
+            <label style={{ margin: 0 }}>Implicit TLS (port 465)</label>
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <button type="submit" style={{ width: 140 }}>
+              Save SMTP
+            </button>
+          </div>
+        </form>
+        <form action={testEmailAction} style={{ display: "flex", gap: 10, alignItems: "end", marginTop: 12 }}>
+          <div>
+            <label>Send test email to</label>
+            <input name="to" type="email" placeholder="you@uga.edu" />
+          </div>
+          <button type="submit" style={{ width: 140, marginTop: 0, background: "var(--panel-2)" }}>
+            Send test
+          </button>
+        </form>
+      </div>
+
+      <div className="card">
+        <p className="muted">WebDAV backup, GPU idle policy, and the log-level alert threshold are added in later phases.</p>
       </div>
     </>
   );

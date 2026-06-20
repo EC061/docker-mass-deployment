@@ -31,12 +31,15 @@ class Dispatcher:
         self._handlers[action] = handler
 
     def _register_builtin(self) -> None:
-        from . import labops, scan
+        from . import containerops, labops, scan, studentops
 
         self.register(P.A_NODE_REPORT_STATE, self._report_state)
         self.register(P.A_LAB_CREATE, labops.create_lab)
         self.register(P.A_LAB_SET_QUOTA, labops.set_lab_quota)
         self.register(P.A_LAB_DESTROY, labops.destroy_lab)
+        self.register(P.A_CONTAINER_RECREATE, containerops.recreate_container)
+        self.register(P.A_STUDENT_ADD, studentops.add_student)
+        self.register(P.A_STUDENT_REMOVE, studentops.remove_student)
         self.register(P.A_OLDFILES_SCAN, scan.scan_lab)
 
     def _report_state(self, cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
