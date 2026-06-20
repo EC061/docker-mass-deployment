@@ -14,7 +14,7 @@
   "dependencies": {
     "@russellthehippo/honker-node": "^0.3.3",
     "bcryptjs": "^2.4.3",
-    "better-sqlite3": "^11.3.0",
+    "better-sqlite3": "^12.11.1",
     "jose": "^5.9.0",
     "next": "^15.5.19",
     "nodemailer": "^9.0.1",
