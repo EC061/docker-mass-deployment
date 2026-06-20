@@ -38,6 +38,12 @@ export interface Settings {
   alertDedupMinutes: number; // suppress duplicate alerts (same key) within this window
   logRetentionDays: number;
   quotaAlertPct: number; // email the PI when a lab pool crosses this percent
+  // WebDAV backup target.
+  webdavUrl: string; // e.g. https://dav.example.com/labmgr
+  webdavUser: string;
+  webdavPass: string;
+  webdavRetention: number; // keep this many timestamped backups
+  backupIntervalHours: number; // 0 disables scheduled backups
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -65,7 +71,24 @@ export const DEFAULT_SETTINGS: Settings = {
   alertDedupMinutes: 15,
   logRetentionDays: 30,
   quotaAlertPct: 90,
+  webdavUrl: "",
+  webdavUser: "",
+  webdavPass: "",
+  webdavRetention: 7,
+  backupIntervalHours: 24,
 };
+
+export function isWebdavConfigured(): boolean {
+  return getSetting("webdavUrl").trim() !== "";
+}
+
+export function webdavConfig() {
+  return {
+    url: getSetting("webdavUrl").trim().replace(/\/$/, ""),
+    user: getSetting("webdavUser"),
+    pass: getSetting("webdavPass"),
+  };
+}
 
 /** The GPU policy payload broadcast to agents (gpu.policy.update). */
 export function gpuPolicyPayload(): Record<string, unknown> {
