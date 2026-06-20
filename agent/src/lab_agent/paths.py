@@ -31,6 +31,16 @@ def lab_slow_shared(cfg: AgentConfig, lab: str) -> str:
     return f"{lab_slow(cfg, lab)}/shared"
 
 
+def lab_fast_users(cfg: AgentConfig, lab: str) -> str:
+    """Parent dataset holding every student's scratch; bind-mounted into the container once."""
+    return f"{lab_fast(cfg, lab)}/users"
+
+
+def lab_slow_users(cfg: AgentConfig, lab: str) -> str:
+    """Parent dataset holding every student's cold-storage; bind-mounted into the container once."""
+    return f"{lab_slow(cfg, lab)}/users"
+
+
 def user_scratch(cfg: AgentConfig, lab: str, user: str) -> str:
     return f"{lab_fast(cfg, lab)}/users/{user}"
 

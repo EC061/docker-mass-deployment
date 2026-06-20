@@ -14,6 +14,15 @@ export interface Settings {
   sshPortStart: number;
   sshPortEnd: number;
   oldFileThresholdDays: number;
+  // External SMTP (no bundled mail server). Empty host disables email.
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPass: string;
+  smtpFrom: string;
+  smtpSecure: boolean; // true = implicit TLS (465); false = STARTTLS/none
+  // Optional public hostname students SSH to (falls back to the node name).
+  sshHostOverride: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -22,7 +31,18 @@ export const DEFAULT_SETTINGS: Settings = {
   sshPortStart: 50000,
   sshPortEnd: 51000,
   oldFileThresholdDays: 30,
+  smtpHost: "",
+  smtpPort: 587,
+  smtpUser: "",
+  smtpPass: "",
+  smtpFrom: "",
+  smtpSecure: false,
+  sshHostOverride: "",
 };
+
+export function isSmtpConfigured(): boolean {
+  return getSetting("smtpHost").trim() !== "" && getSetting("smtpFrom").trim() !== "";
+}
 
 export function getSetting<K extends keyof Settings>(key: K): Settings[K] {
   const row = db().prepare("SELECT value FROM settings WHERE key = ?").get(key) as

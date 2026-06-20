@@ -1,4 +1,4 @@
-from lab_agent import labops
+from lab_agent import containerops, labops
 from lab_agent.config import AgentConfig
 from lab_agent.executors import zfs
 
@@ -28,6 +28,8 @@ def _patch_zfs(monkeypatch):
     monkeypatch.setattr(labops.zfs, "set_quota", set_quota)
     monkeypatch.setattr(labops.zfs, "destroy_dataset", destroy_dataset)
     monkeypatch.setattr(labops.zfs, "get_usage", get_usage)
+    # Container creation needs Docker/ZFS mountpoints — stub it for the storage-focused tests.
+    monkeypatch.setattr(containerops, "ensure_container", lambda cfg, lab, params: "container-id")
     return created, quotas, destroyed
 
 
@@ -39,6 +41,8 @@ def test_create_lab_provisions_four_datasets(monkeypatch):
     assert "slow/labs/bio" in names
     assert "fast/labs/bio/shared" in names
     assert "slow/labs/bio/shared" in names
+    assert "fast/labs/bio/users" in names
+    assert "slow/labs/bio/users" in names
     # Parent datasets get the quota.
     assert ("fast/labs/bio", 2000) in created
     assert ("slow/labs/bio", 3000) in created
