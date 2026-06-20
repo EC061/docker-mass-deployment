@@ -58,6 +58,35 @@ export async function saveGpuPolicyAction(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveScrubSettingsAction(formData: FormData) {
+  setSetting("scrubEnabled", formData.get("scrubEnabled") === "on");
+  setSetting("scrubIntervalDays", Number(formData.get("scrubIntervalDays")) || 30);
+  revalidatePath("/settings");
+}
+
+export async function scrubNowAction() {
+  const { db } = await import("@/lib/db");
+  const { enqueueTask } = await import("@/lib/queue");
+  const actor = (await currentAdmin())?.email;
+  const nodes = db()
+    .prepare("SELECT name, capabilities FROM nodes WHERE online = 1")
+    .all() as { name: string; capabilities: string | null }[];
+  let count = 0;
+  for (const n of nodes) {
+    let zfs = false;
+    try {
+      zfs = !!(n.capabilities && JSON.parse(n.capabilities).zfs);
+    } catch {
+      zfs = false;
+    }
+    if (!zfs) continue;
+    enqueueTask(n.name, "node.scrub", {}, actor);
+    db().prepare("UPDATE nodes SET last_scrub = ? WHERE name = ?").run(Date.now(), n.name);
+    count++;
+  }
+  redirect(`/settings?scrub=${encodeURIComponent(`Scrub started on ${count} node(s)`)}`);
+}
+
 export async function saveWebdavSettingsAction(formData: FormData) {
   setSetting("webdavUrl", String(formData.get("webdavUrl") ?? "").trim());
   setSetting("webdavUser", String(formData.get("webdavUser") ?? "").trim());

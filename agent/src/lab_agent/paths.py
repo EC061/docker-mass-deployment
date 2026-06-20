@@ -47,3 +47,24 @@ def user_scratch(cfg: AgentConfig, lab: str, user: str) -> str:
 
 def user_cold(cfg: AgentConfig, lab: str, user: str) -> str:
     return f"{lab_slow(cfg, lab)}/users/{user}"
+
+
+# --- Cold storage as a filesystem path (SMB backend) -----------------------------------------
+# When cold storage is an SMB mount there are no datasets, only directories. The layout mirrors
+# the ZFS one so the controller's dataset-name parser ("…/labs/<lab>[/users/<u>]") works for both.
+
+
+def cold_lab(cfg: AgentConfig, lab: str) -> str:
+    return f"{cfg.cold_root}/{lab}"
+
+
+def cold_lab_shared(cfg: AgentConfig, lab: str) -> str:
+    return f"{cold_lab(cfg, lab)}/shared"
+
+
+def cold_lab_users(cfg: AgentConfig, lab: str) -> str:
+    return f"{cold_lab(cfg, lab)}/users"
+
+
+def cold_user(cfg: AgentConfig, lab: str, user: str) -> str:
+    return f"{cold_lab(cfg, lab)}/users/{user}"

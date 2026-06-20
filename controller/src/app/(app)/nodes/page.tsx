@@ -8,6 +8,35 @@ interface NodeRow {
   last_seen: number | null;
   capabilities: string | null;
   pools: string | null;
+  scrub_status: string | null;
+}
+
+interface ScrubEntry {
+  pool: string;
+  healthy?: boolean;
+  scrubbing?: boolean;
+  errors?: number;
+  last_scrub?: string | null;
+}
+
+function scrubSummary(raw: string | null): { text: string; bad: boolean } {
+  if (!raw) return { text: "—", bad: false };
+  let entries: ScrubEntry[] = [];
+  try {
+    entries = JSON.parse(raw) as ScrubEntry[];
+  } catch {
+    return { text: "—", bad: false };
+  }
+  if (entries.length === 0) return { text: "—", bad: false };
+  const bad = entries.some((p) => p.healthy === false || (typeof p.errors === "number" && p.errors !== 0));
+  const text = entries
+    .map((p) => {
+      if (p.healthy === false || (p.errors && p.errors !== 0)) return `${p.pool}: errors`;
+      if (p.scrubbing) return `${p.pool}: scrubbing`;
+      return `${p.pool}: ok`;
+    })
+    .join(", ");
+  return { text, bad };
 }
 
 function fmtBytes(n: number): string {
@@ -31,7 +60,7 @@ function ago(ts: number | null): string {
 
 export default function NodesPage() {
   const nodes = db()
-    .prepare("SELECT name, online, last_seen, capabilities, pools FROM nodes ORDER BY name")
+    .prepare("SELECT name, online, last_seen, capabilities, pools, scrub_status FROM nodes ORDER BY name")
     .all() as NodeRow[];
 
   return (
@@ -48,6 +77,8 @@ export default function NodesPage() {
                 <th>Status</th>
                 <th>GPUs</th>
                 <th>Pools</th>
+                <th>Cold storage</th>
+                <th>Scrub</th>
                 <th>Issues</th>
                 <th>Last seen</th>
               </tr>
@@ -56,6 +87,11 @@ export default function NodesPage() {
               {nodes.map((n) => {
                 const caps = n.capabilities ? JSON.parse(n.capabilities) : {};
                 const pools = n.pools ? JSON.parse(n.pools) : [];
+                const scrub = scrubSummary(n.scrub_status);
+                const coldText =
+                  caps.slow_backend === "smb"
+                    ? `SMB${caps.slow_shared ? " (shared)" : ""}`
+                    : "ZFS";
                 return (
                   <tr key={n.name}>
                     <td>{n.name}</td>
@@ -70,6 +106,8 @@ export default function NodesPage() {
                         ? "—"
                         : pools.map((p: any) => `${p.name}: ${fmtBytes(p.free)} free`).join(", ")}
                     </td>
+                    <td>{coldText}</td>
+                    <td style={scrub.bad ? { color: "var(--warn)" } : undefined}>{scrub.text}</td>
                     <td>
                       {caps.issues && caps.issues.length > 0 ? (
                         <span style={{ color: "var(--warn)" }}>{caps.issues.length}</span>
