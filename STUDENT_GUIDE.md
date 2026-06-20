@@ -1,200 +1,58 @@
-# Student Guide - Docker Container Access and Setup
+# Student Guide
 
-This guide provides essential commands and instructions for connecting to your assigned Docker container and setting up your development environment.
+Welcome to your lab environment. You access it over SSH and get personal fast + slow storage.
 
-## Connecting to Your Container
+## Connecting
 
-### SSH Connection
-
-Connect to your container using SSH with your assigned username and password:
+You'll receive an email with your username, a temporary password, and a command like:
 
 ```bash
-ssh <username>@<server_hostname> -p <port_number>
+ssh your_username@HOST -p PORT
 ```
 
-Example:
+- `HOST` is your lab server (or the address your admin gave you).
+- `PORT` is the port assigned to your lab (not the usual 22).
+
+Change your password after first login:
 
 ```bash
-ssh Edward@example.edu -p 50001
+passwd
 ```
 
-If you receive a warning about the host key, you can confirm by typing `yes` when prompted.
+You can also connect with **VS Code Remote - SSH** using the same host, port, and username.
 
-### SSH Connection Issues
+## Your storage
 
-If you encounter connection issues, try these troubleshooting steps:
+Inside the container your home directory has two special folders:
 
-1. Verify your port number and username (username is case sensitive)
-2. Check that your password is correct
-3. If using Windows, ensure your SSH client (PuTTY, etc.) is configured correctly
-4. Ask your instructor if the container is running
+| Folder | Backed by | Use it for |
+|---|---|---|
+| `~/scratch` | **fast** NVMe storage | active datasets, checkpoints, anything you're working on now |
+| `~/cold-storage` | **slow** bulk storage | results and data you want to keep but rarely touch |
 
-## Setting Up Python Environment
+Shared lab data your instructor provides is under `/labdata/fast` and `/labdata/slow`.
 
-There are several ways to create and manage Python virtual environments. Choose the method that works best for you.
+Storage is **quota-limited per lab**. If the lab gets close to its limit, your PI is notified with a
+per-student breakdown — so clean up files you no longer need. Old, untouched files in `~/scratch` and
+`~/cold-storage` are periodically reported to your admins as cleanup candidates.
 
-### Method 1: Using standard `venv` and `pip`
+## GPUs
 
-```bash
-# Create a virtual environment
-python3 -m venv myenv
+All of the server's GPUs are available to your lab. To keep them fair for everyone, there is an
+**idle-process killer**:
 
-# Activate the virtual environment
-source myenv/bin/activate
+- If a process is holding GPU memory but **not actually using the GPU** for a while, you'll get a
+  warning email.
+- If it stays idle past the grace period, it will be **terminated** and you'll get a notice.
 
-# Install packages
-pip install numpy pandas matplotlib
+To avoid losing work: don't leave dead notebooks/REPLs holding the GPU, checkpoint long runs, and keep
+the GPU active while you need it. If you have a legitimate long idle job, ask an admin to whitelist it.
 
-# Install packages from requirements.txt
-pip install -r requirements.txt
-```
+## Tips
 
-### Method 2: Using `pyenv` for Python version management
+- Check your GPU usage with `nvidia-smi`.
+- Put large data in `~/scratch` (fast) while training; move finished results to `~/cold-storage`.
+- Files you create are group-writable by default (`umask 000`) so teammates in shared folders can edit
+  them.
 
-```bash
-# Install pyenv if not already installed
-
-# Install A Specific Python version
-pyenv install 3.12
-
-# Set a specific version globally or locally
-pyenv global 3.12  # Global setting
-pyenv local 3.9.6   # Project-specific setting
-
-# Create virtual environment with pyenv
-pyenv virtualenv 3.12 myproject
-
-# Activate the environment
-pyenv activate myproject
-```
-
-### Method 3: Using `uv` for faster package installation
-
-```bash
-# Install uv if not already installed
-
-
-# Create an environment with a specific Python version
-uv venv --python=3.12
-
-# Activate the environment
-source .venv/bin/activate
-
-# Install packages
-uv pip install numpy pandas matplotlib
-
-# Install packages from requirements.txt
-uv pip install -r requirements.txt
-```
-
-## Installing Specific PyTorch Versions
-
-### Installing PyTorch
-
-For installing specific PyTorch versions, always visit the official PyTorch website to get the correct installation command:
-
-```bash
-# Visit https://pytorch.org/get-started/locally/
-# Select your preferences (PyTorch version, OS, package manager, CUDA version)
-# Copy the recommended installation command
-
-# Example command :
-pip install torch torchvision torchaudio
-```
-
-**Important Note:** Do not modify the local CUDA environment in your container. PyTorch's CUDA support is backward compatible, meaning newer PyTorch versions can work with older CUDA installations. The containers are already configured with appropriate CUDA versions.
-
-### For CPU-only installations (when needed):
-
-```bash
-# Get the appropriate command from https://pytorch.org/get-started/locally/
-# Make sure to select "CPU" for the computation platform
-
-# Example for CPU-only installation:
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
-```
-
-## Installing Specific TensorFlow Versions
-
-For installing specific TensorFlow versions, always refer to the official TensorFlow website for the most accurate installation commands:
-
-```bash
-# Visit https://www.tensorflow.org/install
-# Follow the instructions specific to your needs
-# Copy and paste the recommended installation command
-
-# Example of a standard installation:
-pip install tensorflow
-```
-
-**Important Note:** Do not modify the local CUDA environment in your container. The containers are already configured with appropriate CUDA and cuDNN versions for TensorFlow. Installing a TensorFlow version compatible with the existing CUDA setup is recommended.
-
-For GPU installations:
-
-```bash
-# Get the appropriate command from https://www.tensorflow.org/install/pip
-
-# Example for a version-specific installation with GPU support:
-python3 -m pip install 'tensorflow[and-cuda]'
-```
-
-For CPU-only installations (when needed):
-
-```bash
-# Visit https://www.tensorflow.org/install/pip#cpu
-# Follow the CPU-specific installation instructions
-
-# Example for CPU-only installation:
-python3 -m pip install tensorflow
-```
-
-### Working with the Shared Data Directory
-
-A shared data directory is accessible in your home directory:
-
-```bash
-# Navigate to the shared data directory
-cd ~/data
-
-# List contents
-ls -la
-
-# Create your own work directory
-mkdir ~/data/mywork
-cd ~/data/mywork
-```
-
-## Useful Linux Commands
-
-```bash
-# Check available disk space
-df -h
-
-# Check memory and CPU usage
-top
-
-# Check GPU status (if available)
-nvidia-smi
-
-# Transfer files from your local machine to container (run this on your local machine)
-scp -P <port_number> local_file.txt <username>@<server_hostname>:/home/<username>/
-
-# Transfer files from container to local machine (run this on your local machine)
-scp -P <port_number> <username>@<server_hostname>:/home/<username>/remote_file.txt ./
-
-# Check Python version
-python3 --version
-
-# Exit the SSH session
-exit
-```
-
-## Getting Help
-
-If you encounter issues with your container or need assistance with the setup:
-
-1. Check the error messages carefully
-2. Consult your course materials
-3. Contact your instructor through the appropriate channels
-
-Remember that your container may have resource limitations (CPU, RAM, disk space). Monitor your usage to ensure your applications run efficiently.
+If something isn't working, contact your lab admin.

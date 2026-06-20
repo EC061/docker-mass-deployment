@@ -1,109 +1,184 @@
-# Docker Mass Deployment System for Educational Environments
+# Lab Manager
 
-## Project Overview
+A multi-node manager for ZFS-backed, GPU-equipped lab servers. A central web **controller** manages
+**labs** (one shared SSH container per lab, owned by a PI) across many machines; a lightweight
+**agent** on each server does the actual `zfs` / `docker` / `nvidia-smi` work.
 
-This project provides a streamlined solution for mass deployment of Docker containers in educational settings. It enables instructors and system administrators to efficiently provision containerized environments for multiple students simultaneously, ensuring consistent development and testing environments across an entire class. The system is specifically designed to work with University of Georgia eLC (electronic Learning Commons) downloaded grade book CSV files.
+- Per-lab fast (NVMe) + slow ZFS quotas, **changeable live** from the web UI.
+- Per-student `~/scratch` (fast) and `~/cold-storage` (slow), added/removed with one click or by CSV.
+- Idle-GPU-process killer (warn-then-kill, with whitelist) that emails the owning student.
+- External SMTP, WebDAV backups, GPU policy, and quota defaults — all configured in the web UI.
+- Centralized logs and log-level admin alerts.
 
-## Features
-
-- Batch deployment of pre-configured Docker containers for an entire class
-- Customizable container templates for different course requirements
-- Resource allocation management to prevent server overload
-- Student access control and authentication
-- Monitoring and analytics for container usage
-- Easy cleanup and reset functionality between assignments
-
-## Prerequisites
-
-- [Docker Engine](https://docs.docker.com/engine/install/) (version 20.10.x or later)
-- [NVIDIA Docker runtime](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html) (for GPU support)
-- Python 3.8+ with the following packages:
-  - pandas
-- CSV file exported from University of Georgia eLC grade book containing these columns:
-  - OrgDefinedId
-  - Last Name
-  - First Name
-  - End-of-Line Indicator
-
-## Installation
-
-### 1. Clone the Repository
-
-```bash
-git clone https://github.com/EC061/docker-mass-deployment.git
-cd docker-mass-deployment
+```
+        ┌──────────── Controller (web UI + API + WebSocket hub) ────────────┐
+        │  Next.js · SQLite(WAL) · honker queue · SMTP · WebDAV backup       │
+        └───────────────────────────────┬───────────────────────────────────┘
+                                         │  WSS (agent dials in, token auth)
+              ┌──────────────────────────┼──────────────────────────┐
+          ┌───▼────┐                 ┌────▼───┐                  ┌────▼───┐
+          │ agent  │                 │ agent  │                  │ agent  │   (Python, one per server)
+          │ gpu-01 │                 │ gpu-02 │                  │ gpu-03 │
+          └────────┘                 └────────┘                  └────────┘
+       fast + slow ZFS pools, GPUs · docker on the zfs storage driver
 ```
 
-### 2. Set Up Python Environment (Choose one option)
+A lab is **pinned to one node** (its storage lives on that machine's pools).
 
-#### Option A: Using pip (standard)
+---
 
-```bash
-# Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate
+## 1. Node host prep (run once per GPU server)
 
-# Install dependencies
-pip install -r requirements.txt
-```
+The manager does **not** create ZFS pools or install Docker/NVIDIA — you do that once per node. The
+agent assumes `fast` and `slow` pools already exist and Docker uses the `zfs` storage driver.
 
-#### Option B: Using uv [[Link]](https://github.com/astral-sh/uv) (faster alternative)
+### 1.1 Create the pools
 
-First, install uv if you don't have it already:
+Replace the device names with your disks. The agent expects pools named `fast` (NVMe) and `slow`.
 
 ```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Fast NVMe pool (example: a single NVMe; use mirror/raidz for redundancy).
+sudo zpool create -o ashift=12 fast /dev/nvme0n1
+
+# Slow bulk pool.
+sudo zpool create -o ashift=12 slow /dev/sda
+
+# Datasets the agent uses (it creates per-lab children under these automatically).
+sudo zfs create fast/labs
+sudo zfs create slow/labs
+sudo zfs create fast/docker     # Docker's zfs storage driver lives here
 ```
 
-Then, create and activate a virtual environment:
+### 1.2 Dataset properties
 
 ```bash
-uv venv
-source .venv/bin/activate
-
-# Install dependencies
-uv pip install -r requirements.txt
+# atime ON so the old-file scanner can report truly-unused files (NOT relatime/noatime).
+sudo zfs set atime=on fast/labs slow/labs
+sudo zfs set compression=lz4 fast slow
+sudo zfs set xattr=sa fast slow
+# Larger records suit bulk/cold data; default (128K) is fine for fast scratch.
+sudo zfs set recordsize=1M slow
 ```
 
-### 3. Build the Docker Image
+### 1.3 Point Docker at the zfs storage driver
 
 ```bash
-cd core/docker && docker build -t custom-ssh . && cd ../..
+sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
+{
+  "storage-driver": "zfs",
+  "data-root": "/fast/docker"
+}
+JSON
+sudo systemctl restart docker
+docker info | grep -i 'Storage Driver'   # should print: Storage Driver: zfs
 ```
 
-## Usage
+> Per-student scratch/cold datasets are bind-mounted into the lab container with `rshared`
+> propagation so they appear live. Make the ZFS mounts shared once per boot:
+> `sudo mount --make-rshared /fast && sudo mount --make-rshared /slow`.
 
-The system uses a Python script to deploy containers from a CSV roster file:
+### 1.4 NVIDIA container toolkit (for GPU labs)
+
+Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html),
+then verify:
 
 ```bash
-python main.py --mode MODE [OPTIONS]
+nvidia-smi
+docker info | grep -i runtimes   # should list: nvidia
 ```
 
-### Command Line Options
+### 1.5 Install the agent
 
-| Option                         | Description                                                                                                              | Default                    |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
-| `--mode MODE`                  | Deployment mode: 'group' (all groups from CSV), 'single' (one group from CSV), or 'manual' (direct params for one group) | (required)                 |
-| `--image IMAGE`                | Docker image to deploy                                                                                                   | custom-ssh                 |
-| `--port PORT`                  | Starting host port number                                                                                                | 50000                      |
-| `--groupID GROUP_ID`           | Deploy container for a specific group by index in CSV (for single mode)                                                  | (none)                     |
-| `--manual-username1 USERNAME1` | First username for manual group deployment                                                                               | (none)                     |
-| `--manual-username2 USERNAME2` | Second username for manual group deployment                                                                              | (none)                     |
-| `--manual-username3 USERNAME3` | Third username for manual group deployment                                                                               | (none)                     |
-| `--cpu LIMIT`                  | CPU limit for containers (e.g., '4')                                                                                     | 4                          |
-| `--ram LIMIT`                  | RAM limit for containers (e.g., '8g')                                                                                    | 8g                         |
-| `--storage LIMIT`              | Storage limit for containers (e.g., '50g')                                                                               | 50g                        |
-| `--data-path PATH`             | Path to the data folder for each team's container                                                                        | /nvme_data2/class_data     |
-| `--fs-path PATH`               | Path to the Docker filesystem directory                                                                                  | /nvme_data1/docker.service |
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh        # if uv is not present
+sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent \
+    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent --token AGENT_TOKEN
+```
 
-## Examples
+`lab-agent install` writes `/etc/lab-agent/config.toml` and a systemd unit (`lab-agent.service`) that
+starts on boot and reconnects automatically. Check readiness any time with `lab-agent doctor`.
 
-For detailed command examples, please refer to the [Sample Commands PDF](./sample_commands.pdf).
+---
 
-## Contributing
+## 2. Deploy the controller
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+The controller is a long-lived Node process (Next.js + WebSocket hub); it cannot run serverless.
+
+```bash
+cd controller
+cp .env.example .env     # set SIGNUP_TOKEN, AGENT_TOKEN, SESSION_SECRET
+# Then either:
+docker compose up -d                     # from the repo root (uses controller/Dockerfile)
+# ...or run from source for development:
+npm install && npm run dev
+```
+
+Env vars (controller bootstrap only — everything else is set in the UI):
+
+| Var | Purpose |
+|---|---|
+| `SIGNUP_TOKEN` | required to register an admin on the signup page |
+| `AGENT_TOKEN` | shared token every agent presents when it connects |
+| `SESSION_SECRET` | signs admin session cookies |
+| `DB_PATH` | SQLite path (mount a volume here in Docker) |
+| `PORT` | HTTP + agent-WebSocket port (default 8443) |
+
+The published image is `ghcr.io/ec061/lab-controller` (built by CI on tags/main).
+
+### First login
+
+Open the controller, go to **Sign up**, and register the first admin using the `SIGNUP_TOKEN`. Then
+open **Settings** and configure:
+
+- **Email (external SMTP)** — host/port/user/pass/from; click *Send test*.
+- **WebDAV backup** — URL/credentials, retention, and backup interval.
+- **GPU idle policy** — enable, thresholds, grace, whitelist; *Save & push to nodes*.
+- **Storage & ports** — default fast/slow quotas, SSH port range, old-file threshold.
+- **Alerts & logs** — alert level (WARN/ERROR), dedup window, quota alert %, log retention.
+
+---
+
+## 3. Day-to-day use
+
+- **Nodes** — see which servers are online, their GPUs, pools, and any host-prep issues.
+- **Labs** — create a lab (pick its node, fast/slow quota, base image, and container options). Container
+  options (CPU/RAM/shared-memory/image-size quota/restart) are **set once at creation**; changing them
+  needs *Recreate container* (data is preserved). All GPUs are always attached. Quotas are editable
+  **live**. The lab detail page shows storage-over-time, members, and old-file counts (*Rescan now*).
+- **Students** — add a student to a lab (a password is generated and emailed; shown once in the UI) or
+  bulk-import from CSV with a configurable column mapping. Removing a student optionally deletes their
+  data.
+- **GPU** — live GPU processes per node and recent idle-kill events.
+- **Logs** — filter by level/node/search; click a task to trace its lifecycle.
+
+### Build a lab base image
+
+A default Ubuntu+SSH image is in [image/](image/):
+
+```bash
+docker build -t custom-ssh ./image     # run on each node, or push to a registry the nodes can pull
+```
+
+Use any image name in the lab create form; it must run an SSH server and allow `useradd`.
+
+---
+
+## 4. Development
+
+```bash
+# Controller
+cd controller && npm install
+npm run dev         # tsx watch server.ts
+npm run lint && npm run typecheck && npm test && npm run build
+
+# Agent
+cd agent && uv venv && uv pip install -e ".[dev]"
+.venv/bin/ruff check src tests && .venv/bin/pytest
+```
+
+CI (GitHub Actions) runs lint/typecheck/tests/build for both, and publishes the controller image to
+GHCR on tags/main.
 
 ## License
 
-This project is licensed under the MIT License - see the LICENSE file for details.
+MIT — see [LICENSE](LICENSE).
