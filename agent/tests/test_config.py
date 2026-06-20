@@ -45,3 +45,35 @@ def test_saved_config_is_owner_only(tmp_path: Path):
     cfg = AgentConfig(controller_url="ws://x", token="t")
     path = save_config(cfg, tmp_path / "c.toml")
     assert (path.stat().st_mode & 0o777) == 0o600
+
+
+def test_default_slow_backend_is_zfs():
+    cfg = AgentConfig(controller_url="ws://x", token="t")
+    assert cfg.slow_is_zfs is True
+    assert cfg.scrub_pools == [cfg.fast_pool, cfg.slow_pool]
+
+
+def test_smb_backend_roundtrip_and_scrub_pools(tmp_path: Path):
+    cfg = AgentConfig(
+        controller_url="ws://x",
+        token="t",
+        slow_backend="smb",
+        slow_path="/mnt/cold/",
+        slow_shared=True,
+    )
+    path = save_config(cfg, tmp_path / "c.toml")
+    loaded = load_config(path)
+    assert loaded.slow_backend == "smb"
+    assert loaded.slow_shared is True
+    assert loaded.slow_is_zfs is False
+    # SMB cold storage is never scrubbed -> only the fast pool is scrubbable.
+    assert loaded.scrub_pools == ["fast"]
+    # cold_root strips the trailing slash.
+    assert loaded.cold_root == "/mnt/cold/labs"
+
+
+def test_invalid_slow_backend_rejected(tmp_path: Path):
+    cfg = AgentConfig(controller_url="ws://x", token="t", slow_backend="nfs")
+    path = save_config(cfg, tmp_path / "c.toml")
+    with pytest.raises(ValueError):
+        load_config(path)

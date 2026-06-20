@@ -8,15 +8,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import coldstore
 from .config import AgentConfig
 from .executors import zfs
 from .paths import (
     lab_fast,
     lab_fast_shared,
     lab_fast_users,
-    lab_slow,
-    lab_slow_shared,
-    lab_slow_users,
 )
 
 
@@ -34,13 +32,12 @@ def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     fast_quota = params.get("fast_quota_bytes")
     slow_quota = params.get("slow_quota_bytes")
 
-    # Parent datasets carry the lab quota; shared + users datasets hold lab data.
+    # Parent datasets carry the lab quota; shared + users datasets hold lab data. The fast tier is
+    # always ZFS; the slow (cold-storage) tier goes through coldstore (ZFS or SMB).
     zfs.create_dataset(lab_fast(cfg, lab), quota_bytes=fast_quota)
-    zfs.create_dataset(lab_slow(cfg, lab), quota_bytes=slow_quota)
     zfs.create_dataset(lab_fast_shared(cfg, lab))
-    zfs.create_dataset(lab_slow_shared(cfg, lab))
     zfs.create_dataset(lab_fast_users(cfg, lab))
-    zfs.create_dataset(lab_slow_users(cfg, lab))
+    coldstore.create_lab(cfg, lab, slow_quota)
 
     # Provision the shared container (no-op if Docker absent -> reported as failure upstream).
     from . import containerops
@@ -51,7 +48,7 @@ def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
         "lab": lab,
         "container": container,
         "fast": _usage_dict(zfs.get_usage(lab_fast(cfg, lab))),
-        "slow": _usage_dict(zfs.get_usage(lab_slow(cfg, lab))),
+        "slow": _usage_dict(coldstore.lab_usage(cfg, lab)),
     }
     return result, f"provisioned datasets + container for lab '{lab}'"
 
@@ -63,12 +60,11 @@ def set_lab_quota(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
         zfs.set_quota(lab_fast(cfg, lab), params["fast_quota_bytes"])
         logs.append(f"fast quota -> {params['fast_quota_bytes']}")
     if "slow_quota_bytes" in params:
-        zfs.set_quota(lab_slow(cfg, lab), params["slow_quota_bytes"])
-        logs.append(f"slow quota -> {params['slow_quota_bytes']}")
+        logs.append(coldstore.set_lab_quota(cfg, lab, params["slow_quota_bytes"]))
     result = {
         "lab": lab,
         "fast": _usage_dict(zfs.get_usage(lab_fast(cfg, lab))),
-        "slow": _usage_dict(zfs.get_usage(lab_slow(cfg, lab))),
+        "slow": _usage_dict(coldstore.lab_usage(cfg, lab)),
     }
     return result, "; ".join(logs) or "no quota change requested"
 
@@ -76,5 +72,5 @@ def set_lab_quota(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 def destroy_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     zfs.destroy_dataset(lab_fast(cfg, lab), recursive=True)
-    zfs.destroy_dataset(lab_slow(cfg, lab), recursive=True)
+    coldstore.destroy_lab(cfg, lab)
     return {"lab": lab, "destroyed": True}, f"destroyed datasets for lab '{lab}'"

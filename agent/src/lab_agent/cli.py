@@ -29,6 +29,12 @@ def _cmd_install(args: argparse.Namespace) -> int:
         cfg.fast_pool = args.fast_pool
     if args.slow_pool:
         cfg.slow_pool = args.slow_pool
+    if args.slow_backend:
+        cfg.slow_backend = args.slow_backend
+    if args.slow_path:
+        cfg.slow_path = args.slow_path
+    if args.slow_shared:
+        cfg.slow_shared = True
     if args.no_verify_tls:
         cfg.tls_verify = False
     config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
@@ -74,6 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--node-name", help="override node name (default: hostname)")
     p_install.add_argument("--fast-pool", help="fast ZFS pool name (default: fast)")
     p_install.add_argument("--slow-pool", help="slow ZFS pool name (default: slow)")
+    p_install.add_argument("--slow-backend", choices=["zfs", "smb"],
+                           help="cold-storage backend (default: zfs)")
+    p_install.add_argument("--slow-path",
+                           help="cold-storage mount path for smb backend (default: /mnt/cold)")
+    p_install.add_argument("--slow-shared", action="store_true",
+                           help="cold-storage SMB share is mounted on more than one node")
     p_install.add_argument("--no-verify-tls", action="store_true",
                            help="skip TLS verification (self-signed controller)")
     p_install.add_argument("--no-enable", action="store_true",

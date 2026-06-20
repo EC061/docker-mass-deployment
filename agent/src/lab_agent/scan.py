@@ -16,9 +16,10 @@ import time
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from . import coldstore
 from .config import AgentConfig
 from .executors import zfs
-from .paths import lab_fast_shared, lab_slow_shared, user_cold, user_scratch
+from .paths import lab_fast_shared, user_scratch
 
 
 @dataclass
@@ -55,14 +56,14 @@ def scan_path(path: str, threshold_days: float, *, now: float | None = None) -> 
     return r
 
 
-def _scan_dataset(dataset: str, threshold_days: float) -> ScanResult | None:
-    """Resolve a dataset's mountpoint and scan it; None if the dataset is absent."""
+def _zfs_dir(dataset: str) -> str | None:
+    """Resolve a ZFS dataset's mountpoint to an existing directory, or None if absent."""
     if not zfs.dataset_exists(dataset):
         return None
     mp = zfs.get_mountpoint(dataset)
     if not mp or mp in ("none", "legacy") or not os.path.isdir(mp):
         return None
-    return scan_path(mp, threshold_days)
+    return mp
 
 
 def scan_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
@@ -75,20 +76,22 @@ def scan_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     users = params.get("users", [])
     threshold = float(params.get("threshold_days", 30))
 
-    targets: list[tuple[str, str | None, str]] = [
-        ("lab_fast_shared", None, lab_fast_shared(cfg, lab)),
-        ("lab_slow_shared", None, lab_slow_shared(cfg, lab)),
+    # Each target resolves to a directory to walk. Fast datasets are always ZFS; cold-storage
+    # targets go through coldstore (a ZFS mountpoint, or an SMB directory).
+    targets: list[tuple[str, str | None, str | None]] = [
+        ("lab_fast_shared", None, _zfs_dir(lab_fast_shared(cfg, lab))),
+        ("lab_slow_shared", None, coldstore.shared_scan_dir(cfg, lab)),
     ]
     for u in users:
-        targets.append(("user_scratch", u, user_scratch(cfg, lab, u)))
-        targets.append(("user_cold", u, user_cold(cfg, lab, u)))
+        targets.append(("user_scratch", u, _zfs_dir(user_scratch(cfg, lab, u))))
+        targets.append(("user_cold", u, coldstore.user_scan_dir(cfg, lab, u)))
 
     results = []
-    for scope, username, dataset in targets:
-        res = _scan_dataset(dataset, threshold)
-        if res is None:
+    for scope, username, directory in targets:
+        if directory is None:
             continue
-        row = {"scope": scope, "username": username, "dataset": dataset, **asdict(res)}
+        res = scan_path(directory, threshold)
+        row = {"scope": scope, "username": username, "dataset": directory, **asdict(res)}
         results.append(row)
     summary = {"lab": lab, "threshold_days": threshold, "results": results}
     return summary, f"scanned {len(results)} datasets"

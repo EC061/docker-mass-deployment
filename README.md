@@ -7,6 +7,9 @@ A multi-node manager for ZFS-backed, GPU-equipped lab servers. A central web **c
 - Per-lab fast (NVMe) + slow ZFS quotas, **changeable live** from the web UI.
 - Per-student `~/scratch` (fast) and `~/cold-storage` (slow), added/removed with one click or by CSV.
 - Idle-GPU-process killer (warn-then-kill, with whitelist) that emails the owning student.
+- Scheduled **ZFS scrubs** on a controller-set interval; scrub errors raise an admin alert.
+- Cold (slow) storage can be a local ZFS pool **or an external SMB mount** (optionally shared
+  between nodes) — no per-node ZFS pool required for the cold tier.
 - External SMTP, WebDAV backups, GPU policy, and quota defaults — all configured in the web UI.
 - Centralized logs and log-level admin alerts.
 
@@ -98,6 +101,23 @@ sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory
 `lab-agent install` writes `/etc/lab-agent/config.toml` and a systemd unit (`lab-agent.service`) that
 starts on boot and reconnects automatically. Check readiness any time with `lab-agent doctor`.
 
+### 1.6 Cold storage on SMB instead of a `slow` ZFS pool (optional)
+
+If a node has no local bulk pool — or its cold storage is a shared NAS — point the slow tier at an
+SMB/CIFS mount instead. Mount the share first (e.g. via `/etc/fstab` or `systemd.mount`), then:
+
+```bash
+sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent \
+    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent --token AGENT_TOKEN \
+    --slow-backend smb --slow-path /mnt/cold --slow-shared
+```
+
+- `--slow-path` is where the share is mounted; labs live under `<slow-path>/labs/...`.
+- `--slow-shared` marks the share as mounted on more than one node (each node only ever touches its
+  own labs' sub-directories).
+- On SMB cold storage there are **no enforceable quotas** (slow quotas are recorded but not applied)
+  and **no scrubs** — that storage is the share owner's responsibility. The fast pool is still ZFS.
+
 ---
 
 ## 2. Deploy the controller
@@ -134,13 +154,16 @@ open **Settings** and configure:
 - **WebDAV backup** — URL/credentials, retention, and backup interval.
 - **GPU idle policy** — enable, thresholds, grace, whitelist; *Save & push to nodes*.
 - **Storage & ports** — default fast/slow quotas, SSH port range, old-file threshold.
+- **ZFS scrub** — enable scheduled scrubs and set the interval (days); *Scrub now* runs one
+  immediately. Only ZFS-capable nodes are scrubbed; SMB cold storage is skipped.
 - **Alerts & logs** — alert level (WARN/ERROR), dedup window, quota alert %, log retention.
 
 ---
 
 ## 3. Day-to-day use
 
-- **Nodes** — see which servers are online, their GPUs, pools, and any host-prep issues.
+- **Nodes** — see which servers are online, their GPUs, pools, cold-storage backend (ZFS or SMB),
+  latest scrub status, and any host-prep issues.
 - **Labs** — create a lab (pick its node, fast/slow quota, base image, and container options). Container
   options (CPU/RAM/shared-memory/image-size quota/restart) are **set once at creation**; changing them
   needs *Recreate container* (data is preserved). All GPUs are always attached. Quotas are editable

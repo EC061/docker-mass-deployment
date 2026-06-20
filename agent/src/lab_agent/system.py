@@ -22,6 +22,8 @@ class Capabilities:
     gpu_count: int
     fast_pool_present: bool
     slow_pool_present: bool
+    slow_backend: str  # "zfs" or "smb"
+    slow_shared: bool  # cold storage shared between nodes (smb only)
     issues: list[str]
 
     def to_dict(self) -> dict:
@@ -30,6 +32,12 @@ class Capabilities:
 
 def _pool_exists(pool: str) -> bool:
     return run(["zpool", "list", "-H", "-o", "name", pool], timeout=15).ok
+
+
+def _is_mountpoint(path: str) -> bool:
+    import os
+
+    return os.path.ismount(path)
 
 
 def _docker_storage_driver() -> str:
@@ -69,11 +77,18 @@ def detect_capabilities(cfg: AgentConfig) -> Capabilities:
     gpus = _gpu_count()
 
     fast_ok = _pool_exists(cfg.fast_pool) if zfs_ok else False
-    slow_ok = _pool_exists(cfg.slow_pool) if zfs_ok else False
     if zfs_ok and not fast_ok:
         issues.append(f"fast pool '{cfg.fast_pool}' not found")
-    if zfs_ok and not slow_ok:
-        issues.append(f"slow pool '{cfg.slow_pool}' not found")
+
+    # Cold storage: a local ZFS pool, or an externally-managed SMB/CIFS mount.
+    if cfg.slow_is_zfs:
+        slow_ok = _pool_exists(cfg.slow_pool) if zfs_ok else False
+        if zfs_ok and not slow_ok:
+            issues.append(f"slow pool '{cfg.slow_pool}' not found")
+    else:
+        slow_ok = _is_mountpoint(cfg.slow_path)
+        if not slow_ok:
+            issues.append(f"cold-storage SMB mount '{cfg.slow_path}' is not mounted")
 
     return Capabilities(
         zfs=zfs_ok,
@@ -84,5 +99,7 @@ def detect_capabilities(cfg: AgentConfig) -> Capabilities:
         gpu_count=gpus,
         fast_pool_present=fast_ok,
         slow_pool_present=slow_ok,
+        slow_backend=cfg.slow_backend,
+        slow_shared=cfg.slow_shared,
         issues=issues,
     )

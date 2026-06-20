@@ -44,6 +44,10 @@ export interface Settings {
   webdavPass: string;
   webdavRetention: number; // keep this many timestamped backups
   backupIntervalHours: number; // 0 disables scheduled backups
+  // Scheduled ZFS scrub. The controller enqueues node.scrub to each ZFS-capable node when due;
+  // the agent reports scrub status/errors back via heartbeat telemetry.
+  scrubEnabled: boolean;
+  scrubIntervalDays: number; // scrub each node at most this often
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -76,6 +80,8 @@ export const DEFAULT_SETTINGS: Settings = {
   webdavPass: "",
   webdavRetention: 7,
   backupIntervalHours: 24,
+  scrubEnabled: false,
+  scrubIntervalDays: 30,
 };
 
 export function isWebdavConfigured(): boolean {

@@ -109,3 +109,77 @@ def destroy_dataset(name: str, *, recursive: bool = True) -> None:
         args.append("-r")
     args.append(name)
     _checked(run(args, timeout=120))
+
+
+# --------------------------------------------------------------------------- scrub / health
+
+
+@dataclass
+class ScrubStatus:
+    pool: str
+    state: str  # pool health state, e.g. ONLINE / DEGRADED / UNAVAIL / unknown
+    healthy: bool  # state ONLINE and no data errors
+    scrubbing: bool  # a scrub is currently in progress
+    errors: int  # data-error count (0 = none; -1 = errors present, count unknown)
+    last_scrub: str | None  # human text from the `scan:` line
+    detail: str  # combined scan/errors text for the controller log
+
+    def to_dict(self) -> dict:
+        return {
+            "pool": self.pool,
+            "state": self.state,
+            "healthy": self.healthy,
+            "scrubbing": self.scrubbing,
+            "errors": self.errors,
+            "last_scrub": self.last_scrub,
+            "detail": self.detail,
+        }
+
+
+def start_scrub(pool: str) -> bool:
+    """Kick off a scrub. Returns True if started (or one was already running)."""
+    res = run(["zpool", "scrub", pool], timeout=30)
+    if res.ok:
+        return True
+    # `zpool scrub` errors when a scrub is already in progress — that's not a failure for us.
+    if "in progress" in (res.stderr + res.stdout).lower():
+        return True
+    raise ZfsError(res.logs)
+
+
+def _parse_errors(line: str) -> int:
+    """Parse the `errors:` line of `zpool status` into a count (0, a number, or -1=unknown)."""
+    text = line.split("errors:", 1)[-1].strip().lower()
+    if text.startswith("no known data errors"):
+        return 0
+    for tok in text.split():
+        if tok.isdigit():
+            return int(tok)
+    return -1  # errors present but we couldn't parse a count
+
+
+def parse_scrub_status(pool: str, status_text: str) -> ScrubStatus:
+    """Parse `zpool status <pool>` output. Pure function so it is easy to unit-test."""
+    state = "unknown"
+    errors = 0
+    scrubbing = False
+    last_scrub: str | None = None
+    for raw in status_text.splitlines():
+        line = raw.strip()
+        if line.startswith("state:"):
+            state = line.split("state:", 1)[1].strip()
+        elif line.startswith("scan:"):
+            last_scrub = line.split("scan:", 1)[1].strip()
+            scrubbing = "scrub in progress" in last_scrub.lower()
+        elif line.startswith("errors:"):
+            errors = _parse_errors(line)
+    healthy = state.upper() == "ONLINE" and errors == 0
+    detail = f"state={state}; scan={last_scrub or 'n/a'}; errors={errors}"
+    return ScrubStatus(pool, state, healthy, scrubbing, errors, last_scrub, detail)
+
+
+def scrub_status(pool: str) -> ScrubStatus:
+    res = run(["zpool", "status", pool], timeout=30)
+    if not res.ok:
+        return ScrubStatus(pool, "unknown", False, False, -1, None, res.logs)
+    return parse_scrub_status(pool, res.stdout)

@@ -190,6 +190,13 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     );
     `,
   },
+  {
+    id: "0002_scrub",
+    sql: `
+    ALTER TABLE nodes ADD COLUMN last_scrub INTEGER;      -- last time a scrub was scheduled
+    ALTER TABLE nodes ADD COLUMN scrub_status TEXT;       -- JSON: latest per-pool scrub status
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

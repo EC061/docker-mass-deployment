@@ -7,6 +7,7 @@
  * (the `shared` and intermediate `users` datasets are ignored for sampling).
  */
 
+import { alertAdmins } from "./alerts";
 import { db } from "./db";
 import { fmtBytes } from "./format";
 import { sendQuotaEmail } from "./mailer";
@@ -74,6 +75,9 @@ export function ingestTelemetry(node: string, payload: any): void {
     .prepare("UPDATE nodes SET pools = ?, last_seen = ? WHERE name = ?")
     .run(JSON.stringify(payload.pools ?? []), now, node);
 
+  // ZFS scrub status: store the latest, alert admins when a pool newly reports errors.
+  ingestScrub(node, payload.scrub, now);
+
   // Per-dataset storage samples (throttled).
   const insertSample = db().prepare(
     `INSERT INTO storage_samples (lab_id, student_id, pool, used_bytes, quota_bytes, ts)
@@ -106,6 +110,53 @@ export function ingestTelemetry(node: string, payload: any): void {
     }
   });
   tx();
+}
+
+interface ScrubEntry {
+  pool: string;
+  state?: string;
+  healthy?: boolean;
+  scrubbing?: boolean;
+  errors?: number;
+  last_scrub?: string | null;
+  detail?: string;
+}
+
+function isBadScrub(p: ScrubEntry): boolean {
+  return p.healthy === false || (typeof p.errors === "number" && p.errors !== 0);
+}
+
+/** Persist the latest scrub status; log + alert when a pool transitions into an error state. */
+function ingestScrub(node: string, scrub: unknown, now: number): void {
+  if (!Array.isArray(scrub)) return;
+  const entries = scrub as ScrubEntry[];
+
+  const prevRow = db().prepare("SELECT scrub_status FROM nodes WHERE name = ?").get(node) as
+    | { scrub_status: string | null }
+    | undefined;
+  let prev: ScrubEntry[] = [];
+  try {
+    prev = prevRow?.scrub_status ? (JSON.parse(prevRow.scrub_status) as ScrubEntry[]) : [];
+  } catch {
+    prev = [];
+  }
+  const prevBad = new Set(prev.filter(isBadScrub).map((p) => p.pool));
+
+  db().prepare("UPDATE nodes SET scrub_status = ? WHERE name = ?").run(JSON.stringify(entries), node);
+
+  for (const p of entries) {
+    if (!isBadScrub(p) || prevBad.has(p.pool)) continue;
+    // Newly unhealthy -> one ERROR log (shows on the Logs page) + a deduped admin alert.
+    const msg = `ZFS scrub on ${node}: pool '${p.pool}' reports errors`;
+    const detail =
+      p.detail ?? `state=${p.state ?? "?"}; errors=${p.errors ?? "?"}; scan=${p.last_scrub ?? "n/a"}`;
+    db()
+      .prepare(
+        `INSERT INTO logs (ts, node, level, source, msg, detail) VALUES (?, ?, 'ERROR', 'scrub', ?, ?)`,
+      )
+      .run(now, node, msg, detail);
+    void alertAdmins(`scrub:${node}:${p.pool}`, `ZFS scrub errors on ${node}`, `${msg}\n\n${detail}`);
+  }
 }
 
 function maybeQuotaAlert(labId: number, pool: string, used: number, quota: number, now: number): void {

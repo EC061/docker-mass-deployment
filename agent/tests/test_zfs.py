@@ -86,3 +86,79 @@ def test_destroy_skips_when_absent(runner):
     runner.responses["zfs list -H -o name fast/labs/gone"] = CommandResult(False, [], 1, "", "missing")
     zfs.destroy_dataset("fast/labs/gone")
     assert not any(c[:2] == ["zfs", "destroy"] for c in runner.calls)
+
+
+# --- scrub ----------------------------------------------------------------------------------
+
+CLEAN_STATUS = """  pool: fast
+ state: ONLINE
+  scan: scrub repaired 0B in 00:12:34 with 0 errors on Sun Jun  1 03:12:00 2026
+config:
+\tNAME        STATE     READ WRITE CKSUM
+\tfast        ONLINE       0     0     0
+
+errors: No known data errors
+"""
+
+ERROR_STATUS = """  pool: slow
+ state: DEGRADED
+  scan: scrub repaired 0B in 01:02:03 with 7 errors on Sun Jun  1 03:12:00 2026
+config:
+\tNAME        STATE     READ WRITE CKSUM
+\tslow        DEGRADED     0     0    12
+
+errors: 7 data errors, use '-v' for a list
+"""
+
+SCRUBBING_STATUS = """  pool: fast
+ state: ONLINE
+  scan: scrub in progress since Sun Jun  1 03:00:00 2026
+errors: No known data errors
+"""
+
+
+def test_parse_scrub_status_clean():
+    st = zfs.parse_scrub_status("fast", CLEAN_STATUS)
+    assert st.state == "ONLINE"
+    assert st.healthy is True
+    assert st.scrubbing is False
+    assert st.errors == 0
+    assert "0 errors" in (st.last_scrub or "")
+
+
+def test_parse_scrub_status_errors():
+    st = zfs.parse_scrub_status("slow", ERROR_STATUS)
+    assert st.healthy is False
+    assert st.errors == 7
+    assert st.state == "DEGRADED"
+
+
+def test_parse_scrub_status_in_progress():
+    st = zfs.parse_scrub_status("fast", SCRUBBING_STATUS)
+    assert st.scrubbing is True
+    assert st.healthy is True
+
+
+def test_start_scrub_runs_command(runner):
+    assert zfs.start_scrub("fast") is True
+    assert ["zpool", "scrub", "fast"] in runner.calls
+
+
+def test_start_scrub_tolerates_already_running(runner):
+    runner.responses["zpool scrub fast"] = CommandResult(
+        False, [], 1, "", "currently scrubbing; use 'zpool scrub -s' to cancel scrub in progress"
+    )
+    assert zfs.start_scrub("fast") is True
+
+
+def test_start_scrub_raises_on_real_failure(runner):
+    runner.responses["zpool scrub bad"] = CommandResult(False, [], 1, "", "no such pool 'bad'")
+    with pytest.raises(zfs.ZfsError):
+        zfs.start_scrub("bad")
+
+
+def test_scrub_status_reports_unknown_on_failure(runner):
+    runner.responses["zpool status gone"] = CommandResult(False, [], 1, "", "no such pool")
+    st = zfs.scrub_status("gone")
+    assert st.healthy is False
+    assert st.errors == -1

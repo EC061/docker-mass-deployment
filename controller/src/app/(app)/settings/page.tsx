@@ -5,9 +5,11 @@ import {
   restoreAction,
   saveAlertSettingsAction,
   saveGpuPolicyAction,
+  saveScrubSettingsAction,
   saveSmtpSettingsAction,
   saveStorageSettingsAction,
   saveWebdavSettingsAction,
+  scrubNowAction,
   testEmailAction,
 } from "./actions";
 
@@ -16,7 +18,7 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: { smtp?: string; backup?: string };
+  searchParams: { smtp?: string; backup?: string; scrub?: string };
 }) {
   const s = getSettings();
   let backups: string[] = [];
@@ -182,6 +184,35 @@ export default async function SettingsPage({
               Save alerts
             </button>
           </div>
+        </form>
+      </div>
+
+      <div className="card">
+        <h3 style={{ marginTop: 0 }}>ZFS scrub</h3>
+        {searchParams.scrub && <p style={{ color: "var(--accent)" }}>{searchParams.scrub}</p>}
+        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          Scrubs run on ZFS-capable nodes. Cold storage on an SMB mount is the share owner&apos;s
+          responsibility and is never scrubbed. Errors found during a scrub raise an admin alert.
+        </p>
+        <form action={saveScrubSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" name="scrubEnabled" defaultChecked={s.scrubEnabled} style={{ width: "auto" }} />
+            <label style={{ margin: 0 }}>Enable scheduled scrubs</label>
+          </div>
+          <div>
+            <label>Scrub every (days)</label>
+            <input name="scrubIntervalDays" type="number" defaultValue={s.scrubIntervalDays} />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <button type="submit" style={{ width: 140 }}>
+              Save scrub
+            </button>
+          </div>
+        </form>
+        <form action={scrubNowAction} style={{ marginTop: 12 }}>
+          <button type="submit" style={{ width: 140, marginTop: 0, background: "var(--panel-2)" }}>
+            Scrub now
+          </button>
         </form>
       </div>
 
