@@ -8,8 +8,12 @@
  */
 
 import { db } from "./db";
+import { fmtBytes } from "./format";
+import { sendQuotaEmail } from "./mailer";
+import { getSetting } from "./settings";
 
 const STORAGE_SAMPLE_MIN_INTERVAL_MS = 5 * 60 * 1000;
+const QUOTA_ALERT_DEDUP_MS = 6 * 60 * 60 * 1000; // re-alert a PI about the same pool at most every 6h
 
 interface ParsedDataset {
   lab: string;
@@ -84,6 +88,9 @@ export function ingestTelemetry(node: string, payload: any): void {
     if (parsed.level === "user" && studentId === null) continue;
     if (!shouldSample(labId, studentId, ds.pool, now)) continue;
     insertSample.run(labId, studentId, ds.pool, ds.used_bytes, ds.quota_bytes ?? null, now);
+    if (parsed.level === "lab" && ds.quota_bytes) {
+      maybeQuotaAlert(labId, ds.pool, ds.used_bytes, ds.quota_bytes, now);
+    }
   }
 
   // GPU snapshot: replace this node's rows with the current process list.
@@ -99,6 +106,48 @@ export function ingestTelemetry(node: string, payload: any): void {
     }
   });
   tx();
+}
+
+function maybeQuotaAlert(labId: number, pool: string, used: number, quota: number, now: number): void {
+  const pct = Math.round((used / quota) * 100);
+  if (pct < getSetting("quotaAlertPct")) return;
+
+  const recent = db()
+    .prepare("SELECT ts FROM quota_alerts WHERE lab_id = ? AND pool = ? ORDER BY ts DESC LIMIT 1")
+    .get(labId, pool) as { ts: number } | undefined;
+  if (recent && now - recent.ts < QUOTA_ALERT_DEDUP_MS) return;
+
+  const lab = db().prepare("SELECT name, pi_email FROM labs WHERE id = ?").get(labId) as
+    | { name: string; pi_email: string | null }
+    | undefined;
+  if (!lab) return;
+
+  db().prepare("INSERT INTO quota_alerts (lab_id, pool, pct, ts) VALUES (?, ?, ?, ?)").run(labId, pool, pct, now);
+  if (!lab.pi_email) return;
+
+  // Latest per-student usage on this pool for the breakdown.
+  const breakdown = (db()
+    .prepare(
+      `SELECT students.username AS username, s.used_bytes AS used
+       FROM storage_samples s JOIN students ON students.id = s.student_id
+       WHERE s.lab_id = ? AND s.pool = ? AND s.student_id IS NOT NULL
+         AND s.ts = (SELECT MAX(ts) FROM storage_samples s2 WHERE s2.student_id = s.student_id AND s2.pool = s.pool)
+       GROUP BY students.id ORDER BY used DESC`,
+    )
+    .all(labId, pool) as { username: string; used: number }[]).map((b) => ({
+    username: b.username,
+    usedHuman: fmtBytes(b.used),
+  }));
+
+  void sendQuotaEmail({
+    to: lab.pi_email,
+    lab: lab.name,
+    pool,
+    pct,
+    usedHuman: fmtBytes(used),
+    quotaHuman: fmtBytes(quota),
+    breakdown,
+  });
 }
 
 export function storeOldfileScan(result: any): void {
