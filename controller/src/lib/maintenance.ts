@@ -3,6 +3,7 @@
  * doesn't grow without bound. Storage samples are kept for the growth charts.
  */
 
+import { backupAll } from "./backup";
 import { db } from "./db";
 import { getSetting } from "./settings";
 
@@ -14,8 +15,17 @@ export function pruneOldData(): { logs: number; gpuEvents: number } {
   return { logs, gpuEvents };
 }
 
-/** Start a daily prune timer. Returns the timer so callers can clear it if needed. */
+/** Start daily prune + an hourly backup ticker that fires when the configured interval elapses. */
 export function startMaintenance(): NodeJS.Timeout {
   pruneOldData();
-  return setInterval(pruneOldData, 24 * 60 * 60 * 1000);
+  let lastBackup = 0;
+  const tick = () => {
+    pruneOldData();
+    const intervalHours = getSetting("backupIntervalHours");
+    if (intervalHours > 0 && Date.now() - lastBackup >= intervalHours * 3600 * 1000) {
+      lastBackup = Date.now();
+      void backupAll();
+    }
+  };
+  return setInterval(tick, 60 * 60 * 1000);
 }

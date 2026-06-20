@@ -58,6 +58,32 @@ export async function saveGpuPolicyAction(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveWebdavSettingsAction(formData: FormData) {
+  setSetting("webdavUrl", String(formData.get("webdavUrl") ?? "").trim());
+  setSetting("webdavUser", String(formData.get("webdavUser") ?? "").trim());
+  const pass = String(formData.get("webdavPass") ?? "");
+  if (pass) setSetting("webdavPass", pass);
+  setSetting("webdavRetention", Number(formData.get("webdavRetention")) || 7);
+  setSetting("backupIntervalHours", Number(formData.get("backupIntervalHours")) || 0);
+  revalidatePath("/settings");
+}
+
+export async function backupNowAction() {
+  const { backupAll } = await import("@/lib/backup");
+  const res = await backupAll();
+  redirect(`/settings?backup=${encodeURIComponent(res.ok ? `Backed up ${res.name}` : `Failed: ${res.error}`)}`);
+}
+
+export async function restoreAction(formData: FormData) {
+  const name = String(formData.get("name") ?? "");
+  const { stageRestore } = await import("@/lib/backup");
+  const res = await stageRestore(name);
+  const msg = res.ok
+    ? "Restore staged — restart the controller to apply it"
+    : `Failed: ${res.error}`;
+  redirect(`/settings?backup=${encodeURIComponent(msg)}`);
+}
+
 export async function testEmailAction(formData: FormData) {
   const to = String(formData.get("to") ?? "").trim();
   const res = await sendTestEmail(to);

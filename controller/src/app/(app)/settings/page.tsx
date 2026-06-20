@@ -1,16 +1,32 @@
-import { getSettings, TIB } from "@/lib/settings";
+import { listBackups } from "@/lib/backup";
+import { getSettings, isWebdavConfigured, TIB } from "@/lib/settings";
 import {
+  backupNowAction,
+  restoreAction,
   saveAlertSettingsAction,
   saveGpuPolicyAction,
   saveSmtpSettingsAction,
   saveStorageSettingsAction,
+  saveWebdavSettingsAction,
   testEmailAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export default function SettingsPage({ searchParams }: { searchParams: { smtp?: string } }) {
+export default async function SettingsPage({
+  searchParams,
+}: {
+  searchParams: { smtp?: string; backup?: string };
+}) {
   const s = getSettings();
+  let backups: string[] = [];
+  if (isWebdavConfigured()) {
+    try {
+      backups = await listBackups();
+    } catch {
+      backups = [];
+    }
+  }
   return (
     <>
       <h2>Settings</h2>
@@ -170,7 +186,71 @@ export default function SettingsPage({ searchParams }: { searchParams: { smtp?: 
       </div>
 
       <div className="card">
-        <p className="muted">WebDAV backup is added in the next phase.</p>
+        <h3 style={{ marginTop: 0 }}>WebDAV backup</h3>
+        {searchParams.backup && <p style={{ color: "var(--accent)" }}>{searchParams.backup}</p>}
+        <form action={saveWebdavSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label>WebDAV base URL</label>
+            <input name="webdavUrl" defaultValue={s.webdavUrl} placeholder="https://dav.example.com/labmgr" />
+          </div>
+          <div>
+            <label>Username</label>
+            <input name="webdavUser" defaultValue={s.webdavUser} />
+          </div>
+          <div>
+            <label>Password</label>
+            <input name="webdavPass" type="password" placeholder={s.webdavPass ? "•••••• (unchanged)" : ""} />
+          </div>
+          <div>
+            <label>Keep last N backups</label>
+            <input name="webdavRetention" type="number" defaultValue={s.webdavRetention} />
+          </div>
+          <div>
+            <label>Backup every (hours, 0=off)</label>
+            <input name="backupIntervalHours" type="number" defaultValue={s.backupIntervalHours} />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <button type="submit" style={{ width: 140 }}>
+              Save WebDAV
+            </button>
+          </div>
+        </form>
+        <form action={backupNowAction} style={{ marginTop: 12 }}>
+          <button type="submit" style={{ width: 140, marginTop: 0, background: "var(--panel-2)" }}>
+            Back up now
+          </button>
+        </form>
+        {backups.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <h4 style={{ margin: "0 0 6px" }}>Restore</h4>
+            <table>
+              <thead>
+                <tr>
+                  <th>Backup</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {backups.map((b) => (
+                  <tr key={b}>
+                    <td>{b}</td>
+                    <td style={{ textAlign: "right" }}>
+                      <form action={restoreAction}>
+                        <input type="hidden" name="name" value={b} />
+                        <button type="submit" style={{ width: "auto", marginTop: 0, padding: "6px 10px", background: "var(--panel-2)" }}>
+                          Stage restore
+                        </button>
+                      </form>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <p className="muted" style={{ fontSize: 12 }}>
+              Staging a restore takes effect after the controller restarts.
+            </p>
+          </div>
+        )}
       </div>
     </>
   );

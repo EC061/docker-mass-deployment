@@ -29,6 +29,7 @@ A_STUDENT_REMOVE = "student.remove"
 A_CONTAINER_RECREATE = "container.recreate"
 A_GPU_POLICY_UPDATE = "gpu.policy.update"
 A_NODE_REPORT_STATE = "node.report_state"
+A_NODE_BACKUP = "node.backup"
 A_OLDFILES_SCAN = "oldfiles.scan"
 
 

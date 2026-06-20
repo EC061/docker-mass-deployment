@@ -6,15 +6,28 @@
  */
 
 import Database from "better-sqlite3";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 import { env } from "./env";
+
+/** If a WebDAV restore was staged as <dbPath>.restore, swap it in before opening. */
+function applyStagedRestore(dbPath: string): void {
+  const staged = `${dbPath}.restore`;
+  if (!existsSync(staged)) return;
+  for (const suffix of ["-wal", "-shm"]) {
+    const f = `${dbPath}${suffix}`;
+    if (existsSync(f)) rmSync(f);
+  }
+  renameSync(staged, dbPath);
+}
 
 let _db: Database.Database | null = null;
 
 export function db(): Database.Database {
   if (_db) return _db;
   mkdirSync(dirname(env.dbPath), { recursive: true });
+  // If a WebDAV restore was staged, swap it in before opening the DB.
+  applyStagedRestore(env.dbPath);
   const conn = new Database(env.dbPath);
   conn.pragma("journal_mode = WAL");
   conn.pragma("foreign_keys = ON");
