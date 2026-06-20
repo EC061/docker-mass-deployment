@@ -50,12 +50,14 @@ class Agent:
 
     # ------------------------------------------------------------------ runtime
     async def run(self) -> None:
-        """Run forever: persistent task worker + reconnecting connection loop."""
+        """Run forever: persistent task worker + GPU killer + reconnecting connection loop."""
         worker = asyncio.create_task(self._task_worker(), name="task-worker")
+        gpu = asyncio.create_task(self._gpu_loop(), name="gpu-killer")
         try:
             await self._connection_loop()
         finally:
             worker.cancel()
+            gpu.cancel()
             self.localq.close()
 
     async def _connection_loop(self) -> None:
@@ -140,6 +142,44 @@ class Agent:
                 # Send failed (likely disconnect) -> return to queue, stop draining.
                 await asyncio.to_thread(job.retry, 1, "send failed")
                 raise
+
+    async def _gpu_loop(self) -> None:
+        """Persistent idle-GPU governor. Emits warn/kill events even while disconnected."""
+        import time
+
+        from .gpu import monitor
+        from .gpu.killer import GpuKiller
+        from .gpu.policy import get_policy
+
+        killer = GpuKiller()
+        while True:
+            policy = get_policy()
+            interval = max(5, policy.interval_s)
+            if not policy.enabled:
+                await asyncio.sleep(interval)
+                continue
+            try:
+                procs = await asyncio.to_thread(monitor.list_gpu_processes)
+                decisions = killer.evaluate(procs, policy, time.time())
+                for d in decisions:
+                    payload = {
+                        "pid": d.pid,
+                        "user": d.user,
+                        "lab": d.lab,
+                        "vram_bytes": d.proc.get("vram_bytes"),
+                        "state": "killed" if d.action == "kill" else "warned",
+                    }
+                    if d.action == "kill":
+                        await asyncio.to_thread(monitor.kill_pid, d.pid)
+                        self.log.warn("gpu", f"killed idle GPU pid {d.pid} (user={d.user})",
+                                      lab=d.lab, user=d.user)
+                    else:
+                        self.log.warn("gpu", f"warned idle GPU pid {d.pid} (user={d.user})",
+                                      lab=d.lab, user=d.user)
+                    self.log.event("gpu", payload)
+            except Exception as exc:  # never let the governor die
+                self.log.error("gpu", f"gpu killer error: {exc}")
+            await asyncio.sleep(interval)
 
     async def _heartbeat(self, ws) -> None:
         """Periodically emit a telemetry frame. Payload is filled in by phase 2 (telemetry)."""

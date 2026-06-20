@@ -32,6 +32,7 @@ class Dispatcher:
 
     def _register_builtin(self) -> None:
         from . import containerops, labops, scan, studentops
+        from .gpu import policy as gpu_policy
 
         self.register(P.A_NODE_REPORT_STATE, self._report_state)
         self.register(P.A_LAB_CREATE, labops.create_lab)
@@ -40,6 +41,7 @@ class Dispatcher:
         self.register(P.A_CONTAINER_RECREATE, containerops.recreate_container)
         self.register(P.A_STUDENT_ADD, studentops.add_student)
         self.register(P.A_STUDENT_REMOVE, studentops.remove_student)
+        self.register(P.A_GPU_POLICY_UPDATE, gpu_policy.update_policy_handler)
         self.register(P.A_OLDFILES_SCAN, scan.scan_lab)
 
     def _report_state(self, cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:

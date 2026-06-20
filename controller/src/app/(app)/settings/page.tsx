@@ -1,5 +1,10 @@
 import { getSettings, TIB } from "@/lib/settings";
-import { saveSmtpSettingsAction, saveStorageSettingsAction, testEmailAction } from "./actions";
+import {
+  saveGpuPolicyAction,
+  saveSmtpSettingsAction,
+  saveStorageSettingsAction,
+  testEmailAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -90,7 +95,47 @@ export default function SettingsPage({ searchParams }: { searchParams: { smtp?: 
       </div>
 
       <div className="card">
-        <p className="muted">WebDAV backup, GPU idle policy, and the log-level alert threshold are added in later phases.</p>
+        <h3 style={{ marginTop: 0 }}>GPU idle policy</h3>
+        <form action={saveGpuPolicyAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" name="gpuEnabled" defaultChecked={s.gpuEnabled} style={{ width: "auto" }} />
+            <label style={{ margin: 0 }}>Enable idle killer</label>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" name="gpuImmediate" defaultChecked={s.gpuImmediate} style={{ width: "auto" }} />
+            <label style={{ margin: 0 }}>Kill immediately (no grace)</label>
+          </div>
+          <div>
+            <label>Idle util threshold (%)</label>
+            <input name="gpuUtilThreshold" type="number" defaultValue={s.gpuUtilThreshold} />
+          </div>
+          <div>
+            <label>Idle minutes before warning</label>
+            <input name="gpuIdleMinutes" type="number" defaultValue={s.gpuIdleMinutes} />
+          </div>
+          <div>
+            <label>Grace minutes before kill</label>
+            <input name="gpuGraceMinutes" type="number" defaultValue={s.gpuGraceMinutes} />
+          </div>
+          <div></div>
+          <div>
+            <label>Whitelist users (comma-sep)</label>
+            <input name="gpuWhitelistUsers" defaultValue={s.gpuWhitelistUsers} placeholder="alice,bob" />
+          </div>
+          <div>
+            <label>Whitelist labs (comma-sep)</label>
+            <input name="gpuWhitelistLabs" defaultValue={s.gpuWhitelistLabs} placeholder="bio,chem" />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <button type="submit" style={{ width: 200 }}>
+              Save & push to nodes
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="card">
+        <p className="muted">WebDAV backup and the log-level alert threshold are added in later phases.</p>
       </div>
     </>
   );

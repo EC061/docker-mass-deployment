@@ -16,6 +16,7 @@ const NAV = [
   ["/nodes", "Nodes"],
   ["/labs", "Labs"],
   ["/students", "Students"],
+  ["/gpu", "GPU"],
   ["/logs", "Logs"],
   ["/settings", "Settings"],
 ];

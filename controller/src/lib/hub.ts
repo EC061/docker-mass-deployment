@@ -15,6 +15,7 @@ import { db } from "./db";
 import { env } from "./env";
 import { ingestTelemetry, storeOldfileScan } from "./ingest";
 import { ackTask, claimTask, markTaskState, retryTask } from "./queue";
+import { getSetting } from "./settings";
 
 interface NodeConn {
   ws: WebSocket;
@@ -185,6 +186,25 @@ function handleEvent(node: string, frame: any): void {
          VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(node, p.pid ?? null, p.user ?? null, p.lab ?? null, p.vram_bytes ?? null, p.state ?? "idle", frame.ts ?? Date.now());
+    void emailGpuEvent(p);
+  }
+}
+
+async function emailGpuEvent(p: any): Promise<void> {
+  if (!p.user || (p.state !== "warned" && p.state !== "killed")) return;
+  const row = db().prepare("SELECT email FROM students WHERE username = ?").get(p.user) as
+    | { email: string | null }
+    | undefined;
+  if (!row?.email) return;
+  const { sendGpuKillEmail, sendGpuWarningEmail } = await import("./mailer");
+  if (p.state === "warned") {
+    await sendGpuWarningEmail(row.email, {
+      lab: p.lab ?? null,
+      pid: p.pid,
+      graceMinutes: getSetting("gpuGraceMinutes"),
+    });
+  } else {
+    await sendGpuKillEmail(row.email, { lab: p.lab ?? null, pid: p.pid });
   }
 }
 

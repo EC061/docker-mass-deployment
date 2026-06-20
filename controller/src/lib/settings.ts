@@ -5,6 +5,7 @@
  */
 
 import { db } from "./db";
+import { enqueueTask } from "./queue";
 
 export const TIB = 1024 ** 4;
 
@@ -23,6 +24,14 @@ export interface Settings {
   smtpSecure: boolean; // true = implicit TLS (465); false = STARTTLS/none
   // Optional public hostname students SSH to (falls back to the node name).
   sshHostOverride: string;
+  // GPU idle-kill policy (broadcast to agents as gpu.policy.update).
+  gpuEnabled: boolean;
+  gpuUtilThreshold: number;
+  gpuIdleMinutes: number;
+  gpuGraceMinutes: number;
+  gpuImmediate: boolean;
+  gpuWhitelistUsers: string; // comma-separated
+  gpuWhitelistLabs: string; // comma-separated
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -38,7 +47,35 @@ export const DEFAULT_SETTINGS: Settings = {
   smtpFrom: "",
   smtpSecure: false,
   sshHostOverride: "",
+  gpuEnabled: false,
+  gpuUtilThreshold: 5,
+  gpuIdleMinutes: 20,
+  gpuGraceMinutes: 10,
+  gpuImmediate: false,
+  gpuWhitelistUsers: "",
+  gpuWhitelistLabs: "",
 };
+
+/** The GPU policy payload broadcast to agents (gpu.policy.update). */
+export function gpuPolicyPayload(): Record<string, unknown> {
+  const csv = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
+  return {
+    enabled: getSetting("gpuEnabled"),
+    util_threshold: getSetting("gpuUtilThreshold"),
+    idle_minutes: getSetting("gpuIdleMinutes"),
+    grace_minutes: getSetting("gpuGraceMinutes"),
+    immediate: getSetting("gpuImmediate"),
+    whitelist_users: csv(getSetting("gpuWhitelistUsers")),
+    whitelist_labs: csv(getSetting("gpuWhitelistLabs")),
+  };
+}
+
+/** Enqueue the current GPU policy to every known node. */
+export function broadcastGpuPolicy(actor?: string): void {
+  const payload = gpuPolicyPayload();
+  const nodes = db().prepare("SELECT name FROM nodes").all() as { name: string }[];
+  for (const n of nodes) enqueueTask(n.name, "gpu.policy.update", payload, actor);
+}
 
 export function isSmtpConfigured(): boolean {
   return getSetting("smtpHost").trim() !== "" && getSetting("smtpFrom").trim() !== "";
