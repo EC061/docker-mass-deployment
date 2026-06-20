@@ -63,7 +63,7 @@ export async function issueSession(admin: Admin): Promise<string> {
 
 export async function setSessionCookie(admin: Admin): Promise<void> {
   const token = await issueSession(admin);
-  cookies().set(COOKIE, token, {
+  (await cookies()).set(COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
     secure: env.isProd,
@@ -72,12 +72,12 @@ export async function setSessionCookie(admin: Admin): Promise<void> {
   });
 }
 
-export function clearSessionCookie(): void {
-  cookies().delete(COOKIE);
+export async function clearSessionCookie(): Promise<void> {
+  (await cookies()).delete(COOKIE);
 }
 
 export async function currentAdmin(): Promise<SessionClaims | null> {
-  const token = cookies().get(COOKIE)?.value;
+  const token = (await cookies()).get(COOKIE)?.value;
   if (!token) return null;
   try {
     const { payload } = await jwtVerify(token, secretKey());

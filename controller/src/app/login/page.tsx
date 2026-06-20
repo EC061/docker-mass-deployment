@@ -13,7 +13,8 @@ async function login(formData: FormData) {
   redirect("/dashboard");
 }
 
-export default function LoginPage({ searchParams }: { searchParams: { error?: string } }) {
+export default async function LoginPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  const { error } = await searchParams;
   const noAdmins = adminCount() === 0;
   return (
     <div className="auth-wrap">
@@ -31,7 +32,7 @@ export default function LoginPage({ searchParams }: { searchParams: { error?: st
           <input id="password" name="password" type="password" required />
           <button type="submit">Sign in</button>
         </form>
-        {searchParams.error && <p className="error">{searchParams.error}</p>}
+        {error && <p className="error">{error}</p>}
         <p className="muted" style={{ marginTop: 16 }}>
           <a href="/signup">Register a new admin</a>
         </p>

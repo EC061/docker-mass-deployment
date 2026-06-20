@@ -18,8 +18,9 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: { smtp?: string; backup?: string; scrub?: string };
+  searchParams: Promise<{ smtp?: string; backup?: string; scrub?: string }>;
 }) {
+  const { smtp, backup, scrub } = await searchParams;
   const s = getSettings();
   let backups: string[] = [];
   if (isWebdavConfigured()) {
@@ -66,7 +67,7 @@ export default async function SettingsPage({
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Email (external SMTP)</h3>
-        {searchParams.smtp && <p style={{ color: "var(--accent)" }}>{searchParams.smtp}</p>}
+        {smtp && <p style={{ color: "var(--accent)" }}>{smtp}</p>}
         <form action={saveSmtpSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
           <div>
             <label>SMTP host</label>
@@ -189,7 +190,7 @@ export default async function SettingsPage({
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>ZFS scrub</h3>
-        {searchParams.scrub && <p style={{ color: "var(--accent)" }}>{searchParams.scrub}</p>}
+        {scrub && <p style={{ color: "var(--accent)" }}>{scrub}</p>}
         <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
           Scrubs run on ZFS-capable nodes. Cold storage on an SMB mount is the share owner&apos;s
           responsibility and is never scrubbed. Errors found during a scrub raise an admin alert.
@@ -218,7 +219,7 @@ export default async function SettingsPage({
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>WebDAV backup</h3>
-        {searchParams.backup && <p style={{ color: "var(--accent)" }}>{searchParams.backup}</p>}
+        {backup && <p style={{ color: "var(--accent)" }}>{backup}</p>}
         <form action={saveWebdavSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
           <div style={{ gridColumn: "1 / -1" }}>
             <label>WebDAV base URL</label>

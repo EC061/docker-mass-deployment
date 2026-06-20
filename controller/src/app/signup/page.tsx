@@ -19,7 +19,8 @@ async function signup(formData: FormData) {
   redirect("/dashboard");
 }
 
-export default function SignupPage({ searchParams }: { searchParams: { error?: string } }) {
+export default async function SignupPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  const { error } = await searchParams;
   return (
     <div className="auth-wrap">
       <div className="card auth-card">
@@ -36,7 +37,7 @@ export default function SignupPage({ searchParams }: { searchParams: { error?: s
           <input id="token" name="token" required />
           <button type="submit">Create account</button>
         </form>
-        {searchParams.error && <p className="error">{searchParams.error}</p>}
+        {error && <p className="error">{error}</p>}
         <p className="muted" style={{ marginTop: 16 }}>
           <a href="/login">Back to sign in</a>
         </p>
