@@ -8,8 +8,8 @@ A multi-node manager for ZFS-backed, GPU-equipped lab servers. A central web **c
 - Per-student `~/scratch` (fast) and `~/cold-storage` (slow), added/removed with one click or by CSV.
 - Idle-GPU-process killer (warn-then-kill, with whitelist) that emails the owning student.
 - Scheduled **ZFS scrubs** on a controller-set interval; scrub errors raise an admin alert.
-- Cold (slow) storage can be a local ZFS pool **or an external SMB mount** (optionally shared
-  between nodes) — no per-node ZFS pool required for the cold tier.
+- Cold (slow) storage can be a local ZFS pool **or an SMB mount of another node's slow pool**, so
+  containers on two nodes share the same cold data. The owning ZFS node does all monitoring.
 - External SMTP, WebDAV backups, GPU policy, and quota defaults — all configured in the web UI.
 - Centralized logs and log-level admin alerts.
 
@@ -101,10 +101,16 @@ sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory
 `lab-agent install` writes `/etc/lab-agent/config.toml` and a systemd unit (`lab-agent.service`) that
 starts on boot and reconnects automatically. Check readiness any time with `lab-agent doctor`.
 
-### 1.6 Cold storage on SMB instead of a `slow` ZFS pool (optional)
+### 1.6 Sharing cold storage between two nodes over SMB (optional)
 
-If a node has no local bulk pool — or its cold storage is a shared NAS — point the slow tier at an
-SMB/CIFS mount instead. Mount the share first (e.g. via `/etc/fstab` or `systemd.mount`), then:
+When two nodes need their containers to see the **same** cold data, one node owns the slow ZFS pool
+and the other mounts it over SMB:
+
+- **Owner node** — installed normally (zfs backend). It owns the `slow` pool, creates the cold
+  datasets, enforces quotas, runs old-file scans, scrubs it, and reports its usage. Export the pool
+  over SMB (e.g. Samba) so the other node can mount it.
+- **Client node** — mounts that export (via `/etc/fstab` or `systemd.mount`), then installs the
+  agent with the SMB cold-storage backend so its containers bind-mount the shared data:
 
 ```bash
 sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent \
@@ -113,10 +119,11 @@ sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory
 ```
 
 - `--slow-path` is where the share is mounted; labs live under `<slow-path>/labs/...`.
-- `--slow-shared` marks the share as mounted on more than one node (each node only ever touches its
-  own labs' sub-directories).
-- On SMB cold storage there are **no enforceable quotas** (slow quotas are recorded but not applied)
-  and **no scrubs** — that storage is the share owner's responsibility. The fast pool is still ZFS.
+- `--slow-shared` marks the share as mounted on more than one node, so the client only ever touches
+  its own labs' sub-directories (guarded deletes).
+- The client is a **pure consumer**: it makes the per-lab/per-student directories its containers
+  bind-mount, but does **no** quota, usage telemetry, old-file scan, or scrub for cold storage — the
+  owner node does all of that for the same data. The fast tier is still a local ZFS pool either way.
 
 ---
 

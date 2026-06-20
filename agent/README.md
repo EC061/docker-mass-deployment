@@ -23,16 +23,18 @@ so the agent starts on boot and reconnects automatically.
 
 ## Cold storage backend
 
-By default the slow (cold-storage) tier is a local ZFS pool (`slow`). To use an external SMB/CIFS
-mount instead — e.g. a shared NAS — mount the share first, then pass on `install`:
+By default the slow (cold-storage) tier is a local ZFS pool (`slow`). To share cold storage with
+another node, one node owns the ZFS pool and exports it over SMB; this node mounts that export and
+runs the SMB backend so its containers see the same data. Mount the share first, then on `install`:
 
 ```
 --slow-backend smb --slow-path /mnt/cold [--slow-shared]
 ```
 
-On the SMB backend the cold tier uses directories (not datasets): quotas are not enforced and the
-share is never scrubbed (it is the share owner's responsibility). `--slow-shared` marks a share
-mounted on more than one node; each node only manages its own labs' sub-directories.
+On the SMB backend this node is a **pure client**: it creates the per-lab/per-student directories
+its containers bind-mount, but does no quota, usage telemetry, old-file scan, or scrub for cold
+storage — the node that owns the ZFS pool does all of that for the same data. `--slow-shared` marks
+a share mounted on more than one node; this node only manages its own labs' sub-directories.
 
 ## ZFS scrubs
 

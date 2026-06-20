@@ -32,11 +32,10 @@ def _pool_free(pool: str) -> dict[str, Any] | None:
 
 
 def _pools(cfg: AgentConfig) -> list[dict[str, Any]]:
+    # Only ZFS pools this node owns. On the SMB cold-storage backend the slow pool lives on (and is
+    # reported by) the owner node, so it is excluded here.
     zfs_pools = [cfg.fast_pool] + ([cfg.slow_pool] if cfg.slow_is_zfs else [])
-    out = [info for p in zfs_pools if (info := _pool_free(p)) is not None]
-    if (cold := coldstore.pool_free(cfg)) is not None:
-        out.append(cold)
-    return out
+    return [info for p in zfs_pools if (info := _pool_free(p)) is not None]
 
 
 def _dataset_usage(cfg: AgentConfig) -> list[dict[str, Any]]:
