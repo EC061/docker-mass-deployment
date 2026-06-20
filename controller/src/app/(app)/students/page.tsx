@@ -4,11 +4,12 @@ import { importCsvAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
-export default function StudentsPage({
+export default async function StudentsPage({
   searchParams,
 }: {
-  searchParams: { imported?: string; skipped?: string; error?: string };
+  searchParams: Promise<{ imported?: string; skipped?: string; error?: string }>;
 }) {
+  const { imported, skipped, error } = await searchParams;
   const students = listStudents();
   const labs = listLabs();
 
@@ -18,12 +19,12 @@ export default function StudentsPage({
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Import from CSV</h3>
-        {searchParams.imported && (
+        {imported && (
           <p style={{ color: "var(--ok)" }}>
-            Imported {searchParams.imported}, skipped {searchParams.skipped}.
+            Imported {imported}, skipped {skipped}.
           </p>
         )}
-        {searchParams.error && <p className="error">{searchParams.error}</p>}
+        {error && <p className="error">{error}</p>}
         {labs.length === 0 ? (
           <p className="muted">Create a lab first.</p>
         ) : (

@@ -1,0 +1,46 @@
+# Dependabot keeps dependencies patched on the default branch (main).
+# Grouped minor/patch bumps to keep PR volume low; majors come as individual PRs.
+version: 2
+updates:
+  # Controller (Next.js / Node)
+  - package-ecosystem: npm
+    directory: /controller
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      controller-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # Agent (Python / pyproject.toml)
+  - package-ecosystem: pip
+    directory: /agent
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    groups:
+      agent-minor-patch:
+        update-types:
+          - minor
+          - patch
+
+  # GitHub Actions workflows
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        update-types:
+          - minor
+          - patch
+
+  # Container base images
+  - package-ecosystem: docker
+    directories:
+      - /controller
+      - /image
+    schedule:
+      interval: weekly

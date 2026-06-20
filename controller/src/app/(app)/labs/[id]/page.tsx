@@ -39,14 +39,16 @@ function Sparkline({ values }: { values: number[] }) {
   );
 }
 
-export default function LabDetail({
+export default async function LabDetail({
   params,
   searchParams,
 }: {
-  params: { id: string };
-  searchParams: { newuser?: string; pw?: string; emailed?: string };
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ newuser?: string; pw?: string; emailed?: string }>;
 }) {
-  const labId = Number(params.id);
+  const { id } = await params;
+  const { newuser, pw, emailed } = await searchParams;
+  const labId = Number(id);
   const lab = getLab(labId);
   if (!lab) notFound();
   const members = listMembers(labId);
@@ -121,7 +123,7 @@ export default function LabDetail({
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Members</h3>
-        {searchParams.newuser && searchParams.pw && (
+        {newuser && pw && (
           <div
             style={{
               background: "var(--panel-2)",
@@ -131,9 +133,9 @@ export default function LabDetail({
               marginBottom: 12,
             }}
           >
-            Added <b>{searchParams.newuser}</b> — password <code>{searchParams.pw}</code>{" "}
+            Added <b>{newuser}</b> — password <code>{pw}</code>{" "}
             <span className="muted">
-              (shown once{searchParams.emailed ? "; also emailed" : "; SMTP not configured, not emailed"})
+              (shown once{emailed ? "; also emailed" : "; SMTP not configured, not emailed"})
             </span>
           </div>
         )}

@@ -17,12 +17,12 @@ interface LogRow {
 
 const LEVELS = ["", "DEBUG", "INFO", "WARN", "ERROR"];
 
-export default function LogsPage({
+export default async function LogsPage({
   searchParams,
 }: {
-  searchParams: { level?: string; node?: string; q?: string; task?: string };
+  searchParams: Promise<{ level?: string; node?: string; q?: string; task?: string }>;
 }) {
-  const { level = "", node = "", q = "", task = "" } = searchParams;
+  const { level = "", node = "", q = "", task = "" } = await searchParams;
 
   const where: string[] = [];
   const args: unknown[] = [];

@@ -7,7 +7,7 @@ export const dynamic = "force-dynamic";
 
 async function logout() {
   "use server";
-  clearSessionCookie();
+  await clearSessionCookie();
   redirect("/login");
 }
 
