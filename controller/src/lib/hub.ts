@@ -13,6 +13,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { db } from "./db";
 import { env } from "./env";
+import { ingestTelemetry, storeOldfileScan } from "./ingest";
 import { ackTask, claimTask, markTaskState, retryTask } from "./queue";
 
 interface NodeConn {
@@ -139,6 +140,13 @@ function handleResult(frame: any): void {
     frame.result,
     frame.ok ? undefined : frame.error,
   );
+  // Persist scan results into the oldfile_scans table.
+  if (frame.ok && frame.result?.results && frame.result?.lab) {
+    const row = db().prepare("SELECT action FROM task_log WHERE task_uuid = ?").get(frame.id) as
+      | { action: string }
+      | undefined;
+    if (row?.action === "oldfiles.scan") storeOldfileScan(frame.result);
+  }
   if (frame.logs) {
     db()
       .prepare(
@@ -181,11 +189,7 @@ function handleEvent(node: string, frame: any): void {
 }
 
 function handleTelemetry(node: string, frame: any): void {
-  const p = frame.payload ?? {};
-  db()
-    .prepare(`UPDATE nodes SET pools = ?, last_seen = ? WHERE name = ?`)
-    .run(JSON.stringify(p.pools ?? []), Date.now(), node);
-  // Phase 2 will also persist per-lab/student storage_samples + replace gpu_snapshot here.
+  ingestTelemetry(node, frame.payload ?? {});
 }
 
 // ----------------------------------------------------------------- node registry
