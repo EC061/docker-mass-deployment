@@ -1,8 +1,12 @@
 """Heartbeat telemetry collection.
 
-Phase 1 reports liveness + pool free space. Phase 2 extends this with per-lab/student
-`zfs used,quota` and the live GPU process list. The controller stores the latest snapshot
-(and a storage time-series).
+Reports, every heartbeat:
+  - pool free space,
+  - per-dataset usage under the lab roots (the controller maps dataset names back to labs/students
+    and stores a storage time-series),
+  - the live GPU process list (pid + VRAM, resolved to container/user where possible).
+
+The controller stores the latest snapshot; GPU is snapshot-only (no time-series).
 """
 
 from __future__ import annotations
@@ -10,7 +14,9 @@ from __future__ import annotations
 from typing import Any
 
 from .config import AgentConfig
+from .executors import zfs
 from .executors.base import run
+from .gpu.monitor import list_gpu_processes
 
 
 def _pool_free(pool: str) -> dict[str, Any] | None:
@@ -23,10 +29,28 @@ def _pool_free(pool: str) -> dict[str, Any] | None:
     return {"name": parts[0], "size": int(parts[1]), "alloc": int(parts[2]), "free": int(parts[3])}
 
 
+def _dataset_usage(cfg: AgentConfig) -> list[dict[str, Any]]:
+    out = []
+    for pool, root in (("fast", cfg.labs_fast_root), ("slow", cfg.labs_slow_root)):
+        for u in zfs.list_usage(root):
+            out.append(
+                {
+                    "pool": pool,
+                    "dataset": u.dataset,
+                    "used_bytes": u.used_bytes,
+                    "quota_bytes": u.quota_bytes,
+                    "available_bytes": u.available_bytes,
+                }
+            )
+    return out
+
+
 def collect_heartbeat(cfg: AgentConfig) -> dict[str, Any]:
-    pools = []
-    for pool in (cfg.fast_pool, cfg.slow_pool):
-        info = _pool_free(pool)
-        if info is not None:
-            pools.append(info)
-    return {"pools": pools}
+    pools = [
+        info for pool in (cfg.fast_pool, cfg.slow_pool) if (info := _pool_free(pool)) is not None
+    ]
+    return {
+        "pools": pools,
+        "datasets": _dataset_usage(cfg),
+        "gpu_processes": list_gpu_processes(),
+    }
