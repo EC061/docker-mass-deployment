@@ -1,7 +1,7 @@
 # Controller image: builds the Next.js app and runs the long-lived custom server (Next + WS hub).
 # Multi-stage to keep the runtime image lean while still compiling native modules during build.
 
-FROM node:22-bookworm-slim AS deps
+FROM node:26-bookworm-slim AS deps
 WORKDIR /app
 # Build tools for native modules (better-sqlite3 / honker-node) if no prebuild is available.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -9,13 +9,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-FROM node:22-bookworm-slim AS build
+FROM node:26-bookworm-slim AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:26-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 # Non-root runtime user.
