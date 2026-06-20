@@ -1,0 +1,158 @@
+"""Agent runtime: dial the controller over WebSocket and pump tasks/results/logs.
+
+Connection topology (agent-initiated, outbound only):
+
+    agent --WSS--> controller
+      send: hello, result, log, event, telemetry
+      recv: task, ack
+
+Durability: received tasks go into the local honker ``tasks`` queue before execution; outbound
+frames go through the local honker ``outbox`` and are acked only after a successful send. So an
+agent restart or a controller outage never drops work — buffered items flush on reconnect.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import ssl
+
+import websockets
+
+from . import protocol as P
+from .config import AgentConfig
+from .dispatcher import Dispatcher
+from .localq import LocalQueues
+from .logbus import LogBus
+from .system import detect_capabilities
+
+INITIAL_BACKOFF = 1.0
+MAX_BACKOFF = 30.0
+
+
+class Agent:
+    def __init__(self, cfg: AgentConfig):
+        self.cfg = cfg
+        self.localq = LocalQueues(cfg.state_db)
+        self.log = LogBus(cfg.node_name, sink=self.localq.enqueue_outbound)
+        self.dispatcher = Dispatcher(cfg, self.log)
+        self._connected = asyncio.Event()
+
+    # ------------------------------------------------------------------ helpers
+    def _ssl_context(self):
+        if not self.cfg.controller_url.startswith("wss://"):
+            return None
+        ctx = ssl.create_default_context()
+        if not self.cfg.tls_verify:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
+    # ------------------------------------------------------------------ runtime
+    async def run(self) -> None:
+        """Run forever: persistent task worker + reconnecting connection loop."""
+        worker = asyncio.create_task(self._task_worker(), name="task-worker")
+        try:
+            await self._connection_loop()
+        finally:
+            worker.cancel()
+            self.localq.close()
+
+    async def _connection_loop(self) -> None:
+        backoff = INITIAL_BACKOFF
+        while True:
+            try:
+                async with websockets.connect(
+                    self.cfg.controller_url,
+                    ssl=self._ssl_context(),
+                    ping_interval=20,
+                    ping_timeout=20,
+                    max_size=8 * 1024 * 1024,
+                ) as ws:
+                    backoff = INITIAL_BACKOFF
+                    await self._on_connected(ws)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # connection refused/dropped/etc.
+                self.log.warn("client", f"controller connection failed: {exc}")
+            self._connected.clear()
+            await asyncio.sleep(backoff)
+            backoff = min(backoff * 2, MAX_BACKOFF)
+
+    async def _on_connected(self, ws) -> None:
+        caps = detect_capabilities(self.cfg)
+        await ws.send(json.dumps(P.hello_frame(self.cfg.node_name, self.cfg.token, caps.to_dict())))
+        self._connected.set()
+        self.log.info("client", f"connected to controller as node '{self.cfg.node_name}'")
+        receiver = asyncio.create_task(self._receiver(ws), name="receiver")
+        sender = asyncio.create_task(self._outbox_sender(ws), name="outbox-sender")
+        heartbeat = asyncio.create_task(self._heartbeat(ws), name="heartbeat")
+        done, pending = await asyncio.wait(
+            {receiver, sender, heartbeat}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for task in pending:
+            task.cancel()
+        # Surface the first exception (if any) so the connection loop logs + reconnects.
+        for task in done:
+            exc = task.exception()
+            if exc and not isinstance(exc, asyncio.CancelledError):
+                raise exc
+
+    async def _receiver(self, ws) -> None:
+        async for raw in ws:
+            try:
+                frame = json.loads(raw)
+            except json.JSONDecodeError:
+                self.log.warn("client", "received non-JSON frame")
+                continue
+            if frame.get("type") == P.T_TASK:
+                # Persist before executing -> at-least-once.
+                self.localq.enqueue_task(frame)
+            # Other inbound types (ack) are currently informational.
+
+    async def _task_worker(self) -> None:
+        """Claim tasks from the durable local queue and execute them off the event loop."""
+        while True:
+            job = await asyncio.to_thread(self.localq.claim_task)
+            if job is None:
+                await asyncio.sleep(0.5)
+                continue
+            try:
+                task = P.Task.from_frame(job.payload)
+                result = await asyncio.to_thread(self.dispatcher.handle, task)
+                self.localq.enqueue_outbound(result)
+                await asyncio.to_thread(job.ack)
+            except Exception as exc:  # never let the worker die
+                self.log.error("client", f"task worker error: {exc}")
+                await asyncio.to_thread(job.retry, 30, str(exc))
+
+    async def _outbox_sender(self, ws) -> None:
+        """Drain the durable outbox over the connection; ack only after a successful send."""
+        while True:
+            job = await asyncio.to_thread(self.localq.claim_outbound)
+            if job is None:
+                await asyncio.sleep(0.25)
+                continue
+            try:
+                await ws.send(json.dumps(job.payload))
+                await asyncio.to_thread(job.ack)
+            except Exception:
+                # Send failed (likely disconnect) -> return to queue, stop draining.
+                await asyncio.to_thread(job.retry, 1, "send failed")
+                raise
+
+    async def _heartbeat(self, ws) -> None:
+        """Periodically emit a telemetry frame. Payload is filled in by phase 2 (telemetry)."""
+        while True:
+            try:
+                from .telemetry import collect_heartbeat
+
+                payload = await asyncio.to_thread(collect_heartbeat, self.cfg)
+            except Exception as exc:
+                payload = {"error": str(exc)}
+            self.log.telemetry(payload)
+            await asyncio.sleep(self.cfg.heartbeat_interval_s)
+
+
+def run_agent(cfg: AgentConfig) -> None:
+    asyncio.run(Agent(cfg).run())

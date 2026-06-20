@@ -34,8 +34,6 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
 parts/
 sdist/
 var/
@@ -64,3 +62,13 @@ pip-delete-this-directory.txt
 .vscode/
 *.swp
 *.swo
+
+# Node / Next.js (controller)
+node_modules/
+.next/
+*.tsbuildinfo
+
+# SQLite databases (controller + agent state)
+*.db
+*.db-wal
+*.db-shm

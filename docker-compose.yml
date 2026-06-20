@@ -1,0 +1,22 @@
+# One-command bring-up for the controller. The agents are installed per-node with `lab-agent install`
+# (see README "Node host prep"); they are NOT part of this compose file.
+
+services:
+  controller:
+    build: ./controller
+    image: ghcr.io/ec061/lab-controller:latest
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    environment:
+      DB_PATH: /app/data/controller.db
+      PORT: "8443"
+      SIGNUP_TOKEN: ${SIGNUP_TOKEN:?set SIGNUP_TOKEN}
+      AGENT_TOKEN: ${AGENT_TOKEN:?set AGENT_TOKEN}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
+      NODE_ENV: production
+    volumes:
+      - controller-data:/app/data
+
+volumes:
+  controller-data:
