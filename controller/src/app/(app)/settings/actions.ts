@@ -35,6 +35,16 @@ export async function saveSmtpSettingsAction(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveAlertSettingsAction(formData: FormData) {
+  setSetting("alertsEnabled", formData.get("alertsEnabled") === "on");
+  const level = String(formData.get("alertLevel") ?? "ERROR");
+  setSetting("alertLevel", level === "WARN" ? "WARN" : "ERROR");
+  setSetting("alertDedupMinutes", Number(formData.get("alertDedupMinutes")) || 15);
+  setSetting("logRetentionDays", Number(formData.get("logRetentionDays")) || 30);
+  setSetting("quotaAlertPct", Number(formData.get("quotaAlertPct")) || 90);
+  revalidatePath("/settings");
+}
+
 export async function saveGpuPolicyAction(formData: FormData) {
   setSetting("gpuEnabled", formData.get("gpuEnabled") === "on");
   setSetting("gpuImmediate", formData.get("gpuImmediate") === "on");

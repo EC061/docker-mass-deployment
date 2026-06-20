@@ -11,6 +11,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
+import { alertNodeOffline, alertTaskFailed, maybeAlertOnLog } from "./alerts";
 import { db } from "./db";
 import { env } from "./env";
 import { ingestTelemetry, storeOldfileScan } from "./ingest";
@@ -141,6 +142,12 @@ function handleResult(frame: any): void {
     frame.result,
     frame.ok ? undefined : frame.error,
   );
+  if (!frame.ok) {
+    const t = db().prepare("SELECT node, action FROM task_log WHERE task_uuid = ?").get(frame.id) as
+      | { node: string; action: string }
+      | undefined;
+    if (t) alertTaskFailed(t.node, t.action, frame.error ?? "unknown error");
+  }
   // Persist scan results into the oldfile_scans table.
   if (frame.ok && frame.result?.results && frame.result?.lab) {
     const row = db().prepare("SELECT action FROM task_log WHERE task_uuid = ?").get(frame.id) as
@@ -175,6 +182,13 @@ function handleLog(node: string, frame: any): void {
       frame.msg ?? "",
       frame.detail ?? null,
     );
+  maybeAlertOnLog({
+    node,
+    level: frame.level ?? "INFO",
+    source: frame.source,
+    msg: frame.msg ?? "",
+    detail: frame.detail,
+  });
 }
 
 function handleEvent(node: string, frame: any): void {
@@ -232,6 +246,7 @@ function deregisterNode(node: string): void {
     connections.delete(node);
   }
   db().prepare(`UPDATE nodes SET online = 0, last_seen = ? WHERE name = ?`).run(Date.now(), node);
+  alertNodeOffline(node);
 }
 
 /** Wire the hub to the HTTP server's upgrade event for a given path. */

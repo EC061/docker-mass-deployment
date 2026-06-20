@@ -10,6 +10,7 @@ import next from "next";
 import { attachHub } from "./src/lib/hub";
 import { env } from "./src/lib/env";
 import { db } from "./src/lib/db";
+import { startMaintenance } from "./src/lib/maintenance";
 
 const dev = process.env.NODE_ENV !== "production";
 const app = next({ dev });
@@ -22,6 +23,7 @@ async function main() {
 
   const server = createServer((req, res) => handle(req, res));
   attachHub(server, "/agent");
+  startMaintenance();
 
   server.listen(env.port, () => {
     // eslint-disable-next-line no-console

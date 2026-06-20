@@ -32,6 +32,12 @@ export interface Settings {
   gpuImmediate: boolean;
   gpuWhitelistUsers: string; // comma-separated
   gpuWhitelistLabs: string; // comma-separated
+  // Alerting + logs.
+  alertsEnabled: boolean;
+  alertLevel: "WARN" | "ERROR"; // minimum log level that triggers an admin alert
+  alertDedupMinutes: number; // suppress duplicate alerts (same key) within this window
+  logRetentionDays: number;
+  quotaAlertPct: number; // email the PI when a lab pool crosses this percent
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -54,6 +60,11 @@ export const DEFAULT_SETTINGS: Settings = {
   gpuImmediate: false,
   gpuWhitelistUsers: "",
   gpuWhitelistLabs: "",
+  alertsEnabled: true,
+  alertLevel: "ERROR",
+  alertDedupMinutes: 15,
+  logRetentionDays: 30,
+  quotaAlertPct: 90,
 };
 
 /** The GPU policy payload broadcast to agents (gpu.policy.update). */

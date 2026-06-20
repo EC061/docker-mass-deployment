@@ -43,6 +43,18 @@ export async function sendTestEmail(to: string): Promise<SendResult> {
   );
 }
 
+export async function sendRemovalEmail(to: string, lab: string, dataDeleted: boolean): Promise<SendResult> {
+  return sendMail(
+    to,
+    `Removed from lab ${lab}`,
+    `You have been removed from the lab "${lab}". ` +
+      (dataDeleted
+        ? "Your scratch and cold-storage data in this lab has been deleted."
+        : "Your data has been retained for now; contact an admin if you need it.") +
+      "\n\n— Lab Manager",
+  );
+}
+
 export interface CredentialEmail {
   to: string;
   name?: string;
@@ -78,6 +90,32 @@ export async function sendGpuKillEmail(
       `because it held GPU memory without using the GPU. Please checkpoint long-running work and ` +
       `keep the GPU active, or ask an admin to whitelist your job.\n\n— Lab Manager`,
   );
+}
+
+export interface QuotaEmail {
+  to: string;
+  lab: string;
+  pool: string;
+  pct: number;
+  usedHuman: string;
+  quotaHuman: string;
+  breakdown: { username: string; usedHuman: string }[];
+}
+
+export async function sendQuotaEmail(info: QuotaEmail): Promise<SendResult> {
+  const lines = info.breakdown.length
+    ? info.breakdown.map((b) => `  ${b.username.padEnd(20)} ${b.usedHuman}`).join("\n")
+    : "  (no per-student usage reported yet)";
+  const text = `Lab "${info.lab}" has reached ${info.pct}% of its ${info.pool} storage quota` +
+    ` (${info.usedHuman} of ${info.quotaHuman}).
+
+Per-student usage on the ${info.pool} pool:
+${lines}
+
+You may want to ask students to clean up old files, or request a larger quota.
+
+— Lab Manager`;
+  return sendMail(info.to, `Lab ${info.lab} is at ${info.pct}% of its ${info.pool} quota`, text);
 }
 
 export async function sendCredentialEmail(info: CredentialEmail): Promise<SendResult> {

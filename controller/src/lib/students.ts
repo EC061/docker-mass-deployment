@@ -7,7 +7,7 @@
 import { randomBytes } from "node:crypto";
 import { db } from "./db";
 import { audit, getLab } from "./labs";
-import { sendCredentialEmail } from "./mailer";
+import { sendCredentialEmail, sendRemovalEmail } from "./mailer";
 import { enqueueTask } from "./queue";
 import { getSetting } from "./settings";
 
@@ -122,8 +122,8 @@ export function removeStudentFromLab(
 ): void {
   const lab = getLab(labId);
   if (!lab) throw new Error("Unknown lab");
-  const student = db().prepare("SELECT username FROM students WHERE id = ?").get(studentId) as
-    | { username: string }
+  const student = db().prepare("SELECT username, email FROM students WHERE id = ?").get(studentId) as
+    | { username: string; email: string | null }
     | undefined;
   if (!student) return;
   enqueueTask(
@@ -134,4 +134,5 @@ export function removeStudentFromLab(
   );
   db().prepare("DELETE FROM lab_members WHERE lab_id = ? AND student_id = ?").run(labId, studentId);
   audit(actor, "student.remove", `${lab.name}/${student.username}`, deleteData ? "data deleted" : undefined);
+  if (student.email) void sendRemovalEmail(student.email, lab.name, deleteData);
 }

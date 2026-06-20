@@ -1,5 +1,6 @@
 import { getSettings, TIB } from "@/lib/settings";
 import {
+  saveAlertSettingsAction,
   saveGpuPolicyAction,
   saveSmtpSettingsAction,
   saveStorageSettingsAction,
@@ -135,7 +136,41 @@ export default function SettingsPage({ searchParams }: { searchParams: { smtp?: 
       </div>
 
       <div className="card">
-        <p className="muted">WebDAV backup and the log-level alert threshold are added in later phases.</p>
+        <h3 style={{ marginTop: 0 }}>Alerts & logs</h3>
+        <form action={saveAlertSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <input type="checkbox" name="alertsEnabled" defaultChecked={s.alertsEnabled} style={{ width: "auto" }} />
+            <label style={{ margin: 0 }}>Email admins on alerts</label>
+          </div>
+          <div>
+            <label>Alert at log level</label>
+            <select name="alertLevel" defaultValue={s.alertLevel}>
+              <option value="WARN">WARN and above</option>
+              <option value="ERROR">ERROR only</option>
+            </select>
+          </div>
+          <div>
+            <label>Dedup window (minutes)</label>
+            <input name="alertDedupMinutes" type="number" defaultValue={s.alertDedupMinutes} />
+          </div>
+          <div>
+            <label>Quota alert at (%)</label>
+            <input name="quotaAlertPct" type="number" defaultValue={s.quotaAlertPct} />
+          </div>
+          <div>
+            <label>Log retention (days)</label>
+            <input name="logRetentionDays" type="number" defaultValue={s.logRetentionDays} />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <button type="submit" style={{ width: 140 }}>
+              Save alerts
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="card">
+        <p className="muted">WebDAV backup is added in the next phase.</p>
       </div>
     </>
   );
