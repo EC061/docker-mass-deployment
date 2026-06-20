@@ -3,7 +3,8 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { sendTestEmail } from "@/lib/mailer";
-import { setSetting, TIB } from "@/lib/settings";
+import { broadcastGpuPolicy, setSetting, TIB } from "@/lib/settings";
+import { currentAdmin } from "@/lib/auth";
 
 export async function saveStorageSettingsAction(formData: FormData) {
   const fastTb = Number(formData.get("fastTb"));
@@ -31,6 +32,19 @@ export async function saveSmtpSettingsAction(formData: FormData) {
   setSetting("smtpFrom", String(formData.get("smtpFrom") ?? "").trim());
   setSetting("smtpSecure", formData.get("smtpSecure") === "on");
   setSetting("sshHostOverride", String(formData.get("sshHostOverride") ?? "").trim());
+  revalidatePath("/settings");
+}
+
+export async function saveGpuPolicyAction(formData: FormData) {
+  setSetting("gpuEnabled", formData.get("gpuEnabled") === "on");
+  setSetting("gpuImmediate", formData.get("gpuImmediate") === "on");
+  setSetting("gpuUtilThreshold", Number(formData.get("gpuUtilThreshold")) || 5);
+  setSetting("gpuIdleMinutes", Number(formData.get("gpuIdleMinutes")) || 20);
+  setSetting("gpuGraceMinutes", Number(formData.get("gpuGraceMinutes")) || 10);
+  setSetting("gpuWhitelistUsers", String(formData.get("gpuWhitelistUsers") ?? "").trim());
+  setSetting("gpuWhitelistLabs", String(formData.get("gpuWhitelistLabs") ?? "").trim());
+  // Push the new policy to every node immediately.
+  broadcastGpuPolicy((await currentAdmin())?.email);
   revalidatePath("/settings");
 }
 

@@ -115,6 +115,18 @@ def _student_user(container: str | None, pid: int) -> str | None:
     return res.stdout.split(":", 1)[0].strip() or None
 
 
+def kill_pid(pid: int) -> bool:
+    """Kill a host process (the agent runs as root). Returns True if the signal was sent."""
+    import os
+    import signal
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+
+
 def list_gpu_processes() -> list[dict]:
     vram = _query_compute_apps()
     util = _pmon_util()
