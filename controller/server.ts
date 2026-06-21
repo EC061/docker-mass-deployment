@@ -26,13 +26,11 @@ async function main() {
   startMaintenance();
 
   server.listen(env.port, () => {
-    // eslint-disable-next-line no-console
     console.log(`controller listening on :${env.port} (agent WS at ws(s)://<host>:${env.port}/agent)`);
   });
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
   console.error("controller failed to start", err);
   process.exit(1);
 });
