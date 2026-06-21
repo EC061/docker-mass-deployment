@@ -30,27 +30,30 @@ describe("env defaults", () => {
 
 describe("required secrets", () => {
   it("returns the explicit value when set", () => {
-    vi.stubEnv("SESSION_SECRET", "explicit-secret");
-    expect(env.sessionSecret).toBe("explicit-secret");
+    vi.stubEnv("SESSION_SECRET", "explicit-secret-explicit-secret-32");
+    expect(env.sessionSecret).toBe("explicit-secret-explicit-secret-32");
   });
 
-  it("uses the dev fallback outside production", () => {
+  it("fails closed outside production — no dev fallback (H-01)", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("SIGNUP_TOKEN", undefined as unknown as string);
-    expect(env.signupToken).toBe("dev-signup-token");
+    expect(() => env.signupToken).toThrow(/Missing required env var SIGNUP_TOKEN/);
     vi.stubEnv("AGENT_TOKEN", undefined as unknown as string);
-    expect(env.agentToken).toBe("dev-agent-token");
+    expect(() => env.agentToken).toThrow(/Missing required env var AGENT_TOKEN/);
   });
 
-  it("throws in production when a required var is missing", () => {
-    vi.stubEnv("NODE_ENV", "production");
+  it("throws when a required var is missing", () => {
     vi.stubEnv("SESSION_SECRET", undefined as unknown as string);
     expect(() => env.sessionSecret).toThrow(/Missing required env var SESSION_SECRET/);
   });
 
   it("treats an empty string as missing", () => {
-    vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("AGENT_TOKEN", "");
     expect(() => env.agentToken).toThrow(/AGENT_TOKEN/);
+  });
+
+  it("rejects a SESSION_SECRET shorter than 32 chars", () => {
+    vi.stubEnv("SESSION_SECRET", "too-short");
+    expect(() => env.sessionSecret).toThrow(/at least 32 characters/);
   });
 });

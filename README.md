@@ -133,12 +133,13 @@ The controller is a long-lived Node process (Next.js + WebSocket hub); it cannot
 
 ```bash
 cd controller
-cp .env.example .env     # set SIGNUP_TOKEN, AGENT_TOKEN, SESSION_SECRET
-# Then either:
-docker compose up -d                     # from the repo root (uses controller/Dockerfile)
-# ...or run from source for development:
-npm install && npm run dev
+cp .env.example .env     # set SIGNUP_TOKEN, AGENT_TOKEN, SESSION_SECRET (no defaults — required)
+docker compose up -d     # from the repo root (uses controller/Dockerfile); the supported deploy
 ```
+
+`npm run dev` (below, under Development) is for local hacking only — never a production deploy.
+All three secrets are mandatory in every environment and `SESSION_SECRET` must be ≥ 32 characters;
+generate them with `openssl rand -hex 32`.
 
 Env vars (controller bootstrap only — everything else is set in the UI):
 
