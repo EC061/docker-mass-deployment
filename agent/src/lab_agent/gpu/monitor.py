@@ -26,6 +26,7 @@ class GpuProcess:
     util: float | None  # SM utilization %, None if unknown
     container: str | None
     user: str | None
+    start_time: int | None = None  # /proc/<pid>/stat field 22; identifies the PID across reuse
 
 
 def _query_compute_apps() -> dict[int, int]:
@@ -115,11 +116,43 @@ def _student_user(container: str | None, pid: int) -> str | None:
     return res.stdout.split(":", 1)[0].strip() or None
 
 
-def kill_pid(pid: int) -> bool:
-    """Kill a host process (the agent runs as root). Returns True if the signal was sent."""
+def pid_start_time(pid: int) -> int | None:
+    """Process start time (clock ticks since boot) from /proc/<pid>/stat field 22.
+
+    Together with the PID this uniquely identifies a process: the kernel reuses PIDs, but a reused
+    PID is a *new* process with a different start time.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", encoding="utf-8") as fh:
+            data = fh.read()
+    except OSError:
+        return None
+    # comm (field 2) may contain spaces/parens; split after the closing ')'.
+    rparen = data.rfind(")")
+    if rparen == -1:
+        return None
+    fields = data[rparen + 2:].split()
+    # After comm, field 3 is state; starttime is field 22 overall => index 19 of this slice.
+    try:
+        return int(fields[19])
+    except (IndexError, ValueError):
+        return None
+
+
+def kill_pid(pid: int, expected_start_time: int | None = None) -> bool:
+    """Kill a host process (the agent runs as root). Returns True if the signal was sent.
+
+    When expected_start_time is given, re-verify the PID still refers to the same process right
+    before signalling (M-06): the kill decision was made minutes earlier and Linux recycles PIDs, so
+    a mismatch means the original process already exited and we must NOT kill the impostor.
+    """
     import os
     import signal
 
+    if expected_start_time is not None:
+        current = pid_start_time(pid)
+        if current is None or current != expected_start_time:
+            return False
     try:
         os.kill(pid, signal.SIGKILL)
         return True
@@ -141,6 +174,7 @@ def list_gpu_processes() -> list[dict]:
                     util=util.get(pid),
                     container=container,
                     user=_student_user(container, pid),
+                    start_time=pid_start_time(pid),
                 )
             )
         )

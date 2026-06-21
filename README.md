@@ -94,12 +94,24 @@ docker info | grep -i runtimes   # should list: nvidia
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh        # if uv is not present
-sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent \
-    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent --token AGENT_TOKEN
+# Pin to a released tag (not #main) and install with the shipped uv.lock so every node runs the same
+# audited code + dependency set (I-02). Replace v1.0.0 with the tag you intend to deploy.
+sudo uvx --locked --from "git+https://github.com/EC061/docker-mass-deployment@v1.0.0#subdirectory=agent" \
+    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent
 ```
 
 `lab-agent install` writes `/etc/lab-agent/config.toml` and a systemd unit (`lab-agent.service`) that
-starts on boot and reconnects automatically. Check readiness any time with `lab-agent doctor`.
+starts on boot and reconnects automatically.
+
+**Provision the node's token:** in the controller UI go to **Nodes → Provision token**, then run the
+printed command on the node to apply it and restart the agent:
+
+```bash
+sudo lab-agent set-token <TOKEN-FROM-UI>
+```
+
+Each node has its own token; the controller only accepts allow-listed nodes (so a stolen token can't
+impersonate another node). Check readiness any time with `lab-agent doctor`.
 
 ### 1.6 Sharing cold storage between two nodes over SMB (optional)
 
@@ -113,9 +125,10 @@ and the other mounts it over SMB:
   agent with the SMB cold-storage backend so its containers bind-mount the shared data:
 
 ```bash
-sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent \
-    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent --token AGENT_TOKEN \
+sudo uvx --locked --from "git+https://github.com/EC061/docker-mass-deployment@v1.0.0#subdirectory=agent" \
+    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent \
     --slow-backend smb --slow-path /mnt/cold --slow-shared
+# then provision + apply the token as above: sudo lab-agent set-token <TOKEN-FROM-UI>
 ```
 
 - `--slow-path` is where the share is mounted; labs live under `<slow-path>/labs/...`.

@@ -4,6 +4,9 @@
 services:
   controller:
     build: ./controller
+    # For production, pin to an immutable released image rather than :latest (M-09), e.g.
+    #   image: ghcr.io/ec061/lab-controller@sha256:<digest>
+    # (copy the digest CI prints for the tag you intend to run).
     image: ghcr.io/ec061/lab-controller:latest
     restart: unless-stopped
     ports:

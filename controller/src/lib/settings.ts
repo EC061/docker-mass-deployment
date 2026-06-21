@@ -6,8 +6,12 @@
 
 import { db } from "./db";
 import { enqueueTask } from "./queue";
+import { decryptSecret, encryptSecret } from "./secrets";
 
 export const TIB = 1024 ** 4;
+
+// Credential settings encrypted at rest (M-05). Stored AES-GCM-encrypted; decrypted on read.
+const ENCRYPTED_KEYS = new Set<keyof Settings>(["smtpPass", "webdavPass"]);
 
 export interface Settings {
   fastQuotaDefaultBytes: number;
@@ -127,7 +131,11 @@ export function getSetting<K extends keyof Settings>(key: K): Settings[K] {
     | undefined;
   if (!row) return DEFAULT_SETTINGS[key];
   try {
-    return JSON.parse(row.value) as Settings[K];
+    const parsed = JSON.parse(row.value) as Settings[K];
+    if (ENCRYPTED_KEYS.has(key) && typeof parsed === "string") {
+      return decryptSecret(parsed) as Settings[K];
+    }
+    return parsed;
   } catch {
     return DEFAULT_SETTINGS[key];
   }
@@ -142,12 +150,16 @@ export function getSettings(): Settings {
 }
 
 export function setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
+  const toStore =
+    ENCRYPTED_KEYS.has(key) && typeof value === "string"
+      ? (encryptSecret(value) as Settings[K])
+      : value;
   db()
     .prepare(
       `INSERT INTO settings (key, value) VALUES (?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
     )
-    .run(key, JSON.stringify(value));
+    .run(key, JSON.stringify(toStore));
 }
 
 /** Pick the lowest SSH port in range not already assigned to a lab. */

@@ -37,6 +37,20 @@ describe("getSetting / setSetting", () => {
     expect(settings.getSetting("gpuEnabled")).toBe(true);
   });
 
+  it("encrypts credential settings at rest but reads them back plaintext (M-05)", () => {
+    settings.setSetting("smtpPass", "super-secret-pw");
+    settings.setSetting("webdavPass", "dav-secret");
+    // getSetting decrypts transparently.
+    expect(settings.getSetting("smtpPass")).toBe("super-secret-pw");
+    expect(settings.getSetting("webdavPass")).toBe("dav-secret");
+    // The raw stored value must NOT contain the plaintext.
+    const raw = dbmod.db().prepare("SELECT value FROM settings WHERE key = 'smtpPass'").get() as {
+      value: string;
+    };
+    expect(raw.value).not.toContain("super-secret-pw");
+    expect(raw.value).toContain("enc:v1:");
+  });
+
   it("falls back to default when the stored value is corrupt JSON", () => {
     dbmod
       .db()

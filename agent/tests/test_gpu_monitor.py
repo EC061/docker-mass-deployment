@@ -36,3 +36,20 @@ def test_list_gpu_processes_merges_vram_and_util(monkeypatch):
 def test_list_gpu_processes_empty_without_nvidia(monkeypatch):
     monkeypatch.setattr(monitor, "run", lambda args, **kw: CommandResult(False, [], 127, "", "not found"))
     assert monitor.list_gpu_processes() == []
+
+
+def test_kill_pid_skips_on_start_time_mismatch(monkeypatch):
+    killed = {}
+    monkeypatch.setattr(monitor, "pid_start_time", lambda pid: 9999)  # current != expected
+    monkeypatch.setattr("os.kill", lambda pid, sig: killed.setdefault("hit", True))
+    # expected_start_time differs from current -> must NOT kill (PID was recycled).
+    assert monitor.kill_pid(4242, expected_start_time=1234) is False
+    assert "hit" not in killed
+
+
+def test_kill_pid_proceeds_on_start_time_match(monkeypatch):
+    killed = {}
+    monkeypatch.setattr(monitor, "pid_start_time", lambda pid: 1234)
+    monkeypatch.setattr("os.kill", lambda pid, sig: killed.setdefault("pid", pid))
+    assert monitor.kill_pid(4242, expected_start_time=1234) is True
+    assert killed["pid"] == 4242

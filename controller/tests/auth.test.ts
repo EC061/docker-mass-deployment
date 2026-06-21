@@ -19,17 +19,17 @@ describe("admin signup token gate", () => {
 
   it("rejects a wrong signup token", async () => {
     await expect(
-      auth.createAdmin("Ed", "ed@uga.edu", "password123", "wrong-token"),
+      auth.createAdmin("Ed", "ed@uga.edu", "password123456", "wrong-token"),
     ).rejects.toThrow(/signup token/i);
     expect(auth.adminCount()).toBe(0);
   });
 
   it("creates an admin with the correct token and verifies login", async () => {
-    const admin = await auth.createAdmin("Ed", "ed@uga.edu", "password123", "test-signup");
+    const admin = await auth.createAdmin("Ed", "ed@uga.edu", "password123456", "test-signup");
     expect(admin.email).toBe("ed@uga.edu");
     expect(auth.adminCount()).toBe(1);
 
-    const ok = await auth.verifyLogin("ed@uga.edu", "password123");
+    const ok = await auth.verifyLogin("ed@uga.edu", "password123456");
     expect(ok?.email).toBe("ed@uga.edu");
 
     const bad = await auth.verifyLogin("ed@uga.edu", "wrongpass");
@@ -38,7 +38,13 @@ describe("admin signup token gate", () => {
 
   it("rejects duplicate email", async () => {
     await expect(
-      auth.createAdmin("Ed2", "ed@uga.edu", "password123", "test-signup"),
+      auth.createAdmin("Ed2", "ed@uga.edu", "password123456", "test-signup"),
     ).rejects.toThrow(/already exists/i);
+  });
+
+  it("enforces a minimum password length (L-05)", async () => {
+    await expect(
+      auth.createAdmin("Shorty", "short@uga.edu", "tooshort", "test-signup"),
+    ).rejects.toThrow(/at least 12/i);
   });
 });

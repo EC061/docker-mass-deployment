@@ -1,4 +1,14 @@
-from lab_agent.executors.docker import ContainerOptions, Mounts, build_run_args, container_name
+import pytest
+
+from lab_agent.executors.docker import (
+    ContainerOptions,
+    DockerError,
+    Mounts,
+    build_run_args,
+    container_name,
+    sanitize_env,
+    validate_image,
+)
 
 
 def _mounts():
@@ -60,3 +70,28 @@ def test_options_from_params():
     assert opts.memory == "4g"
     assert opts.ssh_port == 50001
     assert opts.image_quota == "30g"
+
+
+def test_validate_image_rejects_flag_injection_and_junk():
+    assert validate_image("custom-ssh") == "custom-ssh"
+    assert validate_image("ghcr.io/org/img:1.2") == "ghcr.io/org/img:1.2"
+    for bad in ["-v", "--privileged", "img name", "img;rm", ""]:
+        with pytest.raises(DockerError):
+            validate_image(bad)
+
+
+def test_build_run_args_rejects_bad_image():
+    with pytest.raises(DockerError):
+        build_run_args("lab-bio", ContainerOptions(image="--privileged"), _mounts(), gpus=False)
+
+
+def test_sanitize_env_drops_bad_keys_and_clamps_values():
+    out = sanitize_env({"OK_VAR": "v", "bad key": "x", "WITH_NL": "a\nb", "1BAD": "y"})
+    assert out == {"OK_VAR": "v", "WITH_NL": "ab"}
+
+
+def test_build_run_args_only_emits_sanitized_env():
+    opts = ContainerOptions(ssh_port=1, extra_env={"GOOD": "1", "bad-key": "2"})
+    args = build_run_args("lab-bio", opts, _mounts(), gpus=False)
+    assert "GOOD=1" in args
+    assert all("bad-key" not in a for a in args)

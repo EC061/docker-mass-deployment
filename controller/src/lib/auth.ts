@@ -4,6 +4,7 @@
  */
 
 import bcrypt from "bcryptjs";
+import { createHash, timingSafeEqual } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
@@ -11,7 +12,21 @@ import { db } from "./db";
 import { env } from "./env";
 
 const COOKIE = "lab_session";
-const SESSION_TTL = "7d";
+const SESSION_TTL = "24h"; // shortened from 7d (H-07); revocation is also enforced via token_version
+const SESSION_MAX_AGE = 60 * 60 * 24;
+const BCRYPT_COST = 12; // L-05: raise from 10
+const MIN_PASSWORD_LEN = 12; // L-05: enforced server-side, not just in the form
+
+// A bcrypt hash of a random string, compared against when no admin row matches, so login timing
+// doesn't reveal whether an email exists (L-03).
+const DUMMY_HASH = bcrypt.hashSync("no-such-user-placeholder", BCRYPT_COST);
+
+/** Constant-time string comparison for shared secrets (L-01). */
+export function safeEqual(a: string, b: string): boolean {
+  const ha = createHash("sha256").update(a).digest();
+  const hb = createHash("sha256").update(b).digest();
+  return timingSafeEqual(ha, hb);
+}
 
 // Lazily derived so importing this module doesn't read env at build time.
 let _secret: Uint8Array | null = null;
@@ -42,12 +57,15 @@ function tokenVersion(adminId: number): number {
 }
 
 export async function createAdmin(name: string, email: string, password: string, signupToken: string): Promise<Admin> {
-  if (signupToken !== env.signupToken) {
+  if (!safeEqual(signupToken, env.signupToken)) {
     throw new Error("Invalid signup token");
+  }
+  if (password.length < MIN_PASSWORD_LEN) {
+    throw new Error(`Password must be at least ${MIN_PASSWORD_LEN} characters`);
   }
   const existing = db().prepare("SELECT id FROM admins WHERE email = ?").get(email);
   if (existing) throw new Error("An admin with that email already exists");
-  const hash = await bcrypt.hash(password, 10);
+  const hash = await bcrypt.hash(password, BCRYPT_COST);
   const info = db()
     .prepare("INSERT INTO admins (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
     .run(name, email, hash, Date.now());
@@ -56,9 +74,12 @@ export async function createAdmin(name: string, email: string, password: string,
 
 export async function verifyLogin(email: string, password: string): Promise<Admin | null> {
   const row = db().prepare("SELECT * FROM admins WHERE email = ?").get(email) as any;
-  if (!row) return null;
-  const ok = await bcrypt.compare(password, row.password_hash);
-  if (!ok) return null;
+  // Always run a bcrypt comparison (against a dummy hash when the email is unknown) so response
+  // timing doesn't reveal whether an admin exists (L-03).
+  const ok = await bcrypt.compare(password, row?.password_hash ?? DUMMY_HASH);
+  if (!row || !ok) return null;
+  // A disabled admin cannot authenticate (H-07).
+  if (row.is_active !== undefined && row.is_active !== 1) return null;
   return { id: row.id, name: row.name, email: row.email };
 }
 
@@ -78,8 +99,18 @@ export async function setSessionCookie(admin: Admin): Promise<void> {
     sameSite: "strict",
     secure: true,
     path: "/",
-    maxAge: 60 * 60 * 24 * 7,
+    maxAge: SESSION_MAX_AGE,
   });
+}
+
+/** Invalidate every outstanding session for an admin by bumping token_version (logout-all, H-07). */
+export function logoutAllSessions(adminId: number): void {
+  db().prepare("UPDATE admins SET token_version = token_version + 1 WHERE id = ?").run(adminId);
+}
+
+/** Enable/disable an admin. A disabled admin cannot log in and existing sessions are rejected. */
+export function setAdminActive(adminId: number, active: boolean): void {
+  db().prepare("UPDATE admins SET is_active = ? WHERE id = ?").run(active ? 1 : 0, adminId);
 }
 
 export async function clearSessionCookie(): Promise<void> {

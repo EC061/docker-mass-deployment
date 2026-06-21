@@ -1,0 +1,32 @@
+/**
+ * One-time, short-lived server-side flash store (M-07). Used to surface a freshly generated student
+ * password to the admin exactly once without ever putting the cleartext in a redirect URL, browser
+ * history, or access logs. The redirect carries only an opaque random id; the value is read and
+ * deleted on the next page render. Process-local (single long-lived controller process).
+ */
+
+import { randomBytes } from "node:crypto";
+
+interface Entry {
+  value: string;
+  expires: number;
+}
+
+const store = new Map<string, Entry>();
+const TTL_MS = 60 * 1000;
+
+/** Stash a value; returns an opaque id to put in the redirect. */
+export function putFlash(value: string): string {
+  const id = randomBytes(16).toString("hex");
+  store.set(id, { value, expires: Date.now() + TTL_MS });
+  return id;
+}
+
+/** Read and delete a flashed value, or null if missing/expired. */
+export function takeFlash(id: string): string | null {
+  const e = store.get(id);
+  if (!e) return null;
+  store.delete(id);
+  if (Date.now() > e.expires) return null;
+  return e.value;
+}

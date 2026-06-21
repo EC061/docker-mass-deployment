@@ -7,7 +7,8 @@
 # Build + tag for use as a lab image:
 #   docker build -t custom-ssh ./image
 
-FROM ubuntu:noble
+# Pinned by digest for reproducible builds (M-09); Dependabot bumps it, the tag comment stays readable.
+FROM ubuntu:noble@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

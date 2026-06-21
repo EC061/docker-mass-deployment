@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { putFlash } from "@/lib/flash";
 import { createLab, destroyLab, updateQuota } from "@/lib/labs";
 import { enqueueTask } from "@/lib/queue";
 import { getSettings, nextSshPort, TIB } from "@/lib/settings";
@@ -125,9 +126,11 @@ export async function addMemberAction(formData: FormData) {
   if (!username) throw new Error("Username required");
   const result = await addStudentToLab(labId, { username, email, name }, who);
   revalidatePath(`/labs/${labId}`);
-  // Show the generated password once (also emailed when SMTP is configured).
-  const flash = result.emailed ? "&emailed=1" : "";
-  redirect(`/labs/${labId}?newuser=${encodeURIComponent(username)}&pw=${encodeURIComponent(result.password)}${flash}`);
+  // Show the generated password once via a one-time server-side flash — never put the cleartext
+  // credential in the redirect URL / history / access logs (M-07).
+  const pwid = putFlash(result.password);
+  const emailed = result.emailed ? "&emailed=1" : "";
+  redirect(`/labs/${labId}?newuser=${encodeURIComponent(username)}&pwid=${pwid}${emailed}`);
 }
 
 export async function removeMemberAction(formData: FormData) {
