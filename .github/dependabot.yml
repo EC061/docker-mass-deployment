@@ -8,9 +8,24 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 10
+    # eslint 10 is upstream-blocked (eslint-plugin-react has no v10 release and
+    # Next's bundled babel eslint-parser lacks ESLint 10's
+    # scopeManager.addGlobals API). Stay on eslint 9 until that support lands.
+    ignore:
+      - dependency-name: "eslint"
+        versions: [">=10"]
     groups:
       controller-minor-patch:
         update-types:
+          - minor
+          - patch
+      # eslint and eslint-config-next are peer-locked; bump them together.
+      eslint:
+        patterns:
+          - "eslint"
+          - "eslint-config-next"
+        update-types:
+          - major
           - minor
           - patch
 
