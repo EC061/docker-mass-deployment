@@ -2,20 +2,23 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { currentAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { createLab, destroyLab, updateQuota } from "@/lib/labs";
 import { enqueueTask } from "@/lib/queue";
 import { getSettings, nextSshPort, TIB } from "@/lib/settings";
 import { addStudentToLab, removeStudentFromLab } from "@/lib/students";
 
-async function actor(): Promise<string | undefined> {
-  return (await currentAdmin())?.email;
+// Enforcing auth gate: throws/redirects when the caller is not a live admin, and returns the
+// verified email used as the audit actor. Call as the first line of every action.
+async function actor(): Promise<string> {
+  return (await requireAdmin()).email;
 }
 
 const tbToBytes = (tb: number) => Math.round(tb * TIB);
 
 export async function createLabAction(formData: FormData) {
+  const who = await actor();
   const name = String(formData.get("name") ?? "").trim();
   const nodeId = Number(formData.get("nodeId"));
   const piEmail = String(formData.get("piEmail") ?? "").trim() || undefined;
@@ -41,12 +44,13 @@ export async function createLabAction(formData: FormData) {
     slowQuotaBytes: tbToBytes(slowTb),
     sshPort: nextSshPort(),
     containerOptions,
-    actor: await actor(),
+    actor: who,
   });
   revalidatePath("/labs");
 }
 
 export async function setQuotaAction(formData: FormData) {
+  const who = await actor();
   const labId = Number(formData.get("labId"));
   const fastTb = formData.get("fastTb");
   const slowTb = formData.get("slowTb");
@@ -54,19 +58,21 @@ export async function setQuotaAction(formData: FormData) {
     labId,
     fastTb !== null && fastTb !== "" ? tbToBytes(Number(fastTb)) : undefined,
     slowTb !== null && slowTb !== "" ? tbToBytes(Number(slowTb)) : undefined,
-    await actor(),
+    who,
   );
   revalidatePath("/labs");
   revalidatePath(`/labs/${labId}`);
 }
 
 export async function destroyLabAction(formData: FormData) {
+  const who = await actor();
   const labId = Number(formData.get("labId"));
-  destroyLab(labId, await actor());
+  destroyLab(labId, who);
   revalidatePath("/labs");
 }
 
 export async function rescanAction(formData: FormData) {
+  const who = await actor();
   const labId = Number(formData.get("labId"));
   const lab = db().prepare("SELECT labs.name AS name, nodes.name AS node FROM labs JOIN nodes ON nodes.id = labs.node_id WHERE labs.id = ?").get(labId) as
     | { name: string; node: string }
@@ -82,12 +88,13 @@ export async function rescanAction(formData: FormData) {
     lab.node,
     "oldfiles.scan",
     { lab: lab.name, users, threshold_days: getSettings().oldFileThresholdDays },
-    await actor(),
+    who,
   );
   revalidatePath(`/labs/${labId}`);
 }
 
 export async function recreateContainerAction(formData: FormData) {
+  const who = await actor();
   const labId = Number(formData.get("labId"));
   const lab = db()
     .prepare(
@@ -104,18 +111,19 @@ export async function recreateContainerAction(formData: FormData) {
       ssh_port: lab.ssh_port,
       container_options: lab.opts ? JSON.parse(lab.opts) : {},
     },
-    await actor(),
+    who,
   );
   revalidatePath(`/labs/${labId}`);
 }
 
 export async function addMemberAction(formData: FormData) {
+  const who = await actor();
   const labId = Number(formData.get("labId"));
   const username = String(formData.get("username") ?? "").trim().toLowerCase();
   const email = String(formData.get("email") ?? "").trim() || undefined;
   const name = String(formData.get("name") ?? "").trim() || undefined;
   if (!username) throw new Error("Username required");
-  const result = await addStudentToLab(labId, { username, email, name }, await actor());
+  const result = await addStudentToLab(labId, { username, email, name }, who);
   revalidatePath(`/labs/${labId}`);
   // Show the generated password once (also emailed when SMTP is configured).
   const flash = result.emailed ? "&emailed=1" : "";
@@ -123,9 +131,10 @@ export async function addMemberAction(formData: FormData) {
 }
 
 export async function removeMemberAction(formData: FormData) {
+  const who = await actor();
   const labId = Number(formData.get("labId"));
   const studentId = Number(formData.get("studentId"));
   const deleteData = formData.get("deleteData") === "on";
-  removeStudentFromLab(labId, studentId, deleteData, await actor());
+  removeStudentFromLab(labId, studentId, deleteData, who);
   revalidatePath(`/labs/${labId}`);
 }

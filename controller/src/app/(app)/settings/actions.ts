@@ -4,9 +4,10 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { sendTestEmail } from "@/lib/mailer";
 import { broadcastGpuPolicy, setSetting, TIB } from "@/lib/settings";
-import { currentAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 
 export async function saveStorageSettingsAction(formData: FormData) {
+  await requireAdmin();
   const fastTb = Number(formData.get("fastTb"));
   const slowTb = Number(formData.get("slowTb"));
   const portStart = Number(formData.get("sshPortStart"));
@@ -23,6 +24,7 @@ export async function saveStorageSettingsAction(formData: FormData) {
 }
 
 export async function saveSmtpSettingsAction(formData: FormData) {
+  await requireAdmin();
   setSetting("smtpHost", String(formData.get("smtpHost") ?? "").trim());
   setSetting("smtpPort", Number(formData.get("smtpPort")) || 587);
   setSetting("smtpUser", String(formData.get("smtpUser") ?? "").trim());
@@ -36,6 +38,7 @@ export async function saveSmtpSettingsAction(formData: FormData) {
 }
 
 export async function saveAlertSettingsAction(formData: FormData) {
+  await requireAdmin();
   setSetting("alertsEnabled", formData.get("alertsEnabled") === "on");
   const level = String(formData.get("alertLevel") ?? "ERROR");
   setSetting("alertLevel", level === "WARN" ? "WARN" : "ERROR");
@@ -46,6 +49,7 @@ export async function saveAlertSettingsAction(formData: FormData) {
 }
 
 export async function saveGpuPolicyAction(formData: FormData) {
+  const who = (await requireAdmin()).email;
   setSetting("gpuEnabled", formData.get("gpuEnabled") === "on");
   setSetting("gpuImmediate", formData.get("gpuImmediate") === "on");
   setSetting("gpuUtilThreshold", Number(formData.get("gpuUtilThreshold")) || 5);
@@ -54,20 +58,21 @@ export async function saveGpuPolicyAction(formData: FormData) {
   setSetting("gpuWhitelistUsers", String(formData.get("gpuWhitelistUsers") ?? "").trim());
   setSetting("gpuWhitelistLabs", String(formData.get("gpuWhitelistLabs") ?? "").trim());
   // Push the new policy to every node immediately.
-  broadcastGpuPolicy((await currentAdmin())?.email);
+  broadcastGpuPolicy(who);
   revalidatePath("/settings");
 }
 
 export async function saveScrubSettingsAction(formData: FormData) {
+  await requireAdmin();
   setSetting("scrubEnabled", formData.get("scrubEnabled") === "on");
   setSetting("scrubIntervalDays", Number(formData.get("scrubIntervalDays")) || 30);
   revalidatePath("/settings");
 }
 
 export async function scrubNowAction() {
+  const actor = (await requireAdmin()).email;
   const { db } = await import("@/lib/db");
   const { enqueueTask } = await import("@/lib/queue");
-  const actor = (await currentAdmin())?.email;
   const nodes = db()
     .prepare("SELECT name, capabilities FROM nodes WHERE online = 1")
     .all() as { name: string; capabilities: string | null }[];
@@ -88,6 +93,7 @@ export async function scrubNowAction() {
 }
 
 export async function saveWebdavSettingsAction(formData: FormData) {
+  await requireAdmin();
   setSetting("webdavUrl", String(formData.get("webdavUrl") ?? "").trim());
   setSetting("webdavUser", String(formData.get("webdavUser") ?? "").trim());
   const pass = String(formData.get("webdavPass") ?? "");
@@ -98,12 +104,14 @@ export async function saveWebdavSettingsAction(formData: FormData) {
 }
 
 export async function backupNowAction() {
+  await requireAdmin();
   const { backupAll } = await import("@/lib/backup");
   const res = await backupAll();
   redirect(`/settings?backup=${encodeURIComponent(res.ok ? `Backed up ${res.name}` : `Failed: ${res.error}`)}`);
 }
 
 export async function restoreAction(formData: FormData) {
+  await requireAdmin();
   const name = String(formData.get("name") ?? "");
   const { stageRestore } = await import("@/lib/backup");
   const res = await stageRestore(name);
@@ -114,6 +122,7 @@ export async function restoreAction(formData: FormData) {
 }
 
 export async function testEmailAction(formData: FormData) {
+  await requireAdmin();
   const to = String(formData.get("to") ?? "").trim();
   const res = await sendTestEmail(to);
   const msg = res.sent
