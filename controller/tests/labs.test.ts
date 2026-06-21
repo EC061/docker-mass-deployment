@@ -40,6 +40,21 @@ function makeLab(name: string) {
   });
 }
 
+describe("lab name validation (M-04)", () => {
+  it("accepts a simple name and rejects junk", () => {
+    expect(labs.isValidLabName("bio-101")).toBe(true);
+    expect(labs.isValidLabName("../etc")).toBe(false);
+    expect(labs.isValidLabName("a/b")).toBe(false);
+    expect(labs.isValidLabName("has space")).toBe(false);
+    expect(labs.isValidLabName("")).toBe(false);
+  });
+
+  it("createLab throws on an invalid name (no task enqueued)", () => {
+    expect(() => makeLab("bad/name")).toThrow(/Invalid lab name/);
+    expect(enqueueTask).not.toHaveBeenCalled();
+  });
+});
+
 describe("createLab", () => {
   it("inserts the lab, enqueues lab.create, and audits", () => {
     const lab = makeLab("bio");

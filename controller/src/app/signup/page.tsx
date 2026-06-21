@@ -1,5 +1,6 @@
 import { redirect } from "next/navigation";
 import { createAdmin, setSessionCookie } from "@/lib/auth";
+import { AUTH_LIMIT, clientIp, consume } from "@/lib/ratelimit";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,11 @@ async function signup(formData: FormData) {
   const email = String(formData.get("email") ?? "");
   const password = String(formData.get("password") ?? "");
   const token = String(formData.get("token") ?? "");
+  // Throttle by IP so the shared signup token can't be brute-forced at server speed (H-02).
+  const ip = await clientIp();
+  if (!consume(`signup:ip:${ip}`, AUTH_LIMIT)) {
+    redirect("/signup?error=Too+many+attempts.+Try+again+later.");
+  }
   try {
     const admin = await createAdmin(name, email, password, token);
     await setSessionCookie(admin);

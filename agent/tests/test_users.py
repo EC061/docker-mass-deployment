@@ -29,7 +29,9 @@ def test_add_user_script_creates_user_and_links(cap):
     assert "useradd -m -s /bin/bash" in script
     assert "ln -sfn /labusers/fast/" in script
     assert "ln -sfn /labusers/slow/" in script
-    assert "umask 000" in script
+    assert "umask 027" in script
+    # Students must NOT be granted sudo (H-05).
+    assert "sudo" not in script
     assert "chpasswd" in script
     # Password is in the piped script body, not in argv.
     assert "s3cret" in script

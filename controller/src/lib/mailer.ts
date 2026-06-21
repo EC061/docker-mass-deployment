@@ -67,12 +67,12 @@ export interface CredentialEmail {
 
 export async function sendGpuWarningEmail(
   to: string,
-  opts: { lab: string | null; pid: number; graceMinutes: number },
+  opts: { lab: string | null; pid: number | null; graceMinutes: number },
 ): Promise<SendResult> {
   return sendMail(
     to,
     "Idle GPU process warning",
-    `One of your processes (PID ${opts.pid}${opts.lab ? `, lab ${opts.lab}` : ""}) is holding GPU` +
+    `One of your processes (PID ${opts.pid ?? "?"}${opts.lab ? `, lab ${opts.lab}` : ""}) is holding GPU` +
       ` memory but is not using the GPU.\n\nIf it stays idle it will be terminated in about ` +
       `${opts.graceMinutes} minutes to free the GPU for others. If you still need it, start using ` +
       `the GPU again or contact an admin.\n\n— Lab Manager`,
@@ -81,12 +81,12 @@ export async function sendGpuWarningEmail(
 
 export async function sendGpuKillEmail(
   to: string,
-  opts: { lab: string | null; pid: number },
+  opts: { lab: string | null; pid: number | null },
 ): Promise<SendResult> {
   return sendMail(
     to,
     "Idle GPU process terminated",
-    `Your idle process (PID ${opts.pid}${opts.lab ? `, lab ${opts.lab}` : ""}) was terminated ` +
+    `Your idle process (PID ${opts.pid ?? "?"}${opts.lab ? `, lab ${opts.lab}` : ""}) was terminated ` +
       `because it held GPU memory without using the GPU. Please checkpoint long-running work and ` +
       `keep the GPU active, or ask an admin to whitelist your job.\n\n— Lab Manager`,
   );

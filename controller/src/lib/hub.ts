@@ -39,13 +39,32 @@ export function sendToNode(node: string, frame: unknown): boolean {
   return true;
 }
 
+// Frame ceiling: legitimate telemetry/log frames are a few KiB; cap well below the ws default
+// (~100 MiB) so one oversized frame can't balloon memory (M-02). Matches the agent's 8 MiB send cap.
+const MAX_FRAME_BYTES = 1024 * 1024; // 1 MiB
+// Per-connection message-rate cap: a token bucket refilling at RATE msgs/sec up to BURST.
+const MSG_RATE_PER_SEC = 50;
+const MSG_BURST = 100;
+
 export function createHub(): WebSocketServer {
-  const wss = new WebSocketServer({ noServer: true });
+  const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
 
   wss.on("connection", (ws: WebSocket) => {
     let node: string | null = null;
+    let tokens = MSG_BURST;
+    let lastRefill = Date.now();
 
     ws.on("message", (raw) => {
+      // Refill the bucket, then spend one token per message; flooding closes the socket.
+      const now = Date.now();
+      tokens = Math.min(MSG_BURST, tokens + ((now - lastRefill) / 1000) * MSG_RATE_PER_SEC);
+      lastRefill = now;
+      if (tokens < 1) {
+        ws.close(4008, "rate limit exceeded");
+        return;
+      }
+      tokens -= 1;
+
       let frame: any;
       try {
         frame = JSON.parse(raw.toString());
@@ -187,12 +206,12 @@ function handleLog(node: string, frame: any): void {
       frame.ts ?? Date.now(),
       node,
       frame.level ?? "INFO",
-      frame.source ?? null,
-      frame.lab ?? null,
-      frame.user ?? null,
-      frame.task_id ?? null,
-      frame.msg ?? "",
-      frame.detail ?? null,
+      boundedStr(frame.source, 32),
+      boundedStr(frame.lab, 40),
+      boundedStr(frame.user, 32),
+      boundedStr(frame.task_id, 64),
+      clampText(frame.msg, 2000) ?? "",
+      clampText(frame.detail, 8000),
     );
   maybeAlertOnLog({
     node,
@@ -203,34 +222,85 @@ function handleLog(node: string, frame: any): void {
   });
 }
 
-function handleEvent(node: string, frame: any): void {
-  const p = frame.payload ?? {};
-  if (frame.kind === "gpu") {
-    db()
-      .prepare(
-        `INSERT INTO gpu_events (node, pid, user, lab, vram_bytes, state, ts)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(node, p.pid ?? null, p.user ?? null, p.lab ?? null, p.vram_bytes ?? null, p.state ?? "idle", frame.ts ?? Date.now());
-    void emailGpuEvent(p);
-  }
+const GPU_STATES = new Set(["idle", "warned", "killed"]);
+// Per (node,user,state) outbound-mail throttle so a spamming node can't flood a student (M-01).
+const gpuMailState = new Map<string, number>();
+const GPU_MAIL_WINDOW_MS = 10 * 60 * 1000;
+
+/** Coerce an unknown field to a bounded string (control chars stripped) or null. */
+function boundedStr(v: unknown, max = 64): string | null {
+  if (typeof v !== "string") return null;
+  // eslint-disable-next-line no-control-regex
+  const clean = Array.from(v).filter((c) => c >= " " && c !== "\x7f").join("").slice(0, max);
+  return clean.length ? clean : null;
 }
 
-async function emailGpuEvent(p: any): Promise<void> {
+function intOrNull(v: unknown): number | null {
+  return typeof v === "number" && Number.isFinite(v) ? Math.trunc(v) : null;
+}
+
+/** Length-clamp a free-text field (msg/detail), preserving newlines/tabs; null if not a string. */
+function clampText(v: unknown, max: number): string | null {
+  if (typeof v !== "string") return null;
+  return v.slice(0, max);
+}
+
+function handleEvent(node: string, frame: any): void {
+  if (frame.kind !== "gpu") return;
+  const raw = frame.payload ?? {};
+  // Validate the payload before it touches the DB or an email (M-01).
+  const p = {
+    pid: intOrNull(raw.pid),
+    user: boundedStr(raw.user, 32),
+    lab: boundedStr(raw.lab, 40),
+    vram_bytes: intOrNull(raw.vram_bytes),
+    state: GPU_STATES.has(raw.state) ? (raw.state as string) : "idle",
+  };
+  db()
+    .prepare(
+      `INSERT INTO gpu_events (node, pid, user, lab, vram_bytes, state, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .run(node, p.pid, p.user, p.lab, p.vram_bytes, p.state, intOrNull(frame.ts) ?? Date.now());
+  void emailGpuEvent(node, p);
+}
+
+async function emailGpuEvent(
+  node: string,
+  p: { user: string | null; lab: string | null; pid: number | null; state: string },
+): Promise<void> {
   if (!p.user || (p.state !== "warned" && p.state !== "killed")) return;
+  // Only email a student the sending node actually hosts — a node can't target arbitrary students.
+  const owns = db()
+    .prepare(
+      `SELECT 1 FROM students
+         JOIN lab_members ON lab_members.student_id = students.id
+         JOIN labs ON labs.id = lab_members.lab_id
+         JOIN nodes ON nodes.id = labs.node_id
+        WHERE students.username = ? AND nodes.name = ? LIMIT 1`,
+    )
+    .get(p.user, node);
+  if (!owns) return;
   const row = db().prepare("SELECT email FROM students WHERE username = ?").get(p.user) as
     | { email: string | null }
     | undefined;
   if (!row?.email) return;
+  // Throttle repeated mail for the same (node,user,state).
+  const key = `${node}:${p.user}:${p.state}`;
+  const now = Date.now();
+  const last = gpuMailState.get(key) ?? 0;
+  if (now - last < GPU_MAIL_WINDOW_MS) return;
+  gpuMailState.set(key, now);
+
   const { sendGpuKillEmail, sendGpuWarningEmail } = await import("./mailer");
   if (p.state === "warned") {
     await sendGpuWarningEmail(row.email, {
-      lab: p.lab ?? null,
+      lab: p.lab,
       pid: p.pid,
       graceMinutes: getSetting("gpuGraceMinutes"),
     });
   } else {
-    await sendGpuKillEmail(row.email, { lab: p.lab ?? null, pid: p.pid });
+    await sendGpuKillEmail(row.email, { lab: p.lab, pid: p.pid });
   }
 }
 
