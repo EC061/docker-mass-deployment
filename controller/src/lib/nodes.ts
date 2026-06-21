@@ -10,6 +10,7 @@
 
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
+import { safeEqual } from "./auth";
 import { db } from "./db";
 import { env } from "./env";
 
@@ -63,7 +64,7 @@ export function verifyNodeAuth(name: string, token: string): NodeAuthResult {
 
   // Legacy: shared AGENT_TOKEN, only while the rollout flag permits it.
   if (!env.allowLegacyAgentToken) return { ok: false, reason: "legacy token disabled" };
-  if (token !== env.agentToken) return { ok: false, reason: "bad token" };
+  if (!safeEqual(token, env.agentToken)) return { ok: false, reason: "bad token" };
   return { ok: true };
 }
 

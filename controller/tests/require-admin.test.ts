@@ -41,7 +41,7 @@ describe("requireAdmin gate", () => {
   beforeAll(async () => {
     auth = await import("../src/lib/auth.js");
     db = await import("../src/lib/db.js");
-    const admin = await auth.createAdmin("Ed", "ed@uga.edu", "password123", "test-signup");
+    const admin = await auth.createAdmin("Ed", "ed@uga.edu", "password123456", "test-signup");
     adminId = admin.id;
   });
 

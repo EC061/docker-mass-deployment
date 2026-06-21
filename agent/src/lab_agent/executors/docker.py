@@ -14,13 +14,39 @@ The container mounts, fixed at creation:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 
 from .base import CommandResult, run
 
+# A docker image reference: optional registry/host, repo path, optional :tag and/or @sha256 digest.
+# Crucially it must not start with '-' (which docker would read as a flag) and contains no spaces.
+IMAGE_RE = re.compile(
+    r"^[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$"
+)
+# Environment variable names: conventional shell identifiers only.
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
 
 class DockerError(RuntimeError):
     pass
+
+
+def validate_image(image: str) -> str:
+    if not IMAGE_RE.match(image) or len(image) > 256:
+        raise DockerError(f"invalid image reference '{image}'")
+    return image
+
+
+def sanitize_env(env: dict) -> dict[str, str]:
+    """Keep only well-formed env keys with bounded, newline-free values (L-10)."""
+    out: dict[str, str] = {}
+    for key, value in env.items():
+        if not isinstance(key, str) or not ENV_KEY_RE.match(key):
+            continue
+        sval = str(value).replace("\n", "").replace("\r", "")[:1024]
+        out[key] = sval
+    return out
 
 
 def container_name(lab: str) -> str:
@@ -79,6 +105,7 @@ def build_run_args(
     if storage_quota_supported and opts.image_quota:
         args += ["--storage-opt", f"size={opts.image_quota}"]
     args += ["--restart", opts.restart]
+    validate_image(opts.image)
     # Shared lab data.
     args += ["-v", f"{mounts.fast_shared}:/labdata/fast"]
     args += ["-v", f"{mounts.slow_shared}:/labdata/slow"]
@@ -87,7 +114,7 @@ def build_run_args(
              f"type=bind,source={mounts.fast_users},target=/labusers/fast,bind-propagation=rshared"]
     args += ["--mount",
              f"type=bind,source={mounts.slow_users},target=/labusers/slow,bind-propagation=rshared"]
-    for key, value in opts.extra_env.items():
+    for key, value in sanitize_env(opts.extra_env).items():
         args += ["-e", f"{key}={value}"]
     args.append(opts.image)
     return args

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
+import { takeFlash } from "@/lib/flash";
 import { ago, fmtBytes, pct } from "@/lib/format";
 import { getLab } from "@/lib/labs";
 import { listMembers } from "@/lib/students";
@@ -44,10 +45,12 @@ export default async function LabDetail({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ newuser?: string; pw?: string; emailed?: string }>;
+  searchParams: Promise<{ newuser?: string; pwid?: string; emailed?: string }>;
 }) {
   const { id } = await params;
-  const { newuser, pw, emailed } = await searchParams;
+  const { newuser, pwid, emailed } = await searchParams;
+  // The cleartext password is fetched once from the server-side flash store, never the URL (M-07).
+  const pw = pwid ? takeFlash(pwid) : null;
   const labId = Number(id);
   const lab = getLab(labId);
   if (!lab) notFound();

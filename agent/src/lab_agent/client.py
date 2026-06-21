@@ -44,6 +44,14 @@ class Agent:
             return None
         ctx = ssl.create_default_context()
         if not self.cfg.tls_verify:
+            # The agent then sends AGENT_TOKEN over a link with no server authentication, so a MITM
+            # can harvest the fleet token. Loudly flag it (L-08); prefer pinning a CA instead.
+            self.log.warn(
+                "client",
+                "TLS verification is DISABLED (tls_verify=false): the controller is not "
+                "authenticated and the agent token can be intercepted by a man-in-the-middle. "
+                "Use a trusted/pinned CA instead for anything beyond a closed lab network.",
+            )
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
         return ctx
@@ -183,7 +191,15 @@ class Agent:
                         "state": "killed" if d.action == "kill" else "warned",
                     }
                     if d.action == "kill":
-                        await asyncio.to_thread(monitor.kill_pid, d.pid)
+                        # Re-verify the PID identity right before killing (M-06): if the original
+                        # process already exited and the PID was recycled, skip the kill.
+                        killed = await asyncio.to_thread(
+                            monitor.kill_pid, d.pid, d.proc.get("start_time")
+                        )
+                        if not killed:
+                            self.log.info("gpu", f"skipped kill of pid {d.pid}: process gone",
+                                          lab=d.lab, user=d.user)
+                            continue
                         self.log.warn("gpu", f"killed idle GPU pid {d.pid} (user={d.user})",
                                       lab=d.lab, user=d.user)
                     else:
