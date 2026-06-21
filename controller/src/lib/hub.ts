@@ -230,7 +230,6 @@ const GPU_MAIL_WINDOW_MS = 10 * 60 * 1000;
 /** Coerce an unknown field to a bounded string (control chars stripped) or null. */
 function boundedStr(v: unknown, max = 64): string | null {
   if (typeof v !== "string") return null;
-  // eslint-disable-next-line no-control-regex
   const clean = Array.from(v).filter((c) => c >= " " && c !== "\x7f").join("").slice(0, max);
   return clean.length ? clean : null;
 }
