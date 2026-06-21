@@ -34,4 +34,6 @@ COPY --from=build /app/src ./src
 RUN mkdir -p /app/data && chown -R app:app /app
 USER app
 EXPOSE 8443
-CMD ["npx", "tsx", "server.ts"]
+# Invoke the tsx binary that's already in node_modules rather than `npx tsx`, which can reach out to
+# the network to fetch a missing package at boot (L-07).
+CMD ["node_modules/.bin/tsx", "server.ts"]
