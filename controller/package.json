@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "@russellthehippo/honker-node": "^0.3.3",
-    "bcryptjs": "^2.4.3",
+    "bcryptjs": "^3.0.3",
     "better-sqlite3": "^12.11.1",
     "jose": "^6.2.3",
     "next": "^15.5.19",
@@ -27,7 +27,7 @@
     "postcss": "^8.5.10"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
+    "@types/bcryptjs": "^3.0.0",
     "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^26.0.0",
     "@types/nodemailer": "^8.0.1",
