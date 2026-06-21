@@ -197,6 +197,16 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     ALTER TABLE nodes ADD COLUMN scrub_status TEXT;       -- JSON: latest per-pool scrub status
     `,
   },
+  {
+    id: "0003_admin_session_state",
+    sql: `
+    -- is_active soft-disables an admin without deleting the row; token_version is embedded in the
+    -- session JWT so bumping it (logout-all / disable) invalidates all of that admin's outstanding
+    -- cookies. requireAdmin() re-checks both against the DB on every privileged action.
+    ALTER TABLE admins ADD COLUMN is_active INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE admins ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

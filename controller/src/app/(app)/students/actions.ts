@@ -1,11 +1,16 @@
 "use server";
 
 import { redirect } from "next/navigation";
-import { currentAdmin } from "@/lib/auth";
+import { requireAdmin } from "@/lib/auth";
 import { applyMapping, parseCsv } from "@/lib/csv";
 import { addStudentToLab } from "@/lib/students";
 
+// Upper bound on rows per import — prevents one POST from enqueuing thousands of root-agent useradd
+// tasks (H-06). Anything beyond this is rejected outright rather than silently truncated.
+const MAX_IMPORT_ROWS = 500;
+
 export async function importCsvAction(formData: FormData) {
+  const actor = (await requireAdmin()).email;
   const labId = Number(formData.get("labId"));
   const text = String(formData.get("csv") ?? "");
   const mapping = {
@@ -18,7 +23,9 @@ export async function importCsvAction(formData: FormData) {
 
   const parsed = parseCsv(text);
   const rows = applyMapping(parsed, mapping);
-  const actor = (await currentAdmin())?.email;
+  if (rows.length > MAX_IMPORT_ROWS) {
+    redirect(`/students?error=${encodeURIComponent(`Too many rows (${rows.length}); max ${MAX_IMPORT_ROWS} per import`)}`);
+  }
 
   let added = 0;
   let skipped = 0;

@@ -91,8 +91,13 @@ export async function listBackups(): Promise<string[]> {
 /** Download a backup and stage it; takes effect on the next controller restart. */
 export async function stageRestore(name: string): Promise<{ ok: boolean; error?: string }> {
   if (!isWebdavConfigured()) return { ok: false, error: "WebDAV not configured" };
+  // Whitelist against the actual backup list — never fetch an attacker-chosen name onto disk as the
+  // next-boot DB. basename() already blocks traversal; this also blocks substituting a foreign file.
+  const safe = basename(name);
+  const known = await listBackups();
+  if (!known.includes(safe)) return { ok: false, error: "Unknown backup name" };
   try {
-    const data = await webdav.get(webdavConfig(), basename(name));
+    const data = await webdav.get(webdavConfig(), safe);
     writeFileSync(`${env.dbPath}.restore`, data);
     return { ok: true };
   } catch (err) {
