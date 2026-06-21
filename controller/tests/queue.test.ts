@@ -74,7 +74,7 @@ describe("claim / ack", () => {
 describe("markTaskState", () => {
   it("transitions task_log state and stores the result", () => {
     const frame = queue.enqueueTask("gpu-1", "lab.create", { lab: "y" });
-    queue.markTaskState(frame.id, "ok", { container: "abc" });
+    expect(queue.markTaskState("gpu-1", frame.id, "ok", { container: "abc" })).toBe(true);
     const row = dbmod.db().prepare("SELECT * FROM task_log WHERE task_uuid = ?").get(frame.id) as any;
     expect(row.state).toBe("ok");
     expect(JSON.parse(row.result)).toEqual({ container: "abc" });
@@ -83,10 +83,19 @@ describe("markTaskState", () => {
 
   it("stores an error string on failure", () => {
     const frame = queue.enqueueTask("gpu-1", "lab.create");
-    queue.markTaskState(frame.id, "failed", undefined, "boom");
+    expect(queue.markTaskState("gpu-1", frame.id, "failed", undefined, "boom")).toBe(true);
     const row = dbmod.db().prepare("SELECT * FROM task_log WHERE task_uuid = ?").get(frame.id) as any;
     expect(row.state).toBe("failed");
     expect(row.result).toBeNull();
     expect(row.error).toBe("boom");
+  });
+
+  it("refuses to mutate a task that belongs to a different node (H-03)", () => {
+    const frame = queue.enqueueTask("node-owner", "student.add", { username: "alice" });
+    // A spoofing agent ("node-evil") tries to complete node-owner's task.
+    expect(queue.markTaskState("node-evil", frame.id, "ok", { hijacked: true })).toBe(false);
+    const row = dbmod.db().prepare("SELECT * FROM task_log WHERE task_uuid = ?").get(frame.id) as any;
+    expect(row.state).toBe("queued"); // untouched
+    expect(row.result).toBeNull();
   });
 });

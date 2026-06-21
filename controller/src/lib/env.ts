@@ -40,4 +40,10 @@ export const env = {
   get isProd(): boolean {
     return process.env.NODE_ENV === "production";
   },
+  // During the per-node-token rollout the shared AGENT_TOKEN still authenticates nodes whose row is
+  // auth_mode='legacy'. Set ALLOW_LEGACY_AGENT_TOKEN=0 once every node has its own token to refuse
+  // the shared token fleet-wide. Defaults on for backward compatibility.
+  get allowLegacyAgentToken(): boolean {
+    return process.env.ALLOW_LEGACY_AGENT_TOKEN !== "0";
+  },
 };

@@ -75,6 +75,19 @@ class Agent:
                     await self._on_connected(ws)
             except asyncio.CancelledError:
                 raise
+            except websockets.exceptions.ConnectionClosed as exc:
+                # The hub closes with a 40xx code + reason when it rejects our identity. Surface it
+                # clearly so operators know to (re)provision rather than chase a network ghost.
+                code = getattr(exc, "code", None)
+                reason = getattr(exc, "reason", "") or ""
+                if code in (4001, 4003):
+                    self.log.error(
+                        "client",
+                        f"controller rejected this node (code {code}: {reason}). "
+                        "Provision/rotate its token in the UI and run `lab-agent set-token`.",
+                    )
+                else:
+                    self.log.warn("client", f"connection closed (code {code}: {reason})")
             except Exception as exc:  # connection refused/dropped/etc.
                 self.log.warn("client", f"controller connection failed: {exc}")
             self._connected.clear()

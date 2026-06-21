@@ -207,6 +207,20 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     ALTER TABLE admins ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    id: "0004_node_tokens",
+    sql: `
+    -- Per-node identity. token_hash is the bcrypt hash of a node's own token (NULL = not yet
+    -- provisioned); allowed is the name allow-list flag; token_pinned_at records first successful
+    -- per-node auth (first-seen pin); auth_mode is 'legacy' (shared AGENT_TOKEN) or 'pernode'.
+    ALTER TABLE nodes ADD COLUMN token_hash TEXT;
+    ALTER TABLE nodes ADD COLUMN allowed INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE nodes ADD COLUMN token_pinned_at INTEGER;
+    ALTER TABLE nodes ADD COLUMN auth_mode TEXT NOT NULL DEFAULT 'legacy';
+    -- Pre-existing nodes were trusted under the shared token; keep them connecting on upgrade.
+    UPDATE nodes SET allowed = 1, auth_mode = 'legacy';
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

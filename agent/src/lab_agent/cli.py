@@ -22,7 +22,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
 def _cmd_install(args: argparse.Namespace) -> int:
     from .installer import install
 
-    cfg = AgentConfig(controller_url=args.controller, token=args.token)
+    cfg = AgentConfig(controller_url=args.controller, token=args.token or "")
     if args.node_name:
         cfg.node_name = args.node_name
     if args.fast_pool:
@@ -41,6 +41,31 @@ def _cmd_install(args: argparse.Namespace) -> int:
     result = install(cfg, config_path, enable=not args.no_enable)
     for key, value in result.items():
         print(f"{key}: {value}")
+    if not cfg.token:
+        print(
+            "note: no token set yet. Provision this node in the controller UI (Nodes -> "
+            "Provision token), then run: sudo lab-agent set-token <TOKEN>"
+        )
+    return 0
+
+
+def _cmd_set_token(args: argparse.Namespace) -> int:
+    """Write a controller-issued per-node token into the existing config and restart the service."""
+    import os
+
+    from .config import save_config
+
+    config_path = Path(args.config) if args.config else DEFAULT_CONFIG_PATH
+    cfg = load_config(config_path)
+    cfg.token = args.token
+    saved = save_config(cfg, config_path)
+    print(f"token written: {saved}")
+    if args.no_restart:
+        print("restart skipped; run `systemctl restart lab-agent` to apply.")
+        return 0
+    rc = os.system("systemctl restart lab-agent.service")
+    print("restarted lab-agent.service" if rc == 0 else
+          "could not restart automatically; run `systemctl restart lab-agent` manually.")
     return 0
 
 
@@ -76,7 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_install = sub.add_parser("install", help="write config + systemd unit")
     p_install.add_argument("--controller", required=True, help="controller URL, e.g. wss://host:port")
-    p_install.add_argument("--token", required=True, help="agent auth token")
+    p_install.add_argument("--token", help="per-node token from the controller UI (or set it later "
+                                          "with `lab-agent set-token`)")
     p_install.add_argument("--node-name", help="override node name (default: hostname)")
     p_install.add_argument("--fast-pool", help="fast ZFS pool name (default: fast)")
     p_install.add_argument("--slow-pool", help="slow ZFS pool name (default: slow)")
@@ -91,6 +117,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--no-enable", action="store_true",
                            help="write files but do not enable/start the service")
     p_install.set_defaults(func=_cmd_install)
+
+    p_set_token = sub.add_parser("set-token", help="write a controller-issued token and restart")
+    p_set_token.add_argument("token", help="the per-node token shown in the controller UI")
+    p_set_token.add_argument("--no-restart", action="store_true",
+                             help="write the token but do not restart the service")
+    p_set_token.set_defaults(func=_cmd_set_token)
 
     p_doctor = sub.add_parser("doctor", help="check zfs/docker/nvidia/pools")
     p_doctor.set_defaults(func=_cmd_doctor)

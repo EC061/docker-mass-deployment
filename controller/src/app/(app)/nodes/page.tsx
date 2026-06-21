@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { provisionNodeAction, revokeNodeAction, rotateNodeTokenAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -9,6 +10,9 @@ interface NodeRow {
   capabilities: string | null;
   pools: string | null;
   scrub_status: string | null;
+  allowed: number;
+  auth_mode: string;
+  token_pinned_at: number | null;
 }
 
 interface ScrubEntry {
@@ -58,14 +62,63 @@ function ago(ts: number | null): string {
   return `${Math.floor(s / 3600)}h ago`;
 }
 
-export default function NodesPage() {
+function authLabel(n: NodeRow): string {
+  if (n.allowed !== 1) return "revoked";
+  if (n.auth_mode === "pernode") return n.token_pinned_at ? "per-node" : "per-node (pending)";
+  return "legacy token";
+}
+
+export default async function NodesPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await searchParams;
+  const provisioned = typeof sp.provisioned === "string" ? sp.provisioned : undefined;
+  const token = typeof sp.token === "string" ? sp.token : undefined;
+  const error = typeof sp.error === "string" ? sp.error : undefined;
+
   const nodes = db()
-    .prepare("SELECT name, online, last_seen, capabilities, pools, scrub_status FROM nodes ORDER BY name")
+    .prepare(
+      "SELECT name, online, last_seen, capabilities, pools, scrub_status, allowed, auth_mode, token_pinned_at FROM nodes ORDER BY name",
+    )
     .all() as NodeRow[];
 
   return (
     <>
       <h2>Nodes</h2>
+
+      {error && (
+        <div className="card" style={{ borderColor: "var(--warn)", marginBottom: 16 }}>
+          <p style={{ color: "var(--warn)" }}>{error}</p>
+        </div>
+      )}
+
+      {provisioned && token && (
+        <div className="card" style={{ borderColor: "var(--accent, #5fa0c2)", marginBottom: 16 }}>
+          <h3>Token for node “{provisioned}”</h3>
+          <p className="muted">Shown once. Run this on the node, then the agent reconnects automatically:</p>
+          <pre style={{ overflowX: "auto", padding: 12, background: "var(--panel-2)" }}>
+            <code>sudo lab-agent set-token {token}</code>
+          </pre>
+          <p className="muted" style={{ fontSize: 12 }}>
+            (Equivalent to writing the token into <code>/etc/lab-agent/config.toml</code> and running
+            <code> systemctl restart lab-agent</code>.)
+          </p>
+        </div>
+      )}
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <h3>Register a node</h3>
+        <form action={provisionNodeAction} style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input name="name" placeholder="node name (e.g. gpu-01)" required pattern="[a-z0-9][a-z0-9\-]{0,62}" />
+          <button type="submit">Provision token</button>
+        </form>
+        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
+          Adds the node to the allow-list and issues a per-node token. Only allow-listed nodes may connect.
+        </p>
+      </div>
+
       <div className="card">
         {nodes.length === 0 ? (
           <p className="muted">No nodes have connected yet.</p>
@@ -75,12 +128,14 @@ export default function NodesPage() {
               <tr>
                 <th>Node</th>
                 <th>Status</th>
+                <th>Auth</th>
                 <th>GPUs</th>
                 <th>Pools</th>
                 <th>Cold storage</th>
                 <th>Scrub</th>
                 <th>Issues</th>
                 <th>Last seen</th>
+                <th>Token</th>
               </tr>
             </thead>
             <tbody>
@@ -100,6 +155,7 @@ export default function NodesPage() {
                         {n.online ? "online" : "offline"}
                       </span>
                     </td>
+                    <td style={n.allowed !== 1 ? { color: "var(--warn)" } : undefined}>{authLabel(n)}</td>
                     <td>{caps.gpu_count ?? 0}</td>
                     <td>
                       {pools.length === 0
@@ -116,6 +172,20 @@ export default function NodesPage() {
                       )}
                     </td>
                     <td className="muted">{ago(n.last_seen)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>
+                      <form action={rotateNodeTokenAction} style={{ display: "inline" }}>
+                        <input type="hidden" name="name" value={n.name} />
+                        <button type="submit" style={{ background: "var(--panel-2)" }}>Rotate</button>
+                      </form>{" "}
+                      {n.allowed === 1 && (
+                        <form action={revokeNodeAction} style={{ display: "inline" }}>
+                          <input type="hidden" name="name" value={n.name} />
+                          <button type="submit" style={{ background: "var(--panel-2)", color: "var(--warn)" }}>
+                            Revoke
+                          </button>
+                        </form>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
