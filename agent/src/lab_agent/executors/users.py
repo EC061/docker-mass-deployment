@@ -39,16 +39,18 @@ def _run_script(container: str, script: str) -> CommandResult:
 def add_user(container: str, username: str, password: str) -> CommandResult:
     validate_username(username)
     # Password is embedded in the stdin-piped script body, never in argv.
+    # Students are NOT added to sudo (H-05): a brute-forced/shared student password would otherwise
+    # grant container root and a host-escalation foothold. umask 027 keeps each student's files
+    # private to themselves instead of world-writable.
     script = f"""set -e
 u={username}
 if ! id "$u" >/dev/null 2>&1; then useradd -m -s /bin/bash "$u"; fi
-usermod -aG sudo "$u" 2>/dev/null || true
 mkdir -p /labusers/fast/"$u" /labusers/slow/"$u"
 chown "$u":"$u" /labusers/fast/"$u" /labusers/slow/"$u"
 ln -sfn /labusers/fast/"$u" /home/"$u"/scratch
 ln -sfn /labusers/slow/"$u" /home/"$u"/cold-storage
 chown -h "$u":"$u" /home/"$u"/scratch /home/"$u"/cold-storage
-grep -q 'umask 000' /home/"$u"/.bashrc 2>/dev/null || echo 'umask 000' >> /home/"$u"/.bashrc
+grep -q '^umask ' /home/"$u"/.bashrc 2>/dev/null || echo 'umask 027' >> /home/"$u"/.bashrc
 printf '%s:%s' "$u" {_shell_quote(password)} | chpasswd
 """
     return _run_script(container, script)

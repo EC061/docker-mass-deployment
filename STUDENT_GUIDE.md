@@ -52,7 +52,8 @@ the GPU active while you need it. If you have a legitimate long idle job, ask an
 
 - Check your GPU usage with `nvidia-smi`.
 - Put large data in `~/scratch` (fast) while training; move finished results to `~/cold-storage`.
-- Files you create are group-writable by default (`umask 000`) so teammates in shared folders can edit
-  them.
+- Files you create default to `umask 027` — readable/writable by you, not by other students. To
+  share a file with a teammate, grant access explicitly (e.g. `chmod g+rw <file>` within a shared
+  group folder) rather than making everything world-writable.
 
 If something isn't working, contact your lab admin.

@@ -6,6 +6,15 @@
 import { db } from "./db";
 import { enqueueTask } from "./queue";
 
+// Lab names become ZFS dataset components and the docker container name on a root agent. Usernames
+// are already strictly gated everywhere; close the asymmetry by allow-listing lab names too (M-04):
+// a leading alphanumeric then alphanumerics/hyphen/underscore, no slashes/dots/whitespace, <= 40.
+export const LAB_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/;
+
+export function isValidLabName(name: string): boolean {
+  return LAB_NAME_RE.test(name);
+}
+
 export interface Lab {
   id: number;
   name: string;
@@ -62,6 +71,9 @@ export interface CreateLabInput {
 }
 
 export function createLab(input: CreateLabInput): Lab {
+  if (!isValidLabName(input.name)) {
+    throw new Error("Invalid lab name (use letters, digits, hyphen or underscore; max 40 chars)");
+  }
   const node = db().prepare("SELECT name FROM nodes WHERE id = ?").get(input.nodeId) as
     | { name: string }
     | undefined;

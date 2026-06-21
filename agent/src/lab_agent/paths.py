@@ -12,15 +12,28 @@ Layout (per node), rooted on the configured pools:
 
 from __future__ import annotations
 
+import re
+
 from .config import AgentConfig
+
+# Defense-in-depth: the controller already allow-lists lab names (lib/labs.ts), but the agent runs
+# as root, so it re-validates before a name is ever interpolated into a dataset/container argument
+# (M-04). Same shape as the controller's LAB_NAME_RE.
+LAB_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$")
+
+
+def validate_lab_name(lab: str) -> str:
+    if not LAB_NAME_RE.match(lab):
+        raise ValueError(f"invalid lab name '{lab}'")
+    return lab
 
 
 def lab_fast(cfg: AgentConfig, lab: str) -> str:
-    return f"{cfg.labs_fast_root}/{lab}"
+    return f"{cfg.labs_fast_root}/{validate_lab_name(lab)}"
 
 
 def lab_slow(cfg: AgentConfig, lab: str) -> str:
-    return f"{cfg.labs_slow_root}/{lab}"
+    return f"{cfg.labs_slow_root}/{validate_lab_name(lab)}"
 
 
 def lab_fast_shared(cfg: AgentConfig, lab: str) -> str:
@@ -55,7 +68,7 @@ def user_cold(cfg: AgentConfig, lab: str, user: str) -> str:
 
 
 def cold_lab(cfg: AgentConfig, lab: str) -> str:
-    return f"{cfg.cold_root}/{lab}"
+    return f"{cfg.cold_root}/{validate_lab_name(lab)}"
 
 
 def cold_lab_shared(cfg: AgentConfig, lab: str) -> str:
