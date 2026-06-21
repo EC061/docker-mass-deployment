@@ -76,14 +76,15 @@ export function claimTask(node: string, workerId: string): { jobId: number; fram
   return { jobId: job.id, frame: job.payload as TaskFrame };
 }
 
-export function ackTask(node: string, jobId: number): void {
-  nodeQueue(node).ackBatch([jobId]);
+export function ackTask(node: string, jobId: number, workerId: string): void {
+  // honker_ack only releases the job for the worker that claimed it, so the worker id is required.
+  nodeQueue(node).ackBatch([jobId], workerId);
 }
 
-export function retryTask(node: string, jobId: number, error: string): void {
-  // honker exposes per-job retry; claim again then retry. Simpler: re-enqueue via internal _retry.
+export function retryTask(node: string, jobId: number, workerId: string, error: string): void {
+  // honker exposes per-job retry; signature is _retry(jobId, workerId, delaySeconds, error).
   try {
-    nodeQueue(node)._retry(jobId, 5, error);
+    nodeQueue(node)._retry(jobId, workerId, 5, error);
   } catch {
     /* if the job already expired it will be redelivered anyway */
   }

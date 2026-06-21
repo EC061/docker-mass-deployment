@@ -105,10 +105,10 @@ function drainNode(node: string, ws: WebSocket): void {
     if (!claimed) break;
     try {
       ws.send(JSON.stringify(claimed.frame));
-      ackTask(node, claimed.jobId);
+      ackTask(node, claimed.jobId, workerId);
       markTaskState(claimed.frame.id, "sent");
     } catch {
-      retryTask(node, claimed.jobId, "send failed");
+      retryTask(node, claimed.jobId, workerId, "send failed");
       break;
     }
   }
