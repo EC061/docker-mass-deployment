@@ -90,10 +90,23 @@ export function retryTask(node: string, jobId: number, workerId: string, error: 
   }
 }
 
-export function markTaskState(taskUuid: string, state: string, result?: unknown, error?: string): void {
-  db()
+/**
+ * Update a task's lifecycle state, bound to the node the task was queued for. Returns true if a row
+ * matched. The `node` binding means a compromised/spoofing agent cannot complete, fail, or poison a
+ * task that belongs to a different node (H-03) — a foreign UUID simply matches nothing.
+ */
+export function markTaskState(
+  node: string,
+  taskUuid: string,
+  state: string,
+  result?: unknown,
+  error?: string,
+): boolean {
+  const info = db()
     .prepare(
-      `UPDATE task_log SET state = ?, result = ?, error = ?, updated_at = ? WHERE task_uuid = ?`,
+      `UPDATE task_log SET state = ?, result = ?, error = ?, updated_at = ?
+       WHERE task_uuid = ? AND node = ?`,
     )
-    .run(state, result === undefined ? null : JSON.stringify(result), error ?? null, Date.now(), taskUuid);
+    .run(state, result === undefined ? null : JSON.stringify(result), error ?? null, Date.now(), taskUuid, node);
+  return info.changes > 0;
 }

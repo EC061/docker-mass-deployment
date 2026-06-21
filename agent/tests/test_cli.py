@@ -78,6 +78,51 @@ def test_install_enables_by_default(monkeypatch):
     assert captured["enable"] is True
 
 
+def test_install_allows_no_token(monkeypatch, capsys):
+    """Token may be supplied later via set-token; install must not require it."""
+    import lab_agent.installer as installer
+
+    captured = {}
+
+    def fake_install(cfg, path, *, enable):
+        captured["cfg"] = cfg
+        return {"status": "written (not enabled)"}
+
+    monkeypatch.setattr(installer, "install", fake_install)
+    rc = cli.main(["install", "--controller", "wss://ctl:8443", "--no-enable"])
+    assert rc == 0
+    assert captured["cfg"].token == ""
+    assert "set-token" in capsys.readouterr().out
+
+
+def test_set_token_writes_config_and_restarts(monkeypatch, tmp_path):
+    from lab_agent.config import render_config
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(render_config(AgentConfig(controller_url="wss://ctl:8443", token="old")))
+
+    calls = {}
+    monkeypatch.setattr("os.system", lambda cmd: calls.__setitem__("cmd", cmd) or 0)
+
+    rc = cli.main(["--config", str(config_path), "set-token", "new-token-value"])
+    assert rc == 0
+    assert 'token = "new-token-value"' in config_path.read_text()
+    assert "restart" in calls["cmd"] and "lab-agent" in calls["cmd"]
+
+
+def test_set_token_no_restart(monkeypatch, tmp_path, capsys):
+    from lab_agent.config import render_config
+
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(render_config(AgentConfig(controller_url="wss://ctl:8443", token="old")))
+
+    monkeypatch.setattr("os.system", lambda cmd: (_ for _ in ()).throw(AssertionError("should not restart")))
+    rc = cli.main(["--config", str(config_path), "set-token", "new-token", "--no-restart"])
+    assert rc == 0
+    assert 'token = "new-token"' in config_path.read_text()
+    assert "restart skipped" in capsys.readouterr().out
+
+
 def _caps(issues):
     fields = dict(
         zfs=True, docker=True, docker_zfs_driver=True, nvidia_runtime=False, nvidia_gpu=False,

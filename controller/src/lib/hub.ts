@@ -13,8 +13,8 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { alertNodeOffline, alertTaskFailed, maybeAlertOnLog } from "./alerts";
 import { db } from "./db";
-import { env } from "./env";
 import { ingestTelemetry, storeOldfileScan } from "./ingest";
+import { verifyNodeAuth } from "./nodes";
 import { ackTask, claimTask, markTaskState, retryTask } from "./queue";
 import { getSetting } from "./settings";
 
@@ -73,24 +73,32 @@ export function createHub(): WebSocketServer {
 }
 
 function handleHello(ws: WebSocket, frame: any): string | null {
-  if (frame.token !== env.agentToken) {
-    ws.close(4001, "bad token");
+  const node = String(frame.node ?? "");
+  // Per-node identity: name must be on the allow-list AND the credential must verify (C-04, M-03).
+  const auth = verifyNodeAuth(node, String(frame.token ?? ""));
+  if (!auth.ok) {
+    ws.close(4001, auth.reason ?? "unauthorized");
     return null;
   }
-  const node = String(frame.node);
-  registerNode(node, frame.capabilities ?? {});
 
-  // Replace any stale connection for this node.
+  // Do NOT let a newcomer steal a live node's queue. Only supersede a dead/closing socket; a real
+  // duplicate is refused. A genuinely half-open peer is closed by the 20s ws ping timeout, after
+  // which its slot frees and the agent reconnects normally.
   const existing = connections.get(node);
+  if (existing && existing.ws.readyState === existing.ws.OPEN) {
+    ws.close(4003, "node already connected");
+    return null;
+  }
   if (existing) {
     clearInterval(existing.consumer);
     try {
-      existing.ws.close(4002, "superseded");
+      existing.ws.close();
     } catch {
       /* ignore */
     }
   }
 
+  registerNode(node, frame.capabilities ?? {});
   const consumer = setInterval(() => drainNode(node, ws), 400);
   connections.set(node, { ws, node, consumer });
   return node;
@@ -106,7 +114,7 @@ function drainNode(node: string, ws: WebSocket): void {
     try {
       ws.send(JSON.stringify(claimed.frame));
       ackTask(node, claimed.jobId, workerId);
-      markTaskState(claimed.frame.id, "sent");
+      markTaskState(node, claimed.frame.id, "sent");
     } catch {
       retryTask(node, claimed.jobId, workerId, "send failed");
       break;
@@ -119,7 +127,7 @@ function drainNode(node: string, ws: WebSocket): void {
 function ingestFrame(node: string, frame: any): void {
   switch (frame.type) {
     case "result":
-      handleResult(frame);
+      handleResult(node, frame);
       break;
     case "log":
       handleLog(node, frame);
@@ -135,13 +143,17 @@ function ingestFrame(node: string, frame: any): void {
   }
 }
 
-function handleResult(frame: any): void {
-  markTaskState(
+function handleResult(node: string, frame: any): void {
+  // Bind the result to the node the task was queued for. A foreign/unknown UUID matches no row, so a
+  // spoofing agent can't complete, fail, or poison another node's task (H-03). Drop it silently.
+  const changed = markTaskState(
+    node,
     frame.id,
     frame.ok ? "ok" : "failed",
     frame.result,
     frame.ok ? undefined : frame.error,
   );
+  if (!changed) return;
   if (!frame.ok) {
     const t = db().prepare("SELECT node, action FROM task_log WHERE task_uuid = ?").get(frame.id) as
       | { node: string; action: string }
