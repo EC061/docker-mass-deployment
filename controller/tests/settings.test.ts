@@ -28,6 +28,9 @@ describe("getSetting / setSetting", () => {
   it("returns the typed default when unset", () => {
     expect(settings.getSetting("fastQuotaDefaultBytes")).toBe(2 * settings.TIB);
     expect(settings.getSetting("alertLevel")).toBe("ERROR");
+    // Nightly old-file scan defaults (enabled, daily).
+    expect(settings.getSetting("oldFileScanEnabled")).toBe(true);
+    expect(settings.getSetting("oldFileScanIntervalDays")).toBe(1);
   });
 
   it("roundtrips a value through JSON", () => {

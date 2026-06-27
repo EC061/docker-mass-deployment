@@ -8,13 +8,16 @@ def _cfg():
     return AgentConfig(controller_url="ws://x", token="t", node_name="n")
 
 
-def _patch_common(monkeypatch, *, nvidia_runtime=True, nvidia_gpu=True):
+def _patch_common(monkeypatch, *, nvidia_runtime=True, nvidia_gpu=True, nvidia_cdi=True):
     monkeypatch.setattr(containerops.zfs, "get_mountpoint",
                         lambda ds: f"/mnt/{ds.replace('/', '_')}")
     monkeypatch.setattr(containerops.coldstore, "shared_mount", lambda cfg, lab: f"/cold/{lab}/shared")
     monkeypatch.setattr(containerops.coldstore, "users_mount", lambda cfg, lab: f"/cold/{lab}/users")
     monkeypatch.setattr(containerops, "detect_capabilities",
-                        lambda cfg: SimpleNamespace(nvidia_runtime=nvidia_runtime, nvidia_gpu=nvidia_gpu))
+                        lambda cfg: SimpleNamespace(nvidia_runtime=nvidia_runtime,
+                                                    nvidia_gpu=nvidia_gpu, nvidia_cdi=nvidia_cdi))
+    # Recreate resets the lab's apt-upgrade record; stub the on-disk write in unit tests.
+    monkeypatch.setattr(containerops.maintenance_state, "mark_unpatched", lambda cfg, lab: None)
 
 
 def test_mounts_built_from_paths_and_coldstore(monkeypatch):
@@ -44,8 +47,9 @@ def test_ensure_container_removes_old_then_creates(monkeypatch):
     assert events == [("remove", "lab-bio"), ("create", "lab-bio", True)]
 
 
-def test_ensure_container_disables_gpus_without_runtime(monkeypatch):
-    _patch_common(monkeypatch, nvidia_runtime=False, nvidia_gpu=True)
+def test_ensure_container_disables_gpus_without_cdi(monkeypatch):
+    # GPUs are attached via CDI under sysbox; without a CDI spec we launch GPU-less.
+    _patch_common(monkeypatch, nvidia_gpu=True, nvidia_cdi=False)
     captured = {}
     monkeypatch.setattr(containerops.docker, "remove_container", lambda name: None)
     monkeypatch.setattr(containerops.docker, "create_container",

@@ -47,6 +47,17 @@ class AgentConfig:
     # Local cache DB for the durable task buffer + offline event/log buffer.
     state_db: str = "/var/lib/lab-agent/state.db"
     heartbeat_interval_s: int = 15
+    # How often the per-lab labquota usage snapshot is republished (live ZFS metadata only — cheap).
+    usage_publish_interval_s: int = 120
+    # How often the (expensive) docker writable-layer scan runs unprompted, and the freshness gate
+    # below which a student-requested refresh is skipped as "already fresh".
+    docker_scan_interval_s: int = 3600
+    # Weekly in-container security patching (docker exec apt-get update && upgrade), driven by the
+    # agent off a persistent local record so the pinned base image never needs rebuilding for CVEs.
+    apt_update_enabled: bool = True
+    apt_update_interval_s: int = 604800  # per-lab patch cadence (default weekly)
+    apt_update_check_interval_s: int = 3600  # how often the loop wakes to see what is due
+    apt_update_timeout_s: int = 1800  # ceiling for each apt-get update/upgrade call
     # TLS verification can be disabled for self-signed controllers on a trusted LAN.
     tls_verify: bool = True
 
@@ -66,6 +77,12 @@ class AgentConfig:
     def cold_root(self) -> str:
         """Filesystem root holding labs on an SMB cold-storage mount (smb backend only)."""
         return f"{self.slow_path.rstrip('/')}/labs"
+
+    @property
+    def maintenance_state(self) -> str:
+        """Persistent per-lab maintenance bookkeeping file (apt-upgrade timestamps), beside the
+        durable state DB so it shares the agent's private state directory."""
+        return os.path.join(os.path.dirname(self.state_db) or ".", "maintenance.json")
 
     @property
     def docker_dataset(self) -> str:
@@ -107,6 +124,12 @@ def load_config(path: Path | None = None) -> AgentConfig:
         "slow_shared",
         "state_db",
         "heartbeat_interval_s",
+        "usage_publish_interval_s",
+        "docker_scan_interval_s",
+        "apt_update_enabled",
+        "apt_update_interval_s",
+        "apt_update_check_interval_s",
+        "apt_update_timeout_s",
         "tls_verify",
     ):
         if key in agent and agent[key] is not None:
@@ -141,6 +164,12 @@ def render_config(cfg: AgentConfig) -> str:
         "slow_shared",
         "state_db",
         "heartbeat_interval_s",
+        "usage_publish_interval_s",
+        "docker_scan_interval_s",
+        "apt_update_enabled",
+        "apt_update_interval_s",
+        "apt_update_check_interval_s",
+        "apt_update_timeout_s",
         "tls_verify",
     ):
         lines.append(f"{key} = {_toml_value(getattr(cfg, key))}")

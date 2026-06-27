@@ -19,6 +19,10 @@ export interface Settings {
   sshPortStart: number;
   sshPortEnd: number;
   oldFileThresholdDays: number;
+  // Nightly old-file scan. The controller enqueues oldfiles.scan to each lab's node when due; the
+  // agent walks the datasets and reports counts back, stored in oldfile_scans.
+  oldFileScanEnabled: boolean;
+  oldFileScanIntervalDays: number; // scan each lab at most this often
   // External SMTP (no bundled mail server). Empty host disables email.
   smtpHost: string;
   smtpPort: number;
@@ -60,6 +64,8 @@ export const DEFAULT_SETTINGS: Settings = {
   sshPortStart: 50000,
   sshPortEnd: 51000,
   oldFileThresholdDays: 30,
+  oldFileScanEnabled: true,
+  oldFileScanIntervalDays: 1,
   smtpHost: "",
   smtpPort: 587,
   smtpUser: "",

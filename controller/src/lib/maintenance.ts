@@ -44,6 +44,42 @@ export function scheduleScrubs(now = Date.now()): string[] {
   return scheduled;
 }
 
+/**
+ * Enqueue an old-file scan to each online lab whose last scheduled scan is older than the configured
+ * interval. The agent walks the lab's datasets and reports counts back (stored in oldfile_scans), so
+ * we only need to kick the scans off here. Returns the lab names a scan was scheduled for.
+ */
+export function scheduleOldFileScans(now = Date.now()): string[] {
+  if (!getSetting("oldFileScanEnabled")) return [];
+  const intervalMs = getSetting("oldFileScanIntervalDays") * 86400 * 1000;
+  const thresholdDays = getSetting("oldFileThresholdDays");
+  const labs = db()
+    .prepare(
+      `SELECT labs.id AS id, labs.name AS name, nodes.name AS node, labs.last_oldfile_scan AS last
+       FROM labs JOIN nodes ON nodes.id = labs.node_id WHERE nodes.online = 1`,
+    )
+    .all() as { id: number; name: string; node: string; last: number | null }[];
+  const scheduled: string[] = [];
+  for (const lab of labs) {
+    if (lab.last && now - lab.last < intervalMs) continue;
+    const users = (db()
+      .prepare(
+        `SELECT students.username AS username FROM lab_members
+         JOIN students ON students.id = lab_members.student_id WHERE lab_members.lab_id = ?`,
+      )
+      .all(lab.id) as { username: string }[]).map((r) => r.username);
+    enqueueTask(
+      lab.node,
+      "oldfiles.scan",
+      { lab: lab.name, users, threshold_days: thresholdDays },
+      "oldfile-scheduler",
+    );
+    db().prepare("UPDATE labs SET last_oldfile_scan = ? WHERE id = ?").run(now, lab.id);
+    scheduled.push(lab.name);
+  }
+  return scheduled;
+}
+
 /** Start an hourly ticker: prune old data, run scheduled backups, and kick off due ZFS scrubs. */
 export function startMaintenance(): NodeJS.Timeout {
   pruneOldData();
@@ -51,6 +87,7 @@ export function startMaintenance(): NodeJS.Timeout {
   const tick = () => {
     pruneOldData();
     scheduleScrubs();
+    scheduleOldFileScans();
     const intervalHours = getSetting("backupIntervalHours");
     if (intervalHours > 0 && Date.now() - lastBackup >= intervalHours * 3600 * 1000) {
       lastBackup = Date.now();

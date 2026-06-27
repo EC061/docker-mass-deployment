@@ -103,4 +103,23 @@ describe("telemetry ingestion", () => {
     const aliceRow = rows.find((r) => r.student_id !== null);
     expect(aliceRow.atime_count).toBe(5);
   });
+
+  it("stores docker-pool samples (installed software) without raising a PI quota alert", () => {
+    ingest.ingestTelemetry("gpu-1", {
+      pools: [{ name: "fast", free: 100 }],
+      datasets: [
+        // lab-level docker is over 90% of its quota, but the docker pool must never alert.
+        { pool: "docker", dataset: "docker/labs/bio", used_bytes: 95, quota_bytes: 100 },
+        { pool: "docker", dataset: "docker/labs/bio/users/alice", used_bytes: 40, quota_bytes: null },
+      ],
+      gpu_processes: [],
+    });
+    const dockerSamples = db
+      .db()
+      .prepare("SELECT * FROM storage_samples WHERE pool='docker'")
+      .all() as any[];
+    expect(dockerSamples.length).toBe(2);
+    const alerts = db.db().prepare("SELECT * FROM quota_alerts WHERE pool='docker'").all() as any[];
+    expect(alerts.length).toBe(0);
+  });
 });

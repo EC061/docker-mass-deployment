@@ -19,7 +19,8 @@ so the agent starts on boot and reconnects automatically.
 
 - `lab-agent run` — run the agent in the foreground (used by the systemd unit).
 - `lab-agent install --controller URL --token TOKEN [--node-name NAME]` — write config + systemd unit.
-- `lab-agent doctor` — check that zfs, docker, the `fast`/`slow` pools, and nvidia-smi are present.
+- `lab-agent doctor` — check that zfs, docker, the `fast`/`slow` pools, nvidia-smi, the
+  `sysbox-runc` runtime, and the NVIDIA CDI spec are present (and show each lab's last apt-patch time).
 
 ## Cold storage backend
 

@@ -92,7 +92,9 @@ export function ingestTelemetry(node: string, payload: any): void {
     if (parsed.level === "user" && studentId === null) continue;
     if (!shouldSample(labId, studentId, ds.pool, now)) continue;
     insertSample.run(labId, studentId, ds.pool, ds.used_bytes, ds.quota_bytes ?? null, now);
-    if (parsed.level === "lab" && ds.quota_bytes) {
+    // The "docker" pool is the container writable layer (installed software), tracked for the
+    // labquota breakdown but not a managed quota — never raise a PI quota alert on it.
+    if (parsed.level === "lab" && ds.quota_bytes && ds.pool !== "docker") {
       maybeQuotaAlert(labId, ds.pool, ds.used_bytes, ds.quota_bytes, now);
     }
   }

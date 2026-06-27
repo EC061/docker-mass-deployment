@@ -30,8 +30,10 @@ def test_add_user_script_creates_user_and_links(cap):
     assert "ln -sfn /labusers/fast/" in script
     assert "ln -sfn /labusers/slow/" in script
     assert "umask 027" in script
-    # Students must NOT be granted sudo (H-05).
-    assert "sudo" not in script
+    # Users are granted sudo + docker-group membership (safe only because lab containers run under
+    # the Sysbox runtime, which remaps container-root to an unprivileged host UID).
+    assert "usermod -aG sudo,docker" in script
+    assert "groupadd docker" in script
     assert "chpasswd" in script
     # Password is in the piped script body, not in argv.
     assert "s3cret" in script

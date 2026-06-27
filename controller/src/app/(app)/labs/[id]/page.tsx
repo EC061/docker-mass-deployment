@@ -25,6 +25,21 @@ function samples(labId: number, pool: string) {
     .all(labId, pool) as { used_bytes: number; quota_bytes: number | null; ts: number }[]);
 }
 
+/** Latest docker writable-layer usage (installed software) per student, from labquota telemetry. */
+function dockerByStudent(labId: number): Map<string, number> {
+  const rows = db()
+    .prepare(
+      `SELECT students.username AS username, s.used_bytes AS used
+       FROM storage_samples s JOIN students ON students.id = s.student_id
+       WHERE s.lab_id = ? AND s.pool = 'docker' AND s.student_id IS NOT NULL
+         AND s.ts = (SELECT MAX(ts) FROM storage_samples s2
+                      WHERE s2.student_id = s.student_id AND s2.pool = 'docker')
+       GROUP BY students.id`,
+    )
+    .all(labId) as { username: string; used: number }[];
+  return new Map(rows.map((r) => [r.username, r.used]));
+}
+
 function Sparkline({ values }: { values: number[] }) {
   if (values.length < 2) return <span className="muted">not enough history</span>;
   const w = 240;
@@ -55,6 +70,7 @@ export default async function LabDetail({
   const lab = getLab(labId);
   if (!lab) notFound();
   const members = listMembers(labId);
+  const dockerUsed = dockerByStudent(labId);
 
   const fast = samples(labId, "fast");
   const slow = samples(labId, "slow");
@@ -169,6 +185,7 @@ export default async function LabDetail({
                 <th>Username</th>
                 <th>Email</th>
                 <th>Name</th>
+                <th>Installed (container)</th>
                 <th></th>
               </tr>
             </thead>
@@ -178,6 +195,7 @@ export default async function LabDetail({
                   <td>{m.username}</td>
                   <td>{m.email ?? "—"}</td>
                   <td>{m.name ?? "—"}</td>
+                  <td>{dockerUsed.has(m.username) ? fmtBytes(dockerUsed.get(m.username)!) : "—"}</td>
                   <td style={{ textAlign: "right" }}>
                     <form action={removeMemberAction} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
                       <input type="hidden" name="labId" value={lab.id} />

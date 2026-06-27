@@ -71,3 +71,61 @@ describe("pruneOldData", () => {
     expect(result.gpuEvents).toBe(0);
   });
 });
+
+describe("scheduleOldFileScans", () => {
+  let bioId: number;
+
+  beforeAll(() => {
+    dbmod.db().prepare("INSERT INTO nodes (name, online, created_at) VALUES ('on-1', 1, 0)").run();
+    dbmod.db().prepare("INSERT INTO nodes (name, online, created_at) VALUES ('down-1', 0, 0)").run();
+    const onId = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='on-1'").get() as any).id;
+    const downId = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='down-1'").get() as any).id;
+    const insLab = dbmod
+      .db()
+      .prepare(
+        `INSERT INTO labs (name, node_id, fast_quota_bytes, slow_quota_bytes, image, created_at)
+         VALUES (?, ?, 1, 1, 'custom-ssh', 0)`,
+      );
+    insLab.run("bio", onId);
+    insLab.run("offline-lab", downId);
+    bioId = (dbmod.db().prepare("SELECT id FROM labs WHERE name='bio'").get() as any).id;
+    dbmod.db().prepare("INSERT INTO students (username, created_at) VALUES ('alice', 0)").run();
+    const sid = (dbmod.db().prepare("SELECT id FROM students WHERE username='alice'").get() as any).id;
+    dbmod
+      .db()
+      .prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)")
+      .run(bioId, sid);
+  });
+
+  it("does nothing when disabled", () => {
+    settings.setSetting("oldFileScanEnabled", false);
+    expect(maintenance.scheduleOldFileScans()).toEqual([]);
+    expect(enqueueTask).not.toHaveBeenCalled();
+  });
+
+  it("scans due labs on online nodes; skips offline nodes and recently-scanned labs", () => {
+    settings.setSetting("oldFileScanEnabled", true);
+    settings.setSetting("oldFileScanIntervalDays", 1);
+    settings.setSetting("oldFileThresholdDays", 30);
+    const now = 1_000_000_000_000;
+
+    const scheduled = maintenance.scheduleOldFileScans(now);
+    expect(scheduled).toContain("bio");
+    expect(scheduled).not.toContain("offline-lab");
+    expect(enqueueTask).toHaveBeenCalledWith(
+      "on-1",
+      "oldfiles.scan",
+      { lab: "bio", users: ["alice"], threshold_days: 30 },
+      "oldfile-scheduler",
+    );
+    const row = dbmod.db().prepare("SELECT last_oldfile_scan FROM labs WHERE id = ?").get(bioId) as {
+      last_oldfile_scan: number;
+    };
+    expect(row.last_oldfile_scan).toBe(now);
+
+    // An hour later is still within the 1-day interval -> not due.
+    enqueueTask.mockClear();
+    expect(maintenance.scheduleOldFileScans(now + 3600 * 1000)).not.toContain("bio");
+    expect(enqueueTask).not.toHaveBeenCalled();
+  });
+});

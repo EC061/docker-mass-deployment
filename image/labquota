@@ -1,0 +1,233 @@
+#!/usr/bin/env python3
+"""labquota — show this lab's storage usage (yours and your labmates').
+
+Reads the usage snapshot the lab agent publishes into the container. The numbers cover three things:
+
+  * scratch    — fast NVMe storage (~/scratch), quota-limited
+  * cold       — slow bulk storage (~/cold-storage), quota-limited
+  * installed  — software/envs you installed in the container itself (your home dir)
+
+scratch/cold are always live. "installed" comes from a periodic scan; if it is stale you can ask for
+a fresh one with `labquota --refresh` and watch the progress.
+
+This talks to the agent only through files in a shared directory — no network, no privileges.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+import time
+
+LABQUOTA_DIR = os.environ.get("LABQUOTA_DIR", "/labusers/fast/.labquota")
+USAGE_FILE = os.path.join(LABQUOTA_DIR, "usage.json")
+STATUS_FILE = os.path.join(LABQUOTA_DIR, "status.json")
+# The fast `users` mount (parent of the read-only .labquota dir). Each student's refresh marker lives
+# in their OWN scratch dir under here — never in a shared writable directory.
+USERS_DIR = os.path.dirname(LABQUOTA_DIR)
+REFRESH_MARKER = ".labquota-refresh"
+
+FRESH_MS = 60 * 60 * 1000  # a docker scan younger than this is "fresh"
+POLL_TIMEOUT_S = 600
+
+
+def _read_json(path: str):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def fmt_bytes(n) -> str:
+    if n is None:
+        return "—"
+    n = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(n) < 1024 or unit == "TiB":
+            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
+        n /= 1024
+    return f"{n:.1f} TiB"
+
+
+def fmt_pair(pair) -> str:
+    """'used / quota (pct%)' for a {used, quota} object, tolerating missing quota / missing data."""
+    if not pair:
+        return "—"
+    used = pair.get("used")
+    quota = pair.get("quota")
+    base = f"{fmt_bytes(used)} / {fmt_bytes(quota)}" if quota else f"{fmt_bytes(used)} / —"
+    if quota and used is not None and quota > 0:
+        base += f" ({used * 100 // quota}%)"
+    return base
+
+
+def fmt_age(ts_ms) -> str:
+    if not ts_ms:
+        return "never"
+    secs = max(0, int(time.time() - ts_ms / 1000))
+    if secs < 60:
+        return f"{secs}s ago"
+    if secs < 3600:
+        return f"{secs // 60}m ago"
+    if secs < 86400:
+        return f"{secs // 3600}h ago"
+    return f"{secs // 86400}d ago"
+
+
+def _no_data() -> int:
+    print("Storage usage isn't available yet. The lab agent publishes it shortly after the")
+    print("container starts; if this persists, contact your lab admin.")
+    return 1
+
+
+def render(snapshot: dict, *, me: str, only_me: bool) -> None:
+    lab = snapshot.get("lab", "?")
+    status = _read_json(STATUS_FILE) or {}
+    scanning = status.get("status") == "running"
+
+    print(f"Lab '{lab}' on node {snapshot.get('node', '?')} — storage usage")
+    print(f"  updated {fmt_age(snapshot.get('generated_at'))}", end="")
+    print(f" · installed-scan {fmt_age(snapshot.get('docker_scanned_at'))}", end="")
+    if scanning:
+        done, total = status.get("done", 0), status.get("total", 0)
+        print(f" · scanning {done}/{total}…")
+    else:
+        print()
+    print()
+
+    students = snapshot.get("students", [])
+    if only_me:
+        students = [s for s in students if s.get("username") == me]
+    if not students:
+        print("  (no students provisioned yet)")
+        return
+
+    rows = [("STUDENT", "SCRATCH (fast)", "COLD (slow)", "INSTALLED")]
+    for s in students:
+        name = s.get("username", "?")
+        label = f"{name}  (you)" if name == me else name
+        rows.append(
+            (label, fmt_pair(s.get("scratch")), fmt_pair(s.get("cold")),
+             fmt_bytes(s.get("docker_home_used")))
+        )
+    widths = [max(len(r[i]) for r in rows) for i in range(4)]
+    for i, row in enumerate(rows):
+        line = "  " + "  ".join(row[j].ljust(widths[j]) for j in range(4))
+        print(line)
+        if i == 0:
+            print("  " + "  ".join("-" * widths[j] for j in range(4)))
+
+    totals = snapshot.get("totals", {})
+    print()
+    print(f"  lab total  scratch {fmt_pair(totals.get('fast'))}"
+          f"   cold {fmt_pair(totals.get('slow'))}"
+          f"   installed {fmt_bytes(totals.get('docker_used'))}")
+    if snapshot.get("docker_unattributed"):
+        print(f"  (installed includes {fmt_bytes(snapshot['docker_unattributed'])} not in any "
+              "home dir, e.g. /tmp)")
+    print()
+    print("  Options: labquota --refresh   refresh installed-software sizes (if >1h old)")
+    print("           labquota --me        show only your usage")
+    print("           labquota --json      machine-readable output")
+
+
+def request_refresh(me: str) -> None:
+    """Touch a marker in your own scratch dir so the agent runs a fresh scan. Content is ignored.
+
+    Writing into your own (quota-limited) dataset — not a shared directory — means you can only ever
+    signal a refresh for yourself and cannot affect anyone else.
+    """
+    if not me:
+        print("Cannot determine your username; run this as your lab user.", file=sys.stderr)
+        sys.exit(1)
+    marker = os.path.join(USERS_DIR, me, REFRESH_MARKER)
+    try:
+        with open(marker, "w", encoding="utf-8"):
+            pass
+        os.utime(marker, None)  # bump mtime so the agent sees this as a new request
+    except OSError as exc:
+        print(f"Could not request a refresh: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+
+def do_refresh(force: bool) -> int:
+    snapshot = _read_json(USAGE_FILE)
+    if snapshot is None:
+        return _no_data()
+    scanned_at = snapshot.get("docker_scanned_at") or 0
+    age_ms = int(time.time() * 1000) - scanned_at if scanned_at else None
+    status = _read_json(STATUS_FILE) or {}
+    already_running = status.get("status") == "running"
+
+    if not already_running and not force and age_ms is not None and age_ms < FRESH_MS:
+        print(f"Installed-software sizes are fresh ({fmt_age(scanned_at)}). "
+              "Use --refresh --force to scan anyway.")
+        return 0
+
+    me = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    if not already_running:
+        request_refresh(me)
+        print("Requested a fresh scan of installed software… (this can take a while on large homes)")
+
+    # Poll the status file until the scan finishes (or we time out).
+    start = time.time()
+    last_line = ""
+    while time.time() - start < POLL_TIMEOUT_S:
+        status = _read_json(STATUS_FILE) or {}
+        if status.get("status") == "running":
+            done, total = status.get("done", 0), status.get("total", 0)
+            cur = status.get("current", "")
+            line = f"  scanning {done}/{total} {cur}".rstrip()
+            if line != last_line:
+                sys.stdout.write("\r" + line + " " * 8)
+                sys.stdout.flush()
+                last_line = line
+        else:
+            fresh = (status.get("scanned_at") or 0) > scanned_at
+            if fresh or already_running:
+                if last_line:
+                    sys.stdout.write("\r" + " " * (len(last_line) + 8) + "\r")
+                break
+        time.sleep(1)
+    else:
+        print("\nTimed out waiting for the scan; showing the latest available numbers.")
+
+    print()
+    snapshot = _read_json(USAGE_FILE) or snapshot
+    render(snapshot, me=me, only_me=False)
+    return 0
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        prog="labquota", description="Show this lab's storage usage (yours and your labmates')."
+    )
+    parser.add_argument("--refresh", action="store_true",
+                        help="refresh installed-software sizes (skips if scanned <1h ago)")
+    parser.add_argument("--force", action="store_true",
+                        help="with --refresh, scan even if the data is fresh")
+    parser.add_argument("--me", action="store_true", help="show only your own usage")
+    parser.add_argument("--json", action="store_true", help="print the raw usage snapshot as JSON")
+    args = parser.parse_args(argv)
+
+    if args.refresh:
+        return do_refresh(args.force)
+
+    snapshot = _read_json(USAGE_FILE)
+    if snapshot is None:
+        return _no_data()
+    if args.json:
+        json.dump(snapshot, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 0
+
+    me = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    render(snapshot, me=me, only_me=args.me)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
