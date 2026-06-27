@@ -1,5 +1,10 @@
 import { db } from "@/lib/db";
-import { provisionNodeAction, revokeNodeAction, rotateNodeTokenAction } from "./actions";
+import {
+  deleteNodeAction,
+  provisionNodeAction,
+  revokeNodeAction,
+  rotateNodeTokenAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -77,6 +82,7 @@ export default async function NodesPage({
   const provisioned = typeof sp.provisioned === "string" ? sp.provisioned : undefined;
   const token = typeof sp.token === "string" ? sp.token : undefined;
   const error = typeof sp.error === "string" ? sp.error : undefined;
+  const deleted = typeof sp.deleted === "string" ? sp.deleted : undefined;
 
   const nodes = db()
     .prepare(
@@ -91,6 +97,12 @@ export default async function NodesPage({
       {error && (
         <div className="card" style={{ borderColor: "var(--warn)", marginBottom: 16 }}>
           <p style={{ color: "var(--warn)" }}>{error}</p>
+        </div>
+      )}
+
+      {deleted && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <p className="muted">Node “{deleted}” was deleted.</p>
         </div>
       )}
 
@@ -191,7 +203,17 @@ export default async function NodesPage({
                             Revoke
                           </button>
                         </form>
-                      )}
+                      )}{" "}
+                      <form action={deleteNodeAction} style={{ display: "inline" }}>
+                        <input type="hidden" name="name" value={n.name} />
+                        <button
+                          type="submit"
+                          className="secondary"
+                          style={{ width: "auto", padding: "6px 12px", color: "var(--warn)" }}
+                        >
+                          Delete
+                        </button>
+                      </form>
                     </td>
                   </tr>
                 );

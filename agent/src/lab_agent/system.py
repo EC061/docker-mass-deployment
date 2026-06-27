@@ -42,8 +42,28 @@ def _is_mountpoint(path: str) -> bool:
     return os.path.ismount(path)
 
 
+# Docker storage drivers that work for lab containers under Sysbox:
+#   - "zfs":      container rootfs is a zfs dataset. Works under Sysbox ONLY on kernels that ship
+#                 shiftfs; on shiftfs-less kernels (e.g. stock Ubuntu kernels >= 6.8) sysbox-mgr
+#                 rejects the zfs rootfs with "unknown fs".
+#   - "overlay2": container rootfs is overlayfs, Sysbox's natively-supported path on any modern
+#                 kernel. Back the data-root with an xfs filesystem mounted with prjquota so the
+#                 per-lab writable-layer quota (docker --storage-opt size=) is still enforceable.
+DOCKER_DRIVERS_OK = ("zfs", "overlay2")
+
+
 def _docker_storage_driver() -> str:
     res = run(["docker", "info", "--format", "{{.Driver}}"], timeout=20)
+    return res.stdout.strip() if res.ok else ""
+
+
+def _docker_backing_fs() -> str:
+    """Filesystem under Docker's data-root (overlay2's 'Backing Filesystem'), e.g. 'xfs'."""
+    fmt = (
+        '{{range .DriverStatus}}{{if eq (index . 0) "Backing Filesystem"}}'
+        "{{index . 1}}{{end}}{{end}}"
+    )
+    res = run(["docker", "info", "--format", fmt], timeout=20)
     return res.stdout.strip() if res.ok else ""
 
 
@@ -86,8 +106,20 @@ def detect_capabilities(cfg: AgentConfig) -> Capabilities:
 
     driver = _docker_storage_driver() if docker_ok else ""
     docker_zfs = driver == "zfs"
-    if docker_ok and not docker_zfs:
-        issues.append(f"docker storage driver is '{driver}', expected 'zfs' (see host-prep docs)")
+    if docker_ok and driver not in DOCKER_DRIVERS_OK:
+        issues.append(
+            f"docker storage driver is '{driver}', expected one of "
+            f"{', '.join(DOCKER_DRIVERS_OK)} (see host-prep docs)"
+        )
+    # overlay2 only enforces --storage-opt size= on an xfs backing filesystem (mounted prjquota);
+    # without it, per-lab image-size quotas silently fail to apply.
+    if docker_ok and driver == "overlay2":
+        backing = _docker_backing_fs()
+        if backing != "xfs":
+            issues.append(
+                f"docker overlay2 backing filesystem is '{backing or 'unknown'}', expected 'xfs' "
+                "mounted with prjquota (needed for per-lab --storage-opt size quotas)"
+            )
 
     nv_runtime = _nvidia_runtime() if docker_ok else False
     gpus = _gpu_count()

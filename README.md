@@ -49,7 +49,7 @@ sudo zpool create -o ashift=12 slow /dev/sda
 # Datasets the agent uses (it creates per-lab children under these automatically).
 sudo zfs create fast/labs
 sudo zfs create slow/labs
-sudo zfs create fast/docker     # Docker's zfs storage driver lives here
+# (Docker's own storage is set up separately in step 1.3.)
 ```
 
 ### 1.2 Dataset properties
@@ -63,18 +63,49 @@ sudo zfs set xattr=sa fast slow
 sudo zfs set recordsize=1M slow
 ```
 
-### 1.3 Point Docker at the zfs storage driver
+### 1.3 Docker storage: overlay2 on an xfs zvol (recommended)
+
+Lab containers run under Sysbox, and **Sysbox cannot use Docker's `zfs` storage driver on a kernel
+without `shiftfs`** — e.g. stock Ubuntu kernels ≥ 6.8, which dropped shiftfs in favour of ID-mapped
+mounts. With the `zfs` driver a container's rootfs is a zfs dataset, and `sysbox-mgr` rejects it
+with `unknown fs` (its filesystem table has no entry for ZFS), so no lab container can start.
+
+Run Docker on the **`overlay2`** driver instead, backed by an **xfs filesystem on a ZFS zvol carved
+from the fast pool**. Docker's layers still live on the NVMe, Sysbox gets the overlayfs rootfs it
+supports natively, and `--storage-opt size=` (the per-lab writable-layer quota) still works because
+xfs supports project quotas.
 
 ```bash
+# A thin (sparse) zvol on the fast pool for Docker's data-root (grow later with `zfs set volsize`).
+sudo zfs create -s -V 1T fast/dockervol
+# xfs with ftype=1 (required by overlay2) + project quota (required by --storage-opt size).
+sudo mkfs.xfs -m crc=1 -L docker /dev/zvol/fast/dockervol
+sudo mkdir -p /fast/docker
+sudo mount -o prjquota /dev/zvol/fast/dockervol /fast/docker
+
+# Persist the mount, order it before docker, and make docker require it. nofail keeps boot alive if
+# the zvol is ever missing; RequiresMountsFor stops docker starting on the wrong (empty) directory.
+echo '/dev/zvol/fast/dockervol /fast/docker xfs prjquota,nofail,x-systemd.requires=zfs-volumes.target,x-systemd.before=docker.service 0 0' | sudo tee -a /etc/fstab
+sudo mkdir -p /etc/systemd/system/docker.service.d
+printf '[Unit]\nRequiresMountsFor=/fast/docker\n' | sudo tee /etc/systemd/system/docker.service.d/10-data-root-mount.conf
+sudo systemctl daemon-reload
+
 sudo tee /etc/docker/daemon.json >/dev/null <<'JSON'
 {
-  "storage-driver": "zfs",
+  "storage-driver": "overlay2",
   "data-root": "/fast/docker"
 }
 JSON
 sudo systemctl restart docker
-docker info | grep -i 'Storage Driver'   # should print: Storage Driver: zfs
+docker info | grep -iE 'Storage Driver|Backing Filesystem'   # overlay2 / xfs
 ```
+
+> **ZFS storage driver — only on kernels with a working `shiftfs`.** Some older Ubuntu HWE kernels
+> still ship shiftfs; there the native `zfs` driver works under Sysbox. Use `zfs create fast/docker`,
+> `sudo zfs set acltype=posixacl xattr=sa fast/docker`, and a `daemon.json` with
+> `"storage-driver": "zfs"` instead of the zvol above. `lab-agent doctor` accepts either driver
+> (for overlay2 it additionally checks the backing filesystem is xfs). On shiftfs-less kernels the
+> `zfs` driver fails to launch lab containers, so prefer overlay2.
 
 > **Migrating an existing Docker root.** Changing `data-root` (or the storage driver) does **not**
 > move existing data — Docker just starts empty at the new path, orphaning the old images/containers
@@ -82,18 +113,17 @@ docker info | grep -i 'Storage Driver'   # should print: Storage Driver: zfs
 >
 > ```bash
 > sudo systemctl stop docker docker.socket           # stop the engine and its socket
-> sudo rsync -aHAX --info=progress2 /var/lib/docker/ /fast/docker/   # copy data onto the ZFS dataset
+> sudo rsync -aHAX --info=progress2 /var/lib/docker/ /fast/docker/   # copy data onto the new root
 > # ...write /etc/docker/daemon.json as above, then:
 > sudo systemctl start docker
-> docker info | grep -iE 'Storage Driver|Docker Root Dir'   # zfs, /fast/docker
+> docker info | grep -iE 'Storage Driver|Docker Root Dir'   # overlay2, /fast/docker
 > docker images && docker ps -a                      # confirm images/containers survived
 > sudo mv /var/lib/docker /var/lib/docker.old         # remove only after you've verified
 > ```
 >
-> The old overlay2/devicemapper layers are **not** reusable under the `zfs` driver, so a clean node
-> (no prior Docker data) needs none of this — just write `daemon.json` and restart. If migrating is
-> not worth it, instead `docker save` the images you care about and `docker load` them after the
-> switch.
+> Layers are only reusable when the storage driver is unchanged (overlay2 → overlay2). When you also
+> switch drivers, the old layers are **not** reusable — on a clean node just write `daemon.json` and
+> restart; otherwise `docker save` the images you care about and `docker load` them after the switch.
 
 > Per-student scratch/cold datasets are bind-mounted into the lab container with `rshared`
 > propagation so they appear live. Make the ZFS mounts shared once per boot:
@@ -126,21 +156,30 @@ host.
 
 ```bash
 # Install Sysbox CE (see upstream for the current .deb); it registers the sysbox-runc runtime.
-docker info | grep -i runtimes   # should now list: nvidia runc sysbox-runc
+docker info | grep -i runtimes   # should now list: runc sysbox-runc (and nvidia on GPU nodes)
 ```
 
-Requirements: a recent Ubuntu LTS (22.04/24.04; shiftfs or kernel ≥ 5.19 idmapped mounts). Because
-the host uses the **`zfs` Docker storage driver**, set ACL props on the docker dataset so Sysbox's
-ID-shifting works (harmless on Sysbox ≥ 0.6.5, which no longer requires it):
+Requirements: a recent Ubuntu LTS (22.04/24.04; shiftfs or kernel ≥ 5.19 idmapped mounts).
 
-```bash
-sudo zfs set acltype=posixacl xattr=sa fast/docker
-```
+> **Pin Docker to a Sysbox-compatible version.** Sysbox CE 0.7.0 does **not** support containerd 2.x
+> / Docker ≥ 28 — lab containers fail to create with `namespace {"time" ""} does not exist`. Install
+> Docker from the **27.x** line on **containerd 1.7.x** and hold the packages so an `apt upgrade`
+> can't silently break the node:
+>
+> ```bash
+> sudo apt-get install -y --allow-downgrades \
+>     docker-ce=5:27.5.1-1~ubuntu.24.04~noble \
+>     docker-ce-cli=5:27.5.1-1~ubuntu.24.04~noble \
+>     containerd.io=1.7.29-1~ubuntu.24.04~noble
+> sudo apt-mark hold docker-ce docker-ce-cli containerd.io
+> ```
 
-> **Validate once before fleet rollout** (the GPU+ZFS pairing is community-validated, not
-> vendor-documented): `docker run --rm --runtime=sysbox-runc --device nvidia.com/gpu=all custom-ssh
-> nvidia-smi` should see the GPUs, and `--storage-opt size=20g` should still start and enforce the
-> writable-layer quota under sysbox-runc.
+> **Validate once before fleet rollout.** With the recommended overlay2 setup from step 1.3:
+> `docker run --rm --runtime=sysbox-runc --storage-opt size=20g custom-ssh` should start and enforce
+> the writable-layer quota, and on GPU nodes
+> `docker run --rm --runtime=sysbox-runc --device nvidia.com/gpu=all custom-ssh nvidia-smi` should
+> see the GPUs. (On a kernel using the `zfs` Docker driver, this is the step that fails with
+> `unknown fs` — see step 1.3.)
 
 ### 1.6 Install the agent
 
@@ -249,7 +288,9 @@ open **Settings** and configure:
 ## 3. Day-to-day use
 
 - **Nodes** — see which servers are online, their GPUs, pools, cold-storage backend (ZFS or SMB),
-  latest scrub status, and any host-prep issues.
+  latest scrub status, and any host-prep issues. Provision/rotate a per-node token, **revoke** a node
+  (its token stops working but its row and history stay), or **delete** it outright (removed only when
+  no labs are still pinned to it).
 - **Labs** — create a lab (pick its node, fast/slow quota, base image, and container options). Container
   options (CPU/RAM/shared-memory/image-size quota/restart) are **set once at creation**; changing them
   needs *Recreate container* (data is preserved). All GPUs are always attached. Quotas are editable

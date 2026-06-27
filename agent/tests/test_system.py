@@ -100,12 +100,12 @@ def test_missing_zfs_records_issue_and_skips_pool_checks(monkeypatch):
     assert "zfs command not found" in caps.issues
 
 
-def test_wrong_docker_storage_driver_is_flagged(monkeypatch):
+def test_unsupported_docker_storage_driver_is_flagged(monkeypatch):
     runner = FakeRunner({
         "zfs version": _ok(),
         "docker version": _ok(),
-        "docker info --format {{.Driver}}": _ok("overlay2"),
-        "docker info --format {{.Runtimes}}": _ok("runc"),
+        "docker info --format {{.Driver}}": _ok("vfs"),
+        "docker info --format {{.Runtimes}}": _ok("runc sysbox-runc"),
         "nvidia-smi -L": _fail(),
         "zpool list -H -o name fast": _ok("fast"),
         "zpool list -H -o name slow": _ok("slow"),
@@ -113,7 +113,44 @@ def test_wrong_docker_storage_driver_is_flagged(monkeypatch):
     monkeypatch.setattr(system, "run", runner)
     caps = system.detect_capabilities(_cfg())
     assert caps.docker_zfs_driver is False
-    assert any("storage driver is 'overlay2'" in i for i in caps.issues)
+    assert any("storage driver is 'vfs'" in i for i in caps.issues)
+
+
+def test_overlay2_on_xfs_is_supported(monkeypatch):
+    # overlay2 on an xfs backing fs is a supported driver (Sysbox's native path on shiftfs-less
+    # kernels); it must NOT be flagged, even though it is not the zfs driver.
+    runner = FakeRunner({
+        "zfs version": _ok(),
+        "docker version": _ok("27.5"),
+        "docker info --format {{.Driver}}": _ok("overlay2"),
+        "docker info --format {{range .DriverStatus}}": _ok("xfs"),
+        "docker info --format {{.Runtimes}}": _ok("runc sysbox-runc"),
+        "nvidia-smi -L": _fail(),
+        "zpool list -H -o name fast": _ok("fast"),
+        "zpool list -H -o name slow": _ok("slow"),
+    })
+    monkeypatch.setattr(system, "run", runner)
+    caps = system.detect_capabilities(_cfg())
+    assert caps.docker_zfs_driver is False
+    assert not any("storage driver" in i for i in caps.issues)
+    assert not any("backing filesystem" in i for i in caps.issues)
+
+
+def test_overlay2_non_xfs_backing_is_flagged(monkeypatch):
+    # overlay2 on a non-xfs backing fs can't enforce per-lab --storage-opt size quotas.
+    runner = FakeRunner({
+        "zfs version": _ok(),
+        "docker version": _ok("27.5"),
+        "docker info --format {{.Driver}}": _ok("overlay2"),
+        "docker info --format {{range .DriverStatus}}": _ok("extfs"),
+        "docker info --format {{.Runtimes}}": _ok("runc sysbox-runc"),
+        "nvidia-smi -L": _fail(),
+        "zpool list -H -o name fast": _ok("fast"),
+        "zpool list -H -o name slow": _ok("slow"),
+    })
+    monkeypatch.setattr(system, "run", runner)
+    caps = system.detect_capabilities(_cfg())
+    assert any("backing filesystem is 'extfs'" in i for i in caps.issues)
 
 
 def test_missing_fast_pool_is_flagged(monkeypatch):
