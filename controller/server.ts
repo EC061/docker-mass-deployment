@@ -5,6 +5,8 @@
  * (dev: `tsx watch server.ts`; prod/Docker: `tsx server.ts`).
  */
 
+// Must stay first: sets globalThis.AsyncLocalStorage before any `next` module loads (see node-env.ts).
+import "./src/lib/node-env";
 import { createServer } from "node:http";
 import next from "next";
 import { attachHub } from "./src/lib/hub";
