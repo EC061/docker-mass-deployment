@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
-import { isValidNodeName, provisionNode, revokeNode, rotateNodeToken } from "@/lib/nodes";
+import { deleteNode, isValidNodeName, provisionNode, revokeNode, rotateNodeToken } from "@/lib/nodes";
 
 // The freshly issued token is shown once on the Nodes page so the admin can paste the printed
 // `lab-agent set-token` command onto the node. It is never stored in plaintext.
@@ -32,4 +32,19 @@ export async function revokeNodeAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim().toLowerCase();
   revokeNode(name, admin.email);
   redirect("/nodes?revoked=" + encodeURIComponent(name));
+}
+
+export async function deleteNodeAction(formData: FormData) {
+  const admin = await requireAdmin();
+  const name = String(formData.get("name") ?? "").trim().toLowerCase();
+  // deleteNode throws if labs are still pinned to the node; surface that as an error banner.
+  // (redirect() throws NEXT_REDIRECT internally, so it must be called OUTSIDE the try/catch.)
+  let error: string | null = null;
+  try {
+    deleteNode(name, admin.email);
+  } catch (e) {
+    error = e instanceof Error ? e.message : "could not delete node";
+  }
+  if (error) redirect("/nodes?error=" + encodeURIComponent(error));
+  redirect("/nodes?deleted=" + encodeURIComponent(name));
 }

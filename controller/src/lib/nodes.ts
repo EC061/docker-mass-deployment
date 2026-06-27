@@ -99,6 +99,32 @@ export function revokeNode(name: string, actor: string): void {
   audit(actor, "node.revoke", name);
 }
 
+/**
+ * Permanently delete a node from the DB. Refuses if any lab is still pinned to it (labs.node_id is
+ * a RESTRICT foreign key — its storage lives on that machine). Also clears the node's queued tasks
+ * and live GPU snapshot so a later same-named node starts clean; historical logs/events are kept.
+ */
+export function deleteNode(name: string, actor: string): void {
+  const row = db().prepare("SELECT id FROM nodes WHERE name = ?").get(name) as
+    | { id: number }
+    | undefined;
+  if (!row) throw new Error(`unknown node '${name}'`);
+  const { n: labCount } = db()
+    .prepare("SELECT COUNT(*) AS n FROM labs WHERE node_id = ?")
+    .get(row.id) as { n: number };
+  if (labCount > 0) {
+    throw new Error(
+      `node '${name}' still has ${labCount} lab(s); delete or move them before deleting the node`,
+    );
+  }
+  db().transaction(() => {
+    db().prepare("DELETE FROM task_log WHERE node = ?").run(name);
+    db().prepare("DELETE FROM gpu_snapshot WHERE node = ?").run(name);
+    db().prepare("DELETE FROM nodes WHERE id = ?").run(row.id);
+  })();
+  audit(actor, "node.delete", name);
+}
+
 function audit(actor: string, action: string, target: string): void {
   db()
     .prepare("INSERT INTO audit_log (ts, actor, action, target) VALUES (?, ?, ?, ?)")

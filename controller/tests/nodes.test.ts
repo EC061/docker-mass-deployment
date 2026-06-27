@@ -72,3 +72,36 @@ describe("verifyNodeAuth (C-04)", () => {
     expect(nodes.verifyNodeAuth("gpu-c", token).ok).toBe(false);
   });
 });
+
+describe("deleteNode", () => {
+  it("permanently removes the node row and its token stops working", () => {
+    const token = nodes.provisionNode("gpu-del", "admin@uga.edu");
+    expect(nodes.verifyNodeAuth("gpu-del", token).ok).toBe(true);
+    nodes.deleteNode("gpu-del", "admin@uga.edu");
+    const row = dbmod.db().prepare("SELECT 1 FROM nodes WHERE name = ?").get("gpu-del");
+    expect(row).toBeUndefined();
+    // Auth fails because the node is no longer on the allow-list at all.
+    expect(nodes.verifyNodeAuth("gpu-del", token).ok).toBe(false);
+  });
+
+  it("throws on an unknown node", () => {
+    expect(() => nodes.deleteNode("does-not-exist", "admin@uga.edu")).toThrow(/unknown node/);
+  });
+
+  it("refuses to delete a node that still has labs pinned to it", () => {
+    nodes.provisionNode("gpu-haslabs", "admin@uga.edu");
+    const id = (
+      dbmod.db().prepare("SELECT id FROM nodes WHERE name = ?").get("gpu-haslabs") as { id: number }
+    ).id;
+    dbmod
+      .db()
+      .prepare(
+        `INSERT INTO labs (name, node_id, fast_quota_bytes, slow_quota_bytes, image, created_at)
+         VALUES (?, ?, 0, 0, 'custom-ssh', ?)`,
+      )
+      .run("lab-x", id, Date.now());
+    expect(() => nodes.deleteNode("gpu-haslabs", "admin@uga.edu")).toThrow(/still has 1 lab/);
+    // The node row is left intact when deletion is refused.
+    expect(dbmod.db().prepare("SELECT 1 FROM nodes WHERE name = ?").get("gpu-haslabs")).toBeDefined();
+  });
+});
