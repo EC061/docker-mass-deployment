@@ -90,7 +90,7 @@ export default function LabsPage() {
             </div>
             <div>
               <label>Image size quota</label>
-              <input name="imageQuota" defaultValue="50g" />
+              <input name="imageQuota" defaultValue="300g" />
             </div>
             <div>
               <label>Restart policy</label>
