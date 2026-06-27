@@ -59,7 +59,7 @@ class ContainerOptions:
     cpus: str = "4"
     memory: str = "8g"
     shm_size: str = "1g"
-    image_quota: str = "50g"  # writable layer quota via zfs storage driver
+    image_quota: str = "300g"  # writable layer quota via zfs storage driver
     ssh_port: int = 0
     restart: str = "unless-stopped"
     extra_env: dict[str, str] = field(default_factory=dict)

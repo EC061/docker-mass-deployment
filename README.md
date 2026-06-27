@@ -76,6 +76,25 @@ sudo systemctl restart docker
 docker info | grep -i 'Storage Driver'   # should print: Storage Driver: zfs
 ```
 
+> **Migrating an existing Docker root.** Changing `data-root` (or the storage driver) does **not**
+> move existing data — Docker just starts empty at the new path, orphaning the old images/containers
+> under `/var/lib/docker`. On a node that has already run Docker, migrate before restarting:
+>
+> ```bash
+> sudo systemctl stop docker docker.socket           # stop the engine and its socket
+> sudo rsync -aHAX --info=progress2 /var/lib/docker/ /fast/docker/   # copy data onto the ZFS dataset
+> # ...write /etc/docker/daemon.json as above, then:
+> sudo systemctl start docker
+> docker info | grep -iE 'Storage Driver|Docker Root Dir'   # zfs, /fast/docker
+> docker images && docker ps -a                      # confirm images/containers survived
+> sudo mv /var/lib/docker /var/lib/docker.old         # remove only after you've verified
+> ```
+>
+> The old overlay2/devicemapper layers are **not** reusable under the `zfs` driver, so a clean node
+> (no prior Docker data) needs none of this — just write `daemon.json` and restart. If migrating is
+> not worth it, instead `docker save` the images you care about and `docker load` them after the
+> switch.
+
 > Per-student scratch/cold datasets are bind-mounted into the lab container with `rshared`
 > propagation so they appear live. Make the ZFS mounts shared once per boot:
 > `sudo mount --make-rshared /fast && sudo mount --make-rshared /slow`.
