@@ -215,8 +215,21 @@ Env vars (controller bootstrap only — everything else is set in the UI):
 | `SESSION_SECRET` | signs admin session cookies |
 | `DB_PATH` | SQLite path (mount a volume here in Docker) |
 | `PORT` | HTTP + agent-WebSocket port (default 8443) |
+| `CONTROLLER_DOMAIN` | public domain the controller is served at (host only, e.g. `lab.cs.uga.edu`). Required when a reverse proxy terminates TLS in front of it — otherwise Next.js rejects Server Action POSTs whose `Origin` ≠ internal `Host` (CSRF check). Comma-separated for multiple; `*.` wildcard label allowed; unset → same-origin only |
 
 The published image is `ghcr.io/ec061/lab-controller` (built by CI on tags/main).
+
+> **Data dir permissions (bind mounts).** The container runs as a non-root user (uid **10001**).
+> The repo's compose uses a named volume (`controller-data`), which inherits that ownership
+> automatically. If you instead bind-mount a host directory onto `/app/data` (e.g. a 1Panel/Portainer
+> deploy mounting `./data`), that host dir is typically owned by `root` and the app can't write to it
+> — boot fails with `SqliteError: unable to open database file` (`SQLITE_CANTOPEN`). Fix by giving the
+> bind-mounted dir to uid 10001 once:
+>
+> ```bash
+> sudo chown 10001:10001 ./data        # the host path mounted at /app/data
+> docker compose restart controller
+> ```
 
 ### First login
 

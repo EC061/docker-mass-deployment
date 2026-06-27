@@ -5,10 +5,10 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { putFlash } from "@/lib/flash";
-import { createLab, destroyLab, updateQuota } from "@/lib/labs";
+import { createLab, destroyLab, getLab, updateLabSettings, updateQuota } from "@/lib/labs";
 import { enqueueTask } from "@/lib/queue";
 import { getSettings, nextSshPort, TIB } from "@/lib/settings";
-import { addStudentToLab, removeStudentFromLab } from "@/lib/students";
+import { addStudentToLab, copyMembers, removeStudentFromLab } from "@/lib/students";
 
 // Enforcing auth gate: throws/redirects when the caller is not a live admin, and returns the
 // verified email used as the audit actor. Call as the first line of every action.
@@ -23,10 +23,16 @@ export async function createLabAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   const nodeId = Number(formData.get("nodeId"));
   const piEmail = String(formData.get("piEmail") ?? "").trim() || undefined;
-  const image = String(formData.get("image") ?? "").trim() || "custom-ssh";
+  if (!name || !nodeId) throw new Error("Name and node are required");
+
+  // Optionally seed configuration (image, quotas, container options) from an existing lab. The
+  // explicit form fields still win, so the source lab acts as a starting template, not a lock.
+  const copyFromLabId = Number(formData.get("copyFromLabId")) || 0;
+  const source = copyFromLabId ? getLab(copyFromLabId) : undefined;
+
+  const image = String(formData.get("image") ?? "").trim() || source?.image || "custom-ssh";
   const fastTb = Number(formData.get("fastTb"));
   const slowTb = Number(formData.get("slowTb"));
-  if (!name || !nodeId) throw new Error("Name and node are required");
 
   const containerOptions = {
     cpus: String(formData.get("cpus") ?? "4"),
@@ -36,7 +42,7 @@ export async function createLabAction(formData: FormData) {
     restart: String(formData.get("restart") ?? "unless-stopped"),
   };
 
-  createLab({
+  const lab = createLab({
     name,
     nodeId,
     piEmail,
@@ -47,7 +53,42 @@ export async function createLabAction(formData: FormData) {
     containerOptions,
     actor: who,
   });
+
+  // Optionally enroll the source lab's students into the new lab (fresh accounts + emailed creds).
+  if (source && formData.get("copyStudents") === "on") {
+    const res = await copyMembers(source.id, lab.id, who);
+    const msg = `Imported ${res.added} student${res.added === 1 ? "" : "s"} from ${source.name}` +
+      (res.emailed ? `; ${res.emailed} emailed credentials` : "") +
+      (res.skipped ? `; ${res.skipped} already members` : "");
+    const fid = putFlash(msg);
+    revalidatePath("/labs");
+    redirect(`/labs?imported=${fid}`);
+  }
+
   revalidatePath("/labs");
+}
+
+export async function updateLabSettingsAction(formData: FormData) {
+  const who = await actor();
+  const labId = Number(formData.get("labId"));
+  const piEmail = String(formData.get("piEmail") ?? "").trim();
+  const image = String(formData.get("image") ?? "").trim() || "custom-ssh";
+  const containerOptions = {
+    cpus: String(formData.get("cpus") ?? "4"),
+    memory: String(formData.get("memory") ?? "8g"),
+    shm_size: String(formData.get("shmSize") ?? "1g"),
+    image_quota: String(formData.get("imageQuota") ?? "300g"),
+    restart: String(formData.get("restart") ?? "unless-stopped"),
+  };
+  const recreated = updateLabSettings(labId, { piEmail, image, containerOptions }, who);
+  revalidatePath(`/labs/${labId}`);
+  revalidatePath("/labs");
+  const fid = putFlash(
+    recreated
+      ? "Settings saved — container is being recreated (data preserved)."
+      : "Settings saved.",
+  );
+  redirect(`/labs/${labId}?saved=${fid}`);
 }
 
 export async function setQuotaAction(formData: FormData) {

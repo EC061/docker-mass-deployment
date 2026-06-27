@@ -1,16 +1,12 @@
 import { db } from "@/lib/db";
+import { takeFlash } from "@/lib/flash";
 import { fmtBytes, pct } from "@/lib/format";
-import { listLabs } from "@/lib/labs";
+import { containerOptionsOf, listLabs } from "@/lib/labs";
 import { getSettings, TIB } from "@/lib/settings";
 import { createLabAction } from "./actions";
+import { CreateLabForm, type LabTemplate, type NodeOpt } from "./_components/CreateLabForm";
 
 export const dynamic = "force-dynamic";
-
-interface NodeOpt {
-  id: number;
-  name: string;
-  online: number;
-}
 
 function latestUsage(labId: number, pool: string): { used: number; quota: number | null } | null {
   const row = db()
@@ -22,86 +18,55 @@ function latestUsage(labId: number, pool: string): { used: number; quota: number
   return row ? { used: row.used_bytes, quota: row.quota_bytes } : null;
 }
 
-export default function LabsPage() {
+export default async function LabsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ imported?: string }>;
+}) {
+  const { imported } = await searchParams;
+  const importedMsg = imported ? takeFlash(imported) : null;
   const labs = listLabs();
   const nodes = db().prepare("SELECT id, name, online FROM nodes ORDER BY name").all() as NodeOpt[];
   const settings = getSettings();
 
+  const templates: LabTemplate[] = labs.map((l) => {
+    const opts = containerOptionsOf(l);
+    return {
+      id: l.id,
+      name: l.name,
+      image: l.image,
+      fastTb: l.fast_quota_bytes / TIB,
+      slowTb: l.slow_quota_bytes / TIB,
+      cpus: opts.cpus,
+      memory: opts.memory,
+      shmSize: opts.shm_size,
+      imageQuota: opts.image_quota,
+      restart: opts.restart,
+    };
+  });
+
   return (
     <>
       <h2>Labs</h2>
+
+      {importedMsg && (
+        <div className="card" style={{ borderColor: "var(--accent)", marginBottom: 16 }}>
+          <p style={{ margin: 0, color: "var(--accent)" }}>{importedMsg}</p>
+        </div>
+      )}
 
       <div className="card">
         <h3 style={{ marginTop: 0 }}>Create lab</h3>
         {nodes.length === 0 ? (
           <p className="muted">Connect a node first — a lab is pinned to one node.</p>
         ) : (
-          <form action={createLabAction} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-            <div>
-              <label>Name</label>
-              <input name="name" required placeholder="bio-x" />
-            </div>
-            <div>
-              <label>Node</label>
-              <select name="nodeId" required defaultValue="">
-                <option value="" disabled>
-                  Select node…
-                </option>
-                {nodes.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.name} {n.online ? "(online)" : "(offline)"}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div>
-              <label>PI email</label>
-              <input name="piEmail" type="email" placeholder="pi@uga.edu" />
-            </div>
-            <div>
-              <label>Base image</label>
-              <input name="image" defaultValue="custom-ssh" />
-            </div>
-            <div>
-              <label>Fast quota (TB)</label>
-              <input name="fastTb" type="number" step="0.5" defaultValue={settings.fastQuotaDefaultBytes / TIB} />
-            </div>
-            <div>
-              <label>Slow quota (TB)</label>
-              <input name="slowTb" type="number" step="0.5" defaultValue={settings.slowQuotaDefaultBytes / TIB} />
-            </div>
-            <div style={{ gridColumn: "1 / -1", marginTop: 4 }}>
-              <span className="muted" style={{ fontSize: 12 }}>
-                Container options below are set once at creation; changing them later requires
-                &ldquo;recreate container&rdquo; (data is preserved). All GPUs are always attached.
-              </span>
-            </div>
-            <div>
-              <label>CPUs</label>
-              <input name="cpus" defaultValue="4" />
-            </div>
-            <div>
-              <label>RAM</label>
-              <input name="memory" defaultValue="8g" />
-            </div>
-            <div>
-              <label>Shared memory</label>
-              <input name="shmSize" defaultValue="1g" />
-            </div>
-            <div>
-              <label>Image size quota</label>
-              <input name="imageQuota" defaultValue="300g" />
-            </div>
-            <div>
-              <label>Restart policy</label>
-              <input name="restart" defaultValue="unless-stopped" />
-            </div>
-            <div style={{ gridColumn: "1 / -1" }}>
-              <button type="submit" style={{ width: 160 }}>
-                Create lab
-              </button>
-            </div>
-          </form>
+          <CreateLabForm
+            nodes={nodes}
+            labs={templates}
+            defaultFastTb={settings.fastQuotaDefaultBytes / TIB}
+            defaultSlowTb={settings.slowQuotaDefaultBytes / TIB}
+            action={createLabAction}
+          />
         )}
       </div>
 
@@ -109,6 +74,7 @@ export default function LabsPage() {
         {labs.length === 0 ? (
           <p className="muted">No labs yet.</p>
         ) : (
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -151,6 +117,7 @@ export default function LabsPage() {
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </>

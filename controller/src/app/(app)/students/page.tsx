@@ -83,6 +83,7 @@ export default async function StudentsPage({
         {students.length === 0 ? (
           <p className="muted">No students yet.</p>
         ) : (
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -103,6 +104,7 @@ export default async function StudentsPage({
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </>
