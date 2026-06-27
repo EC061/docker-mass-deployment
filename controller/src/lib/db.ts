@@ -6,8 +6,12 @@
  */
 
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs";
-import { dirname } from "node:path";
+// node:fs / node:path are loaded via process.getBuiltinModule rather than a static import so the
+// Turbopack build tracer doesn't see filesystem calls here and pull the whole project into the
+// (unused — we run a custom server, not standalone output) NFT trace. See the build warning at
+// https://nextjs.org/docs/messages/nft-unexpected-file.
+const { existsSync, mkdirSync, renameSync, rmSync } = process.getBuiltinModule("node:fs");
+const { dirname } = process.getBuiltinModule("node:path");
 import { env } from "./env";
 
 /** If a WebDAV restore was staged as <dbPath>.restore, swap it in before opening. */
