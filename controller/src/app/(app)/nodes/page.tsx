@@ -123,6 +123,7 @@ export default async function NodesPage({
         {nodes.length === 0 ? (
           <p className="muted">No nodes have connected yet.</p>
         ) : (
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -175,12 +176,18 @@ export default async function NodesPage({
                     <td style={{ whiteSpace: "nowrap" }}>
                       <form action={rotateNodeTokenAction} style={{ display: "inline" }}>
                         <input type="hidden" name="name" value={n.name} />
-                        <button type="submit" style={{ background: "var(--panel-2)" }}>Rotate</button>
+                        <button type="submit" className="secondary" style={{ width: "auto", padding: "6px 12px" }}>
+                          Rotate
+                        </button>
                       </form>{" "}
                       {n.allowed === 1 && (
                         <form action={revokeNodeAction} style={{ display: "inline" }}>
                           <input type="hidden" name="name" value={n.name} />
-                          <button type="submit" style={{ background: "var(--panel-2)", color: "var(--warn)" }}>
+                          <button
+                            type="submit"
+                            className="secondary"
+                            style={{ width: "auto", padding: "6px 12px", color: "var(--warn)" }}
+                          >
                             Revoke
                           </button>
                         </form>
@@ -191,6 +198,7 @@ export default async function NodesPage({
               })}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </>

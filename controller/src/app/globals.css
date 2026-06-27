@@ -1,4 +1,7 @@
-:root {
+/* Dark is the default theme; it applies when no data-theme is set and when it is "dark".
+   An inline script in the root layout sets data-theme before paint to avoid a flash. */
+:root,
+:root[data-theme="dark"] {
   --bg: #0f1115;
   --panel: #1a1d24;
   --panel-2: #232732;
@@ -9,9 +12,27 @@
   --ok: #3fb950;
   --warn: #d29922;
   --err: #f85149;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+}
+
+:root[data-theme="light"] {
+  --bg: #f4f5f7;
+  --panel: #ffffff;
+  --panel-2: #eceef1;
+  --border: #d7dbe0;
+  --text: #1c2128;
+  --muted: #5a6472;
+  --accent: #2f6fed;
+  --ok: #1a7f37;
+  --warn: #9a6700;
+  --err: #cf222e;
+  --shadow: 0 1px 3px rgba(27, 33, 40, 0.08);
 }
 
 * { box-sizing: border-box; }
+
+html { color-scheme: dark; }
+html[data-theme="light"] { color-scheme: light; }
 
 body {
   margin: 0;
@@ -27,23 +48,34 @@ a:hover { text-decoration: underline; }
 .sidebar {
   width: 220px; flex-shrink: 0; background: var(--panel);
   border-right: 1px solid var(--border); padding: 20px 12px;
+  display: flex; flex-direction: column;
+  position: sticky; top: 0; align-self: flex-start; height: 100vh;
 }
 .sidebar h1 { font-size: 15px; margin: 0 0 18px 8px; }
+.sidebar nav { display: flex; flex-direction: column; gap: 2px; }
 .sidebar nav a {
-  display: block; padding: 8px 10px; border-radius: 6px; color: var(--text); margin-bottom: 2px;
+  display: block; padding: 8px 10px; border-radius: 6px; color: var(--text);
 }
 .sidebar nav a:hover { background: var(--panel-2); text-decoration: none; }
-.content { flex: 1; padding: 28px 32px; max-width: 1100px; }
+.sidebar nav a.active {
+  background: var(--panel-2); color: var(--accent); font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.sidebar-footer { margin-top: auto; padding-top: 16px; }
+.content { flex: 1; min-width: 0; padding: 28px 32px; max-width: 1180px; }
 
 .card {
   background: var(--panel); border: 1px solid var(--border);
-  border-radius: 10px; padding: 18px 20px; margin-bottom: 18px;
+  border-radius: 10px; padding: 18px 20px; margin-bottom: 18px; box-shadow: var(--shadow);
 }
 h2 { font-size: 18px; margin: 0 0 14px; }
 
+/* Wide tables (e.g. Nodes) scroll horizontally inside their card instead of overflowing. */
+.table-wrap { overflow-x: auto; margin: 0 -4px; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); }
-th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+tbody tr:last-child td { border-bottom: 0; }
+th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; white-space: nowrap; }
 
 .badge { display: inline-block; padding: 2px 8px; border-radius: 99px; font-size: 12px; font-weight: 600; }
 .badge.online { background: rgba(63,185,80,.15); color: var(--ok); }
@@ -61,5 +93,21 @@ button {
   background: var(--accent); color: #fff; font-weight: 600; cursor: pointer; font-size: 14px;
 }
 button:hover { filter: brightness(1.08); }
+/* Secondary/danger buttons must set an explicit text color so they stay legible in light mode
+   (the base rule's white-on-accent would otherwise leave white text on a light panel). */
+button.secondary { background: var(--panel-2); color: var(--text); border: 1px solid var(--border); }
+button.danger { background: var(--err); color: #fff; }
+select {
+  width: 100%; padding: 9px 11px; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); font-size: 14px;
+}
 .error { color: var(--err); margin-top: 12px; font-size: 13px; }
 .muted { color: var(--muted); }
+
+.theme-toggle {
+  margin-top: 8px; width: 100%; padding: 8px 10px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--panel-2); color: var(--text);
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+}
+.theme-toggle:hover { filter: brightness(1.08); }

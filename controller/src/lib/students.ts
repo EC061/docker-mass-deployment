@@ -114,6 +114,43 @@ export async function addStudentToLab(
   return { student: record, password, emailed };
 }
 
+export interface CopyMembersResult {
+  added: number;
+  emailed: number;
+  skipped: number; // already members of the destination lab
+}
+
+/**
+ * Enroll every student of `fromLabId` into `toLabId`. Each gets a fresh account/password on the
+ * destination node (same path as a manual add), so credentials are emailed where an address exists.
+ * Students already in the destination lab are skipped. Used by "create lab → import students".
+ */
+export async function copyMembers(
+  fromLabId: number,
+  toLabId: number,
+  actor?: string,
+): Promise<CopyMembersResult> {
+  const source = listMembers(fromLabId);
+  const result: CopyMembersResult = { added: 0, emailed: 0, skipped: 0 };
+  for (const m of source) {
+    const already = db()
+      .prepare("SELECT id FROM lab_members WHERE lab_id = ? AND student_id = ?")
+      .get(toLabId, m.id);
+    if (already) {
+      result.skipped += 1;
+      continue;
+    }
+    const res = await addStudentToLab(
+      toLabId,
+      { username: m.username, email: m.email ?? undefined, name: m.name ?? undefined, studentId: m.student_id ?? undefined },
+      actor,
+    );
+    result.added += 1;
+    if (res.emailed) result.emailed += 1;
+  }
+  return result;
+}
+
 export function removeStudentFromLab(
   labId: number,
   studentId: number,

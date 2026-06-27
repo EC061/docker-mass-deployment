@@ -39,6 +39,7 @@ export default function GpuPage() {
         {snapshot.length === 0 ? (
           <p className="muted">No GPU processes reported.</p>
         ) : (
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -65,6 +66,7 @@ export default function GpuPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
 
@@ -73,6 +75,7 @@ export default function GpuPage() {
         {events.length === 0 ? (
           <p className="muted">No events yet.</p>
         ) : (
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -99,6 +102,7 @@ export default function GpuPage() {
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </>

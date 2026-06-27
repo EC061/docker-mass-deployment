@@ -26,8 +26,38 @@ export interface Lab {
   slow_quota_bytes: number;
   image: string;
   ssh_port: number | null;
+  container_options: string | null;
   status: string;
   created_at: number;
+}
+
+export interface ContainerOptions {
+  cpus: string;
+  memory: string;
+  shm_size: string;
+  image_quota: string;
+  restart: string;
+}
+
+export const DEFAULT_CONTAINER_OPTIONS: ContainerOptions = {
+  cpus: "4",
+  memory: "8g",
+  shm_size: "1g",
+  image_quota: "300g",
+  restart: "unless-stopped",
+};
+
+/** Parse a lab's stored container_options JSON, filling any missing keys with defaults. */
+export function containerOptionsOf(lab: Pick<Lab, "container_options">): ContainerOptions {
+  let parsed: Partial<ContainerOptions> = {};
+  if (lab.container_options) {
+    try {
+      parsed = JSON.parse(lab.container_options) as Partial<ContainerOptions>;
+    } catch {
+      parsed = {};
+    }
+  }
+  return { ...DEFAULT_CONTAINER_OPTIONS, ...parsed };
 }
 
 export function listLabs(): Lab[] {
@@ -133,6 +163,61 @@ export function updateQuota(
   }
   enqueueTask(lab.node_name, "lab.set_quota", params, actor);
   audit(actor, "lab.set_quota", lab.name, JSON.stringify(params));
+}
+
+export interface UpdateLabSettingsInput {
+  piEmail?: string | null;
+  image?: string;
+  containerOptions?: Record<string, unknown>;
+}
+
+/**
+ * Edit a lab's configuration after creation. PI email is metadata only. Changing the image or any
+ * container option rewrites the stored config and recreates the container (data is preserved, same
+ * path as the manual "recreate container" action). Returns true if a recreate was enqueued.
+ */
+export function updateLabSettings(labId: number, input: UpdateLabSettingsInput, actor?: string): boolean {
+  const lab = getLab(labId);
+  if (!lab) throw new Error("Unknown lab");
+
+  if (input.piEmail !== undefined) {
+    db().prepare("UPDATE labs SET pi_email = ? WHERE id = ?").run(input.piEmail || null, labId);
+  }
+
+  const prevOpts = db().prepare("SELECT container_options FROM labs WHERE id = ?").get(labId) as
+    | { container_options: string | null }
+    | undefined;
+  const imageChanged = input.image !== undefined && input.image !== lab.image;
+  const optsChanged =
+    input.containerOptions !== undefined &&
+    JSON.stringify(input.containerOptions) !== (prevOpts?.container_options ?? "null");
+
+  if (input.image !== undefined) {
+    db().prepare("UPDATE labs SET image = ? WHERE id = ?").run(input.image, labId);
+  }
+  if (input.containerOptions !== undefined) {
+    db()
+      .prepare("UPDATE labs SET container_options = ? WHERE id = ?")
+      .run(JSON.stringify(input.containerOptions), labId);
+  }
+
+  audit(actor, "lab.update_settings", lab.name);
+
+  if (imageChanged || optsChanged) {
+    enqueueTask(
+      lab.node_name,
+      "container.recreate",
+      {
+        lab: lab.name,
+        image: input.image ?? lab.image,
+        ssh_port: lab.ssh_port,
+        container_options: input.containerOptions ?? (prevOpts?.container_options ? JSON.parse(prevOpts.container_options) : {}),
+      },
+      actor,
+    );
+    return true;
+  }
+  return false;
 }
 
 export function destroyLab(labId: number, actor?: string): void {

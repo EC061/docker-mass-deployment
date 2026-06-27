@@ -123,7 +123,7 @@ export default async function SettingsPage({
             <label>Send test email to</label>
             <input name="to" type="email" placeholder="you@uga.edu" />
           </div>
-          <button type="submit" style={{ width: 140, marginTop: 0, background: "var(--panel-2)" }}>
+          <button type="submit" className="secondary" style={{ width: 140, marginTop: 0 }}>
             Send test
           </button>
         </form>
@@ -226,7 +226,7 @@ export default async function SettingsPage({
           </div>
         </form>
         <form action={scrubNowAction} style={{ marginTop: 12 }}>
-          <button type="submit" style={{ width: 140, marginTop: 0, background: "var(--panel-2)" }}>
+          <button type="submit" className="secondary" style={{ width: 140, marginTop: 0 }}>
             Scrub now
           </button>
         </form>
@@ -263,7 +263,7 @@ export default async function SettingsPage({
           </div>
         </form>
         <form action={backupNowAction} style={{ marginTop: 12 }}>
-          <button type="submit" style={{ width: 140, marginTop: 0, background: "var(--panel-2)" }}>
+          <button type="submit" className="secondary" style={{ width: 140, marginTop: 0 }}>
             Back up now
           </button>
         </form>
@@ -284,7 +284,7 @@ export default async function SettingsPage({
                     <td style={{ textAlign: "right" }}>
                       <form action={restoreAction}>
                         <input type="hidden" name="name" value={b} />
-                        <button type="submit" style={{ width: "auto", marginTop: 0, padding: "6px 10px", background: "var(--panel-2)" }}>
+                        <button type="submit" className="secondary" style={{ width: "auto", marginTop: 0, padding: "6px 10px" }}>
                           Stage restore
                         </button>
                       </form>

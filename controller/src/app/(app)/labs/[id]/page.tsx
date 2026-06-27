@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { db } from "@/lib/db";
 import { takeFlash } from "@/lib/flash";
 import { ago, fmtBytes, pct } from "@/lib/format";
-import { getLab } from "@/lib/labs";
+import { containerOptionsOf, getLab } from "@/lib/labs";
 import { listMembers } from "@/lib/students";
 import { TIB } from "@/lib/settings";
 import {
@@ -12,6 +12,7 @@ import {
   removeMemberAction,
   rescanAction,
   setQuotaAction,
+  updateLabSettingsAction,
 } from "../actions";
 
 export const dynamic = "force-dynamic";
@@ -60,15 +61,17 @@ export default async function LabDetail({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ newuser?: string; pwid?: string; emailed?: string }>;
+  searchParams: Promise<{ newuser?: string; pwid?: string; emailed?: string; saved?: string }>;
 }) {
   const { id } = await params;
-  const { newuser, pwid, emailed } = await searchParams;
+  const { newuser, pwid, emailed, saved } = await searchParams;
+  const savedMsg = saved ? takeFlash(saved) : null;
   // The cleartext password is fetched once from the server-side flash store, never the URL (M-07).
   const pw = pwid ? takeFlash(pwid) : null;
   const labId = Number(id);
   const lab = getLab(labId);
   if (!lab) notFound();
+  const opts = containerOptionsOf(lab);
   const members = listMembers(labId);
   const dockerUsed = dockerByStudent(labId);
 
@@ -94,6 +97,12 @@ export default async function LabDetail({
           {lab.online ? "online" : "offline"}
         </span>
       </h2>
+
+      {savedMsg && (
+        <div className="card" style={{ borderColor: "var(--accent)" }}>
+          <p style={{ margin: 0, color: "var(--accent)" }}>{savedMsg}</p>
+        </div>
+      )}
 
       <div className="card">
         <p style={{ margin: 0 }}>
@@ -137,6 +146,51 @@ export default async function LabDetail({
           <button type="submit" style={{ width: 140, marginTop: 0 }}>
             Apply
           </button>
+        </form>
+      </div>
+
+      <div className="card">
+        <h3 style={{ marginTop: 0 }}>Lab settings</h3>
+        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          PI email is metadata. Changing the image or any container option recreates the container
+          (student data on the fast/slow pools is preserved). The node and SSH port can&apos;t change.
+        </p>
+        <form action={updateLabSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12, maxWidth: 720 }}>
+          <input type="hidden" name="labId" value={lab.id} />
+          <div>
+            <label>PI email</label>
+            <input name="piEmail" type="email" defaultValue={lab.pi_email ?? ""} placeholder="pi@uga.edu" />
+          </div>
+          <div>
+            <label>Base image</label>
+            <input name="image" defaultValue={lab.image} />
+          </div>
+          <div></div>
+          <div>
+            <label>CPUs</label>
+            <input name="cpus" defaultValue={opts.cpus} />
+          </div>
+          <div>
+            <label>RAM</label>
+            <input name="memory" defaultValue={opts.memory} />
+          </div>
+          <div>
+            <label>Shared memory</label>
+            <input name="shmSize" defaultValue={opts.shm_size} />
+          </div>
+          <div>
+            <label>Image size quota</label>
+            <input name="imageQuota" defaultValue={opts.image_quota} />
+          </div>
+          <div>
+            <label>Restart policy</label>
+            <input name="restart" defaultValue={opts.restart} />
+          </div>
+          <div style={{ display: "flex", alignItems: "end" }}>
+            <button type="submit" style={{ width: 160, marginTop: 0 }}>
+              Save settings
+            </button>
+          </div>
         </form>
       </div>
 
@@ -203,7 +257,7 @@ export default async function LabDetail({
                       <label className="muted" style={{ margin: 0, display: "inline-flex", gap: 4, alignItems: "center" }}>
                         <input type="checkbox" name="deleteData" style={{ width: "auto" }} /> delete data
                       </label>
-                      <button type="submit" style={{ width: "auto", marginTop: 0, padding: "6px 10px", background: "var(--panel-2)" }}>
+                      <button type="submit" className="secondary" style={{ width: "auto", marginTop: 0, padding: "6px 10px" }}>
                         Remove
                       </button>
                     </form>
@@ -257,13 +311,13 @@ export default async function LabDetail({
       <div className="card" style={{ display: "flex", gap: 12 }}>
         <form action={recreateContainerAction}>
           <input type="hidden" name="labId" value={lab.id} />
-          <button type="submit" style={{ width: 200, marginTop: 0, background: "var(--panel-2)" }}>
+          <button type="submit" className="secondary" style={{ width: 200, marginTop: 0 }}>
             Recreate container
           </button>
         </form>
         <form action={destroyLabAction}>
           <input type="hidden" name="labId" value={lab.id} />
-          <button type="submit" style={{ width: 200, marginTop: 0, background: "var(--err)" }}>
+          <button type="submit" className="danger" style={{ width: 200, marginTop: 0 }}>
             Destroy lab + data
           </button>
         </form>

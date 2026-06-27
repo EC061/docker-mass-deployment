@@ -101,6 +101,7 @@ export default async function LogsPage({
         {logs.length === 0 ? (
           <p className="muted">No matching logs.</p>
         ) : (
+          <div className="table-wrap">
           <table>
             <thead>
               <tr>
@@ -135,6 +136,7 @@ export default async function LogsPage({
               ))}
             </tbody>
           </table>
+          </div>
         )}
       </div>
     </>
