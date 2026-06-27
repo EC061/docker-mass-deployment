@@ -71,6 +71,13 @@ def set_lab_quota(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 
 def destroy_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
+    # Remove the container FIRST. Its bind mounts of the lab's shared/users datasets keep those
+    # datasets busy, so `zfs destroy -r` fails ("dataset is busy") while the container exists. The
+    # container's data lives in the datasets (not its writable layer), so removing it loses nothing
+    # the teardown isn't already destroying.
+    from .executors import docker
+
+    docker.remove_container(docker.container_name(lab))
     zfs.destroy_dataset(lab_fast(cfg, lab), recursive=True)
     coldstore.destroy_lab(cfg, lab)
-    return {"lab": lab, "destroyed": True}, f"destroyed datasets for lab '{lab}'"
+    return {"lab": lab, "destroyed": True}, f"destroyed container + datasets for lab '{lab}'"

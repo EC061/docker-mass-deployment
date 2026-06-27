@@ -1,13 +1,19 @@
-"""ZFS dataset naming for labs and students.
+"""ZFS dataset / path naming for labs and students.
 
-Layout (per node), rooted on the configured pools:
+Datasets (per node), rooted on the configured pools — one fast + one slow per lab, each with a
+`shared` and a `users` child. There are **no per-student datasets**: every student is a plain subdir
+of the lab's single `users` dataset, so the whole lab (shared + all students) is bounded by the one
+lab quota and per-student subdirs need no host-side setup.
 
     <fast>/labs/<lab>            (quota = lab fast quota)
-    <fast>/labs/<lab>/shared     -> mounted /labdata/fast
-    <fast>/labs/<lab>/users/<u>  -> mounted /home/<u>/scratch
+    <fast>/labs/<lab>/shared       -> mounted /labdata/fast
+    <fast>/labs/<lab>/users        -> mounted /labusers/fast   (each student: a /<u> subdir here)
     <slow>/labs/<lab>            (quota = lab slow quota)
-    <slow>/labs/<lab>/shared     -> mounted /labdata/slow
-    <slow>/labs/<lab>/users/<u>  -> mounted /home/<u>/cold-storage
+    <slow>/labs/<lab>/shared       -> mounted /labdata/slow
+    <slow>/labs/<lab>/users        -> mounted /labusers/slow   (each student: a /<u> subdir here)
+
+``user_scratch``/``user_cold`` return the filesystem path of a student's subdir under those `users`
+datasets (``<...>/users/<u>``) — a directory, not a dataset of its own.
 """
 
 from __future__ import annotations

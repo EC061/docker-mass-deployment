@@ -60,7 +60,15 @@ def test_remove_user_default_keeps_home(cap):
 
 def test_remove_user_delete_home(cap):
     users.remove_user("lab-bio", "alice", delete_home=True)
-    assert "userdel -r alice" in cap.calls[0]["input"]
+    script = cap.calls[0]["input"]
+    assert "userdel -r alice" in script
+    # Data lives in /labusers subdirs (no per-student datasets), so delete_home wipes them too.
+    assert "rm -rf /labusers/fast/alice /labusers/slow/alice" in script
+
+
+def test_remove_user_default_does_not_touch_labusers(cap):
+    users.remove_user("lab-bio", "alice")
+    assert "/labusers/" not in cap.calls[0]["input"]
 
 
 def test_exec_failure_raises(monkeypatch):

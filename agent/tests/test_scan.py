@@ -45,19 +45,21 @@ def test_scan_lab_resolves_mountpoints(tmp_path: Path, monkeypatch):
 
     cfg = AgentConfig(controller_url="ws://x", token="t", fast_pool="fast", slow_pool="slow")
 
-    # Make one user's scratch dataset "exist" and point at a real dir with an old file.
-    scratch_dir = tmp_path / "scratch"
-    scratch_dir.mkdir()
-    f = scratch_dir / "old.bin"
+    # The fast `users` dataset holds every student as a plain subdir (no per-student datasets), so
+    # the scan resolves the users mountpoint and walks <users_mp>/<username>.
+    users_mp = tmp_path / "users"
+    alice_dir = users_mp / "alice"
+    alice_dir.mkdir(parents=True)
+    f = alice_dir / "old.bin"
     f.write_bytes(b"x" * 200)
     old = time.time() - 90 * 86400
     os.utime(f, (old, old))
 
     def dataset_exists(ds):
-        return ds == "fast/labs/bio/users/alice"
+        return ds == "fast/labs/bio/users"
 
     def get_mountpoint(ds):
-        return str(scratch_dir)
+        return str(users_mp)
 
     monkeypatch.setattr(scan.zfs, "dataset_exists", dataset_exists)
     monkeypatch.setattr(scan.zfs, "get_mountpoint", get_mountpoint)

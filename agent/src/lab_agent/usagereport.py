@@ -164,15 +164,18 @@ def build_snapshot(
 ) -> dict[str, Any]:
     """Pure builder: assemble the JSON snapshot for one lab from live ZFS + cached docker usage."""
     now = now if now is not None else now_ms()
-    usernames = sorted(lab_usage.users.keys())
+    # With no per-student ZFS datasets, scratch/cold no longer have cheap per-student metadata (the
+    # lab quota covers everyone), so a student may appear only in the docker-layer measurement.
+    # Union both sources so every known student is still listed, with whatever numbers exist.
+    usernames = sorted(set(lab_usage.users.keys()) | set(docker_usage.per_user.keys()))
     students = []
     for name in usernames:
-        tiers = lab_usage.users[name]
+        tiers = lab_usage.users.get(name, {})
         students.append(
             {
                 "username": name,
-                "scratch": _usage_pair(tiers.get("fast")),
-                "cold": _usage_pair(tiers.get("slow")),  # None under the SMB cold backend
+                "scratch": _usage_pair(tiers.get("fast")),  # None: no per-student dataset
+                "cold": _usage_pair(tiers.get("slow")),  # None: no per-student dataset/SMB
                 "docker_home_used": docker_usage.per_user.get(name),
             }
         )

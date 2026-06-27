@@ -1,12 +1,14 @@
 """In-container student user management via `docker exec`.
 
 A student is a Linux user inside the lab container with:
-  /home/<u>/scratch       -> /labusers/fast/<u>   (fast, per-student dataset)
-  /home/<u>/cold-storage  -> /labusers/slow/<u>   (slow, per-student dataset)
+  /home/<u>/scratch       -> /labusers/fast/<u>   (fast tier, a subdir of the lab's users mount)
+  /home/<u>/cold-storage  -> /labusers/slow/<u>   (slow tier, a subdir of the lab's users mount)
 
-The host-side ZFS datasets are created by the caller (studentops) before this runs; here we only
-create the user, set the password, wire the symlinks, and set umask. The script is piped via stdin
-so the password never appears in the host process list.
+There are no per-student datasets: /labusers/{fast,slow} are the lab's single users datasets,
+already UID-shifted by Sysbox, so we create each student's scratch/cold-storage as a plain subdir
+here and the chown to the student succeeds without host-side setup. We create the user, make the
+subdirs + symlinks, set the password, and set umask. The script is piped via stdin so the password
+never appears in the host process list.
 """
 
 from __future__ import annotations
@@ -71,7 +73,15 @@ def set_password(container: str, username: str, password: str) -> CommandResult:
 
 def remove_user(container: str, username: str, *, delete_home: bool = False) -> CommandResult:
     validate_username(username)
-    flag = "-r " if delete_home else ""
-    # `|| true` so removing an already-absent user is not an error.
-    script = f"userdel {flag}{username} 2>/dev/null || true\n"
+    # `|| true` so removing an already-absent user is not an error. When delete_home is set we also
+    # wipe the student's scratch/cold-storage subdirs under /labusers (there are no per-student
+    # datasets to destroy on the host — the data lives in these in-container subdirs). The username
+    # is USERNAME_RE-validated above, so it is safe to interpolate directly.
+    if delete_home:
+        script = (
+            f"userdel -r {username} 2>/dev/null || true\n"
+            f"rm -rf /labusers/fast/{username} /labusers/slow/{username}\n"
+        )
+    else:
+        script = f"userdel {username} 2>/dev/null || true\n"
     return _run_script(container, script)
