@@ -1,0 +1,13 @@
+# Keep the build context small and stop local artifacts from busting the build cache or leaking into
+# the image. node_modules is rebuilt in the deps stage; .next is rebuilt by `npm run build`.
+node_modules
+.next
+tests
+*.tsbuildinfo
+.git
+.gitignore
+Dockerfile
+.dockerignore
+# Secrets / local env — never ship these. The committed example is fine to keep out too.
+.env
+.env.*
