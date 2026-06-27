@@ -80,17 +80,50 @@ docker info | grep -i 'Storage Driver'   # should print: Storage Driver: zfs
 > propagation so they appear live. Make the ZFS mounts shared once per boot:
 > `sudo mount --make-rshared /fast && sudo mount --make-rshared /slow`.
 
-### 1.4 NVIDIA container toolkit (for GPU labs)
+### 1.4 NVIDIA container toolkit + CDI (for GPU labs)
 
-Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html),
-then verify:
+Install the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/install-guide.html)
+(**≥ 1.17**), then generate a **CDI** spec. Lab containers run under the Sysbox runtime (next step),
+so GPUs are attached with the runtime-agnostic CDI device `nvidia.com/gpu=all` rather than the
+`nvidia` runtime (which cannot be combined with `sysbox-runc`):
 
 ```bash
 nvidia-smi
-docker info | grep -i runtimes   # should list: nvidia
+sudo nvidia-ctk cdi generate --output=/etc/cdi/nvidia.yaml
+nvidia-ctk cdi list | grep nvidia.com/gpu        # should list nvidia.com/gpu=all
 ```
 
-### 1.5 Install the agent
+> Regenerate the spec after a driver upgrade (enable the `nvidia-cdi-refresh` service if your
+> toolkit ships it, or re-run the command). `lab-agent doctor` flags a node that has GPUs but no
+> CDI spec — without it, GPU labs launch GPU-less rather than fall back to an incompatible runtime.
+
+### 1.5 Sysbox runtime (nested Docker, host-isolated)
+
+Lab containers run under [Sysbox CE](https://github.com/nestybox/sysbox) (**≥ 0.7.0**) so users get
+real Docker **inside** their container without `--privileged`. Sysbox's user-namespace remap maps
+container-root (and therefore per-user `sudo`) to an **unprivileged host UID**, so neither the inner
+Docker daemon nor sudo is a path to host root — that is what makes granting sudo safe on a shared
+host.
+
+```bash
+# Install Sysbox CE (see upstream for the current .deb); it registers the sysbox-runc runtime.
+docker info | grep -i runtimes   # should now list: nvidia runc sysbox-runc
+```
+
+Requirements: a recent Ubuntu LTS (22.04/24.04; shiftfs or kernel ≥ 5.19 idmapped mounts). Because
+the host uses the **`zfs` Docker storage driver**, set ACL props on the docker dataset so Sysbox's
+ID-shifting works (harmless on Sysbox ≥ 0.6.5, which no longer requires it):
+
+```bash
+sudo zfs set acltype=posixacl xattr=sa fast/docker
+```
+
+> **Validate once before fleet rollout** (the GPU+ZFS pairing is community-validated, not
+> vendor-documented): `docker run --rm --runtime=sysbox-runc --device nvidia.com/gpu=all custom-ssh
+> nvidia-smi` should see the GPUs, and `--storage-opt size=20g` should still start and enforce the
+> writable-layer quota under sysbox-runc.
+
+### 1.6 Install the agent
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh        # if uv is not present
@@ -113,7 +146,7 @@ sudo lab-agent set-token <TOKEN-FROM-UI>
 Each node has its own token; the controller only accepts allow-listed nodes (so a stolen token can't
 impersonate another node). Check readiness any time with `lab-agent doctor`.
 
-### 1.6 Sharing cold storage between two nodes over SMB (optional)
+### 1.7 Sharing cold storage between two nodes over SMB (optional)
 
 When two nodes need their containers to see the **same** cold data, one node owns the slow ZFS pool
 and the other mounts it over SMB:
@@ -197,13 +230,24 @@ open **Settings** and configure:
 
 ### Build a lab base image
 
-A default Ubuntu+SSH image is in [image/](image/):
+A default Ubuntu image is in [image/](image/): it runs **systemd** as PID 1 with SSH **and a full
+Docker engine**, so under the Sysbox runtime users get host-isolated nested Docker. Each user is
+granted `sudo` and added to the `docker` group when the agent provisions them.
 
 ```bash
 docker build -t custom-ssh ./image     # run on each node, or push to a registry the nodes can pull
 ```
 
 Use any image name in the lab create form; it must run an SSH server and allow `useradd`.
+
+> **Pin once, patch forever.** This image is meant to be built once and frozen for 1–2 years
+> (the `FROM` digest stays put). Running containers are kept current by the agent's **weekly
+> in-container `apt-get update && upgrade`** (`docker exec lab-<lab> …`, run as container-root),
+> scheduled from a persistent local record (`/var/lib/lab-agent/maintenance.json`, anacron-style:
+> a window missed while a node was down is caught up on the next check). Security patching is thus
+> decoupled from the frozen image digest, and the cadence lives in agent code that updates
+> independently of the image. Tune it in `config.toml` (`apt_update_enabled`,
+> `apt_update_interval_s`); `lab-agent doctor` shows each lab's last patch time.
 
 ---
 

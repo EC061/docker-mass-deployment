@@ -14,7 +14,35 @@ from __future__ import annotations
 from typing import Any
 
 from .config import AgentConfig
-from .executors import zfs
+from .executors import docker, zfs
+
+
+def run_apt_upgrade(cfg: AgentConfig, lab: str, *, timeout: float = 1800.0) -> tuple[bool, str]:
+    """Patch one lab's running container in place: ``apt-get update && apt-get -y upgrade``.
+
+    This runs as container-root via ``docker exec`` (the container's PID-1 is root, so no sudo is
+    needed), and patches the *running* container's writable layer — not the image. That is what
+    lets the base image stay pinned and frozen for 1-2 years while security updates still land
+    every week: the digest never has to be bumped for a CVE.
+
+    Returns ``(ok, note)`` and never raises, so the caller's weekly loop survives one bad lab. A
+    non-interactive frontend + ``--force-confold`` keep dpkg from blocking on config prompts.
+    """
+    name = docker.container_name(lab)
+    if not docker.container_exists(name):
+        return False, f"lab '{lab}' container not running; apt upgrade skipped"
+    env = ["env", "DEBIAN_FRONTEND=noninteractive"]
+    updated = docker.exec_in(name, [*env, "apt-get", "update"], timeout=timeout)
+    if not updated.ok:
+        return False, f"apt-get update failed for lab '{lab}': {updated.logs}"
+    upgraded = docker.exec_in(
+        name,
+        [*env, "apt-get", "-y", "-o", "Dpkg::Options::=--force-confold", "upgrade"],
+        timeout=timeout,
+    )
+    if not upgraded.ok:
+        return False, f"apt-get upgrade failed for lab '{lab}': {upgraded.logs}"
+    return True, f"patched lab '{lab}' (apt-get update && upgrade)"
 
 
 def run_scrub(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:

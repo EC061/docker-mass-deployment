@@ -100,8 +100,14 @@ def build_run_args(
     if opts.ssh_port:
         args += ["-p", f"{opts.ssh_port}:22"]
     args += ["--cpus", opts.cpus, "--memory", opts.memory, "--shm-size", opts.shm_size]
+    # Every lab container runs under Sysbox: nested Docker without --privileged, plus a mandatory
+    # user-namespace remap so container-root (even via a user's sudo) maps to an unprivileged host
+    # UID and cannot reach host root. GPUs are injected via the NVIDIA Container Device Interface
+    # (CDI), which docker applies independently of the OCI runtime, so it composes with sysbox-runc.
+    # (--runtime=nvidia cannot be combined with sysbox-runc, and is no longer needed.)
+    args += ["--runtime=sysbox-runc"]
     if gpus:
-        args += ["--gpus", "all", "--runtime=nvidia"]
+        args += ["--device", "nvidia.com/gpu=all"]
     if storage_quota_supported and opts.image_quota:
         args += ["--storage-opt", f"size={opts.image_quota}"]
     args += ["--restart", opts.restart]
@@ -141,5 +147,49 @@ def create_container(name: str, opts: ContainerOptions, mounts: Mounts, *, gpus:
     return res.stdout.strip()
 
 
-def exec_in(name: str, argv: list[str], *, input_text: str | None = None) -> CommandResult:
-    return run(["docker", "exec", "-i", name, *argv], timeout=120, input_text=input_text)
+def exec_in(name: str, argv: list[str], *, input_text: str | None = None,
+            timeout: float = 120.0) -> CommandResult:
+    return run(["docker", "exec", "-i", name, *argv], timeout=timeout, input_text=input_text)
+
+
+# --------------------------------------------------------------------------- writable-layer usage
+# Per-student storage in scratch/cold-storage is ZFS and measured cheaply via dataset metadata.
+# Anything a student installs into their container home (pip/conda envs, software) lives in the
+# container's writable layer instead, which ZFS quota does not break down per student. These helpers
+# measure that layer (total + per-home `du`) for the labquota usage report.
+
+
+def writable_layer_size(name: str) -> int | None:
+    """Bytes written to the container's writable layer (``SizeRw``), or None if unavailable.
+
+    ``docker inspect --size`` returns SizeRw as an integer byte count, so no human-size parsing.
+    """
+    res = run(
+        ["docker", "inspect", "--size", "--format", "{{.SizeRw}}", name], timeout=60
+    )
+    if not res.ok:
+        return None
+    try:
+        return int(res.stdout.strip())
+    except (ValueError, TypeError):
+        return None
+
+
+def du_home(name: str, username: str, *, timeout: float = 60.0) -> int | None:
+    """Bytes used by a student's home directory inside the container, or None on failure/timeout.
+
+    The username is the only interpolated value; callers must have validated it (users.USERNAME_RE)
+    before this point. ``du -sb`` reports apparent size in bytes; we take the leading integer. A
+    bounded timeout means a student who packs their home with millions of tiny files can, at worst,
+    make their *own* number unavailable — the scan moves on rather than hanging.
+    """
+    res = exec_in(name, ["du", "-sb", f"/home/{username}"], timeout=timeout)
+    if not res.ok:
+        return None
+    first = res.stdout.strip().split(None, 1)
+    if not first:
+        return None
+    try:
+        return int(first[0])
+    except (ValueError, TypeError):
+        return None

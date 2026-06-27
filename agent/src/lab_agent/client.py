@@ -16,15 +16,18 @@ from __future__ import annotations
 import asyncio
 import json
 import ssl
+import threading
 
 import websockets
 
 from . import protocol as P
+from . import usagereport
 from .config import AgentConfig
 from .dispatcher import Dispatcher
 from .localq import LocalQueues
 from .logbus import LogBus
 from .system import detect_capabilities
+from .usagereport import UsageState
 
 INITIAL_BACKOFF = 1.0
 MAX_BACKOFF = 30.0
@@ -36,6 +39,8 @@ class Agent:
         self.localq = LocalQueues(cfg.state_db)
         self.log = LogBus(cfg.node_name, sink=self.localq.enqueue_outbound)
         self.dispatcher = Dispatcher(cfg, self.log)
+        self.usage = UsageState()
+        self._docker_lock = threading.Lock()  # single-flight guard for the docker-layer scan
         self._connected = asyncio.Event()
 
     # ------------------------------------------------------------------ helpers
@@ -61,11 +66,17 @@ class Agent:
         """Run forever: persistent task worker + GPU killer + reconnecting connection loop."""
         worker = asyncio.create_task(self._task_worker(), name="task-worker")
         gpu = asyncio.create_task(self._gpu_loop(), name="gpu-killer")
+        publish = asyncio.create_task(self._usage_publish_loop(), name="usage-publish")
+        docker_scan = asyncio.create_task(self._docker_scan_loop(), name="docker-scan")
+        pkg_update = asyncio.create_task(self._pkg_update_loop(), name="pkg-update")
         try:
             await self._connection_loop()
         finally:
             worker.cancel()
             gpu.cancel()
+            publish.cancel()
+            docker_scan.cancel()
+            pkg_update.cancel()
             self.localq.close()
 
     async def _connection_loop(self) -> None:
@@ -211,16 +222,146 @@ class Agent:
             await asyncio.sleep(interval)
 
     async def _heartbeat(self, ws) -> None:
-        """Periodically emit a telemetry frame. Payload is filled in by phase 2 (telemetry)."""
+        """Periodically emit a telemetry frame (pool free space, dataset usage, scrub, GPU)."""
         while True:
             try:
                 from .telemetry import collect_heartbeat
 
-                payload = await asyncio.to_thread(collect_heartbeat, self.cfg)
+                payload = await asyncio.to_thread(collect_heartbeat, self.cfg, self.usage)
             except Exception as exc:
                 payload = {"error": str(exc)}
             self.log.telemetry(payload)
             await asyncio.sleep(self.cfg.heartbeat_interval_s)
+
+    # ----------------------------------------------------------------- labquota usage report
+
+    async def _usage_publish_loop(self) -> None:
+        """Republish each lab's labquota usage snapshot from live ZFS metadata (cheap)."""
+        while True:
+            try:
+                await asyncio.to_thread(self._publish_all_usage)
+            except Exception as exc:  # never let the publisher die
+                self.log.error("usage", f"usage publish error: {exc}")
+            await asyncio.sleep(max(15, self.cfg.usage_publish_interval_s))
+
+    def _publish_all_usage(self) -> None:
+        grouped = usagereport.collect_zfs_usage(self.cfg)
+        for lab, lab_usage in grouped.items():
+            try:
+                usagereport.ensure_labquota_dirs(self.cfg, lab)
+                snapshot = usagereport.build_snapshot(
+                    self.cfg, lab, lab_usage, self.usage.docker_for(lab)
+                )
+                usagereport.publish_snapshot(self.cfg, lab, snapshot)
+            except Exception as exc:  # one bad lab must not stop the others
+                self.log.warn("usage", f"publish failed for lab '{lab}': {exc}", lab=lab)
+
+    async def _docker_scan_loop(self) -> None:
+        """Refresh the (expensive) docker writable-layer breakdown on a slow cadence / on demand.
+
+        A lab is (re)scanned when its cached data is older than ``docker_scan_interval_s``, or when
+        a student dropped a refresh marker and the cache is older than the forced floor (5 min).
+        """
+        floor_ms = 5 * 60 * 1000
+        while True:
+            try:
+                # Single-flight: if the previous tick's scan is still running (a big lab can take a
+                # while), skip this tick rather than piling concurrent scans on top of it.
+                if self._docker_lock.acquire(blocking=False):
+                    try:
+                        await asyncio.to_thread(self._scan_due_docker, floor_ms)
+                    finally:
+                        self._docker_lock.release()
+            except Exception as exc:  # never let the scanner die
+                self.log.error("usage", f"docker scan loop error: {exc}")
+            await asyncio.sleep(60)
+
+    def _scan_due_docker(self, floor_ms: int) -> None:
+        now = P.now_ms()
+        interval_ms = max(60, self.cfg.docker_scan_interval_s) * 1000
+        grouped = usagereport.collect_zfs_usage(self.cfg)
+        for lab, lab_usage in grouped.items():
+            cached = self.usage.docker_for(lab)
+            age = None if cached.scanned_at is None else now - cached.scanned_at
+            users_list = sorted(lab_usage.users.keys())
+            requested = usagereport.newest_request(self.cfg, lab, users_list)
+            due = age is None or age >= interval_ms
+            # Honor a student request only if it is newer than the last scan (so one touch triggers
+            # at most one scan) and the forced-refresh floor has elapsed (so a touch-loop cannot
+            # make us scan more than once per floor).
+            fresh_request = requested is not None and (
+                cached.scanned_at is None or requested > cached.scanned_at
+            )
+            forced = fresh_request and (age is None or age >= floor_ms)
+            if not (due or forced):
+                continue
+            self._scan_docker_lab(lab, users_list)
+
+    def _scan_docker_lab(self, lab: str, usernames: list[str]) -> None:
+        def progress(done: int, total: int, current: str) -> None:
+            try:
+                usagereport.write_status(
+                    self.cfg,
+                    lab,
+                    {"status": "running", "done": done, "total": total,
+                     "current": current, "ts": P.now_ms()},
+                )
+            except Exception:  # status is best-effort
+                pass
+
+        try:
+            usagereport.ensure_labquota_dirs(self.cfg, lab)
+            progress(0, len(usernames), "")
+            usage = usagereport.run_docker_scan(self.cfg, lab, usernames, progress=progress)
+            self.usage.set_docker(lab, usage)
+            usagereport.clear_requests(self.cfg, lab, usernames)
+            usagereport.write_status(
+                self.cfg, lab, {"status": "idle", "scanned_at": usage.scanned_at}
+            )
+            # Republish immediately so the student sees fresh numbers without waiting a cycle.
+            grouped = usagereport.collect_zfs_usage(self.cfg)
+            snapshot = usagereport.build_snapshot(
+                self.cfg, lab, grouped.get(lab, usagereport.LabUsage()), usage
+            )
+            usagereport.publish_snapshot(self.cfg, lab, snapshot)
+        except Exception as exc:
+            self.log.warn("usage", f"docker scan failed for lab '{lab}': {exc}", lab=lab)
+
+    # ----------------------------------------------------------------- weekly in-container patching
+
+    async def _pkg_update_loop(self) -> None:
+        """Patch each lab's running container in place on a weekly cadence (apt update && upgrade).
+
+        The due-check is timestamp-based and persisted to disk (see ``maintenance_state``), so the
+        cadence is anacron-style: a window missed while the agent or node was down is caught up on
+        the next wake, and the schedule survives restarts. Patching the running container's writable
+        layer is what keeps the pinned base image frozen while security updates still land weekly.
+        """
+        while True:
+            interval = max(300, self.cfg.apt_update_check_interval_s)
+            if not self.cfg.apt_update_enabled:
+                await asyncio.sleep(interval)
+                continue
+            try:
+                await asyncio.to_thread(self._run_due_apt_upgrades)
+            except Exception as exc:  # never let the loop die
+                self.log.error("maintenance", f"package update loop error: {exc}")
+            await asyncio.sleep(interval)
+
+    def _run_due_apt_upgrades(self) -> None:
+        from . import maintenance, maintenance_state
+
+        for lab in usagereport.collect_zfs_usage(self.cfg):
+            if not maintenance_state.is_due(self.cfg, lab, self.cfg.apt_update_interval_s):
+                continue
+            ok, note = maintenance.run_apt_upgrade(
+                self.cfg, lab, timeout=self.cfg.apt_update_timeout_s
+            )
+            if ok:
+                maintenance_state.record_apt_upgrade(self.cfg, lab)
+                self.log.info("maintenance", note, lab=lab)
+            else:
+                self.log.warn("maintenance", note, lab=lab)
 
 
 def run_agent(cfg: AgentConfig) -> None:

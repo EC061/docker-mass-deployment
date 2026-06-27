@@ -75,12 +75,20 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         cfg = load_config(Path(args.config) if args.config else None)
     except FileNotFoundError:
         cfg = AgentConfig(controller_url="(none)", token="(none)")
+    from . import maintenance_state
+
     caps = detect_capabilities(cfg)
     print(f"node: {cfg.node_name}")
     for field, value in caps.to_dict().items():
         if field == "issues":
             continue
         print(f"  {field}: {value}")
+    # Persistent weekly-patch bookkeeping: when each lab's container was last apt-upgraded.
+    patched = maintenance_state.all_apt_upgrades(cfg)
+    if patched:
+        print("last apt upgrade (epoch ms):")
+        for lab, ts in sorted(patched.items()):
+            print(f"  {lab}: {ts}")
     if caps.issues:
         print("issues:")
         for issue in caps.issues:

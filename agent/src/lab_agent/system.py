@@ -20,6 +20,8 @@ class Capabilities:
     nvidia_runtime: bool
     nvidia_gpu: bool
     gpu_count: int
+    sysbox: bool  # the sysbox-runc OCI runtime is registered (required for nested Docker)
+    nvidia_cdi: bool  # an NVIDIA CDI spec exists (how GPUs are attached under sysbox-runc)
     fast_pool_present: bool
     slow_pool_present: bool
     slow_backend: str  # "zfs" or "smb"
@@ -50,6 +52,20 @@ def _nvidia_runtime() -> bool:
     return res.ok and "nvidia" in res.stdout
 
 
+def _sysbox_runtime() -> bool:
+    """The Sysbox OCI runtime is registered (lab containers run with --runtime=sysbox-runc)."""
+    res = run(["docker", "info", "--format", "{{.Runtimes}}"], timeout=20)
+    return res.ok and "sysbox-runc" in res.stdout
+
+
+def _cdi_present() -> bool:
+    """An NVIDIA CDI spec exists. GPUs are injected with `--device nvidia.com/gpu=all` (runtime-
+    agnostic, so it composes with sysbox-runc), generated via `nvidia-ctk cdi generate`."""
+    import os
+
+    return os.path.exists("/etc/cdi/nvidia.yaml") or os.path.exists("/var/run/cdi/nvidia.yaml")
+
+
 def _gpu_count() -> int:
     res = run(["nvidia-smi", "-L"], timeout=20)
     if not res.ok:
@@ -76,6 +92,20 @@ def detect_capabilities(cfg: AgentConfig) -> Capabilities:
     nv_runtime = _nvidia_runtime() if docker_ok else False
     gpus = _gpu_count()
 
+    # Lab containers run under Sysbox for host-isolated nested Docker; flag a node that lacks it.
+    sysbox = _sysbox_runtime() if docker_ok else False
+    if docker_ok and not sysbox:
+        issues.append(
+            "sysbox-runc runtime not found: nested Docker needs Sysbox CE (see host-prep docs)"
+        )
+    # GPUs are attached via CDI (not the nvidia runtime, which can't combine with sysbox-runc).
+    cdi = _cdi_present()
+    if gpus > 0 and not cdi:
+        issues.append(
+            "NVIDIA GPUs present but no CDI spec found; run `nvidia-ctk cdi generate "
+            "--output=/etc/cdi/nvidia.yaml` or GPUs will not be attached to lab containers"
+        )
+
     fast_ok = _pool_exists(cfg.fast_pool) if zfs_ok else False
     if zfs_ok and not fast_ok:
         issues.append(f"fast pool '{cfg.fast_pool}' not found")
@@ -97,6 +127,8 @@ def detect_capabilities(cfg: AgentConfig) -> Capabilities:
         nvidia_runtime=nv_runtime,
         nvidia_gpu=gpus > 0,
         gpu_count=gpus,
+        sysbox=sysbox,
+        nvidia_cdi=cdi,
         fast_pool_present=fast_ok,
         slow_pool_present=slow_ok,
         slow_backend=cfg.slow_backend,

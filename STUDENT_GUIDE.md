@@ -36,6 +36,26 @@ Storage is **quota-limited per lab**. If the lab gets close to its limit, your P
 per-student breakdown — so clean up files you no longer need. Old, untouched files in `~/scratch` and
 `~/cold-storage` are periodically reported to your admins as cleanup candidates.
 
+> **Install your environments under `~/scratch`.** Anything you install into your home directory
+> (a `venv`/conda env, downloaded software) lives inside the container and is **lost if the container
+> is ever rebuilt**. Files in `~/scratch` and `~/cold-storage` are on persistent storage and survive.
+> For example: `python3 -m venv ~/scratch/envs/myproject`.
+
+### Checking your usage
+
+Run `labquota` to see a whole-lab breakdown — your usage **and** your labmates' — across scratch,
+cold storage, and software you've installed in the container:
+
+```bash
+labquota              # whole-lab table
+labquota --me         # just your own usage
+labquota --refresh    # recompute installed-software sizes (and watch the progress)
+```
+
+`scratch`/`cold` numbers are always current. The **installed** column (software in your container
+home) is measured periodically; `labquota --refresh` asks the server for a fresh measurement if the
+last one is over an hour old.
+
 ## GPUs
 
 All of the server's GPUs are available to your lab. To keep them fair for everyone, there is an

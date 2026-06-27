@@ -38,7 +38,7 @@ def _pools(cfg: AgentConfig) -> list[dict[str, Any]]:
     return [info for p in zfs_pools if (info := _pool_free(p)) is not None]
 
 
-def _dataset_usage(cfg: AgentConfig) -> list[dict[str, Any]]:
+def _dataset_usage(cfg: AgentConfig, docker_state: Any = None) -> list[dict[str, Any]]:
     out = []
     for u in zfs.list_usage(cfg.labs_fast_root):
         out.append(
@@ -51,13 +51,20 @@ def _dataset_usage(cfg: AgentConfig) -> list[dict[str, Any]]:
             }
         )
     out.extend(coldstore.list_usage(cfg))
+    # Cached docker writable-layer usage (pool="docker"), so the controller stores per-student
+    # "installed software" alongside the ZFS tiers. Computed by the scan loop, not measured here.
+    if docker_state is not None:
+        from . import usagereport
+
+        for lab, usage in docker_state.all_docker().items():
+            out.extend(usagereport.docker_datasets(lab, usage))
     return out
 
 
-def collect_heartbeat(cfg: AgentConfig) -> dict[str, Any]:
+def collect_heartbeat(cfg: AgentConfig, docker_state: Any = None) -> dict[str, Any]:
     return {
         "pools": _pools(cfg),
-        "datasets": _dataset_usage(cfg),
+        "datasets": _dataset_usage(cfg, docker_state),
         "scrub": [zfs.scrub_status(p).to_dict() for p in cfg.scrub_pools],
         "gpu_processes": list_gpu_processes(),
     }

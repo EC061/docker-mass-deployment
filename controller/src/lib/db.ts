@@ -221,6 +221,13 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     UPDATE nodes SET allowed = 1, auth_mode = 'legacy';
     `,
   },
+  {
+    id: "0005_oldfile_schedule",
+    sql: `
+    -- Last time a nightly old-file scan was scheduled for this lab (mirrors nodes.last_scrub).
+    ALTER TABLE labs ADD COLUMN last_oldfile_scan INTEGER;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

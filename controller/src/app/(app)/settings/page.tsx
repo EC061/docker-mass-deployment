@@ -57,6 +57,21 @@ export default async function SettingsPage({
             <label>Old-file threshold (days)</label>
             <input name="oldFileThresholdDays" type="number" defaultValue={s.oldFileThresholdDays} />
           </div>
+          <div>
+            <label>Old-file scan interval (days)</label>
+            <input name="oldFileScanIntervalDays" type="number" defaultValue={s.oldFileScanIntervalDays} />
+          </div>
+          <div style={{ gridColumn: "1 / -1" }}>
+            <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                name="oldFileScanEnabled"
+                defaultChecked={s.oldFileScanEnabled}
+                style={{ width: "auto" }}
+              />
+              Run nightly old-file scans automatically
+            </label>
+          </div>
           <div style={{ gridColumn: "1 / -1" }}>
             <button type="submit" style={{ width: 140 }}>
               Save

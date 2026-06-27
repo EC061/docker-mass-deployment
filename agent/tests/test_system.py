@@ -42,12 +42,14 @@ def test_healthy_zfs_node(monkeypatch):
         "zfs version": _ok("zfs-2.2.0"),
         "docker version": _ok("24.0"),
         "docker info --format {{.Driver}}": _ok("zfs"),
-        "docker info --format {{.Runtimes}}": _ok("map[nvidia:... runc:...]"),
+        "docker info --format {{.Runtimes}}": _ok("map[nvidia:... runc:... sysbox-runc:...]"),
         "nvidia-smi -L": _ok("GPU 0: NVIDIA A100\nGPU 1: NVIDIA A100\n"),
         "zpool list -H -o name fast": _ok("fast"),
         "zpool list -H -o name slow": _ok("slow"),
     })
     monkeypatch.setattr(system, "run", runner)
+    # A healthy GPU node also has Sysbox registered and an NVIDIA CDI spec generated.
+    monkeypatch.setattr(system, "_cdi_present", lambda: True)
     caps = system.detect_capabilities(_cfg())
     assert caps.zfs is True
     assert caps.docker is True
@@ -55,10 +57,31 @@ def test_healthy_zfs_node(monkeypatch):
     assert caps.nvidia_runtime is True
     assert caps.nvidia_gpu is True
     assert caps.gpu_count == 2
+    assert caps.sysbox is True
+    assert caps.nvidia_cdi is True
     assert caps.fast_pool_present is True
     assert caps.slow_pool_present is True
     assert caps.slow_backend == "zfs"
     assert caps.issues == []
+
+
+def test_missing_sysbox_and_cdi_are_flagged(monkeypatch):
+    runner = FakeRunner({
+        "zfs version": _ok(),
+        "docker version": _ok("24.0"),
+        "docker info --format {{.Driver}}": _ok("zfs"),
+        "docker info --format {{.Runtimes}}": _ok("map[runc:...]"),  # no sysbox-runc
+        "nvidia-smi -L": _ok("GPU 0: NVIDIA A100\n"),
+        "zpool list -H -o name fast": _ok("fast"),
+        "zpool list -H -o name slow": _ok("slow"),
+    })
+    monkeypatch.setattr(system, "run", runner)
+    monkeypatch.setattr(system, "_cdi_present", lambda: False)
+    caps = system.detect_capabilities(_cfg())
+    assert caps.sysbox is False
+    assert caps.nvidia_cdi is False
+    assert any("sysbox-runc runtime not found" in i for i in caps.issues)
+    assert any("no CDI spec" in i for i in caps.issues)
 
 
 def test_missing_zfs_records_issue_and_skips_pool_checks(monkeypatch):
@@ -161,10 +184,12 @@ def test_smb_backend_unmounted_is_flagged(monkeypatch):
 def test_to_dict_roundtrips_fields():
     caps = system.Capabilities(
         zfs=True, docker=True, docker_zfs_driver=True, nvidia_runtime=False,
-        nvidia_gpu=False, gpu_count=0, fast_pool_present=True, slow_pool_present=True,
-        slow_backend="zfs", slow_shared=False, issues=["x"],
+        nvidia_gpu=False, gpu_count=0, sysbox=True, nvidia_cdi=False, fast_pool_present=True,
+        slow_pool_present=True, slow_backend="zfs", slow_shared=False, issues=["x"],
     )
     d = caps.to_dict()
     assert d["zfs"] is True
     assert d["gpu_count"] == 0
+    assert d["sysbox"] is True
+    assert d["nvidia_cdi"] is False
     assert d["issues"] == ["x"]
