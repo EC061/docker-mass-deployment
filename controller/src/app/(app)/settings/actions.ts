@@ -26,16 +26,49 @@ export async function saveStorageSettingsAction(formData: FormData) {
   revalidatePath("/settings");
 }
 
+// Implicit TLS is no longer a manual toggle: it's inferred from the SMTP host.
+// An https:// scheme (or port 465) means implicit TLS; http:// (or any other
+// port) means STARTTLS/none. The scheme and any embedded port are stripped so a
+// bare hostname is stored for nodemailer.
+function parseSmtpHost(
+  raw: string,
+  portField: number,
+): { host: string; port: number; secure: boolean } {
+  let input = raw.trim();
+  let scheme: "http" | "https" | null = null;
+  const m = input.match(/^(https?):\/\//i);
+  if (m) {
+    scheme = m[1].toLowerCase() as "http" | "https";
+    input = input.slice(m[0].length);
+  }
+  // Drop any trailing path/query.
+  input = input.split(/[/?#]/)[0];
+  // Pull an embedded port (host:port) out of the host string; it wins over the field.
+  let port = portField;
+  const colon = input.lastIndexOf(":");
+  if (colon !== -1) {
+    const p = Number(input.slice(colon + 1));
+    if (p > 0) port = p;
+    input = input.slice(0, colon);
+  }
+  const secure = scheme === "https" ? true : scheme === "http" ? false : port === 465;
+  return { host: input.trim(), port, secure };
+}
+
 export async function saveSmtpSettingsAction(formData: FormData) {
   await requireAdmin();
-  setSetting("smtpHost", String(formData.get("smtpHost") ?? "").trim());
-  setSetting("smtpPort", Number(formData.get("smtpPort")) || 587);
+  const { host, port, secure } = parseSmtpHost(
+    String(formData.get("smtpHost") ?? ""),
+    Number(formData.get("smtpPort")) || 587,
+  );
+  setSetting("smtpHost", host);
+  setSetting("smtpPort", port);
+  setSetting("smtpSecure", secure);
   setSetting("smtpUser", String(formData.get("smtpUser") ?? "").trim());
   const pass = String(formData.get("smtpPass") ?? "");
   // Only overwrite the stored password when a new one is entered (the field renders blank).
   if (pass) setSetting("smtpPass", pass);
   setSetting("smtpFrom", String(formData.get("smtpFrom") ?? "").trim());
-  setSetting("smtpSecure", formData.get("smtpSecure") === "on");
   setSetting("sshHostOverride", String(formData.get("sshHostOverride") ?? "").trim());
   revalidatePath("/settings");
 }

@@ -86,7 +86,10 @@ export default async function SettingsPage({
         <form action={saveSmtpSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
           <div>
             <label>SMTP host</label>
-            <input name="smtpHost" defaultValue={s.smtpHost} placeholder="smtp.uga.edu" />
+            <input name="smtpHost" defaultValue={s.smtpHost} placeholder="https://smtp.uga.edu:465" />
+            <small style={{ color: "var(--muted)" }}>
+              Use https:// (or port 465) for implicit TLS; http:// for STARTTLS.
+            </small>
           </div>
           <div>
             <label>Port</label>
@@ -107,10 +110,6 @@ export default async function SettingsPage({
           <div>
             <label>SSH host override (optional)</label>
             <input name="sshHostOverride" defaultValue={s.sshHostOverride} placeholder="gpu.uga.edu" />
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" name="smtpSecure" defaultChecked={s.smtpSecure} style={{ width: "auto" }} />
-            <label style={{ margin: 0 }}>Implicit TLS (port 465)</label>
           </div>
           <div style={{ gridColumn: "1 / -1" }}>
             <button type="submit" style={{ width: 140 }}>
