@@ -111,6 +111,10 @@ export async function destroyLabAction(formData: FormData) {
   const labId = Number(formData.get("labId"));
   destroyLab(labId, who);
   revalidatePath("/labs");
+  revalidatePath("/students");
+  // The lab detail page (/labs/[id]) no longer exists after destroy, so send the admin to the labs
+  // list rather than leaving them on a 404.
+  redirect("/labs");
 }
 
 export async function rescanAction(formData: FormData) {
@@ -181,4 +185,5 @@ export async function removeMemberAction(formData: FormData) {
   const deleteData = formData.get("deleteData") === "on";
   removeStudentFromLab(labId, studentId, deleteData, who);
   revalidatePath(`/labs/${labId}`);
+  revalidatePath("/students");
 }

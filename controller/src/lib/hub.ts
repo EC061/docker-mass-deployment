@@ -14,6 +14,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import { alertNodeOffline, alertTaskFailed, maybeAlertOnLog } from "./alerts";
 import { db } from "./db";
 import { ingestTelemetry, storeOldfileScan } from "./ingest";
+import { markLabStatus } from "./labs";
 import { verifyNodeAuth } from "./nodes";
 import { ackTask, claimTask, markTaskState, retryTask } from "./queue";
 import { getSetting } from "./settings";
@@ -173,18 +174,30 @@ function handleResult(node: string, frame: any): void {
     frame.ok ? undefined : frame.error,
   );
   if (!changed) return;
-  if (!frame.ok) {
-    const t = db().prepare("SELECT node, action FROM task_log WHERE task_uuid = ?").get(frame.id) as
-      | { node: string; action: string }
-      | undefined;
-    if (t) alertTaskFailed(t.node, t.action, frame.error ?? "unknown error");
+  const t = db()
+    .prepare("SELECT node, action, params FROM task_log WHERE task_uuid = ?")
+    .get(frame.id) as { node: string; action: string; params: string | null } | undefined;
+  if (!frame.ok && t) {
+    alertTaskFailed(t.node, t.action, frame.error ?? "unknown error");
+  }
+  // Lab provisioning lifecycle: a lab is created in 'provisioning' and stays there until its
+  // lab.create task reports back. Flip it to 'active' on success or 'failed' on error so it no
+  // longer reads as permanently "provisioning". The lab name comes from the task params (the result
+  // payload also carries it, but params is always present even on failure).
+  if (t?.action === "lab.create") {
+    let labName: string | undefined = frame.result?.lab;
+    if (!labName && t.params) {
+      try {
+        labName = (JSON.parse(t.params) as { lab?: string }).lab;
+      } catch {
+        labName = undefined;
+      }
+    }
+    if (labName) markLabStatus(labName, frame.ok ? "active" : "failed");
   }
   // Persist scan results into the oldfile_scans table.
-  if (frame.ok && frame.result?.results && frame.result?.lab) {
-    const row = db().prepare("SELECT action FROM task_log WHERE task_uuid = ?").get(frame.id) as
-      | { action: string }
-      | undefined;
-    if (row?.action === "oldfiles.scan") storeOldfileScan(frame.result);
+  if (frame.ok && frame.result?.results && frame.result?.lab && t?.action === "oldfiles.scan") {
+    storeOldfileScan(frame.result);
   }
   if (frame.logs) {
     db()

@@ -53,13 +53,6 @@ def test_smb_set_quota_is_noop():
     assert "owner" in note.lower() or "smb" in note.lower()
 
 
-def test_smb_create_user_makes_directory(monkeypatch):
-    dirs = []
-    monkeypatch.setattr(coldstore.coldfs, "ensure_dir", lambda p: dirs.append(p))
-    coldstore.create_user(_smb_cfg(), "bio", "alice", 100)
-    assert "/mnt/cold/labs/bio/users/alice" in dirs
-
-
 def test_smb_destroy_lab_guards_root(monkeypatch):
     calls = []
     monkeypatch.setattr(coldstore.coldfs, "remove_tree", lambda p, *, guard: calls.append((p, guard)))

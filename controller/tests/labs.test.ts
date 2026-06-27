@@ -148,4 +148,43 @@ describe("destroyLab", () => {
     labs.destroyLab(999999);
     expect(enqueueTask).not.toHaveBeenCalled();
   });
+
+  it("removes students that belonged only to the destroyed lab, keeps shared ones", () => {
+    const a = makeLab("alpha");
+    const b = makeLab("beta");
+    const db = dbmod.db();
+    // sole: only in alpha. shared: in both alpha and beta.
+    const sole = Number(
+      db.prepare("INSERT INTO students (username, created_at) VALUES ('sole', 0)").run().lastInsertRowid,
+    );
+    const shared = Number(
+      db.prepare("INSERT INTO students (username, created_at) VALUES ('shared', 0)").run().lastInsertRowid,
+    );
+    db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(a.id, sole);
+    db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(a.id, shared);
+    db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(b.id, shared);
+
+    labs.destroyLab(a.id, "admin");
+
+    // sole had no other membership -> deleted; shared still in beta -> kept.
+    expect(db.prepare("SELECT id FROM students WHERE id = ?").get(sole)).toBeUndefined();
+    expect(db.prepare("SELECT id FROM students WHERE id = ?").get(shared)).toBeTruthy();
+    // memberships in the destroyed lab are gone (ON DELETE CASCADE).
+    expect(db.prepare("SELECT 1 FROM lab_members WHERE lab_id = ?").get(a.id)).toBeUndefined();
+  });
+});
+
+describe("markLabStatus", () => {
+  it("transitions a provisioning lab to active (and to failed)", () => {
+    const lab = makeLab("statuslab");
+    expect(labs.getLab(lab.id)!.status).toBe("provisioning");
+    labs.markLabStatus("statuslab", "active");
+    expect(labs.getLab(lab.id)!.status).toBe("active");
+    labs.markLabStatus("statuslab", "failed");
+    expect(labs.getLab(lab.id)!.status).toBe("failed");
+  });
+
+  it("is a silent no-op for an unknown lab name", () => {
+    expect(() => labs.markLabStatus("nope", "active")).not.toThrow();
+  });
 });

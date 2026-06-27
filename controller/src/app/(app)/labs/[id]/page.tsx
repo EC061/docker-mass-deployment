@@ -1,4 +1,5 @@
 import { notFound } from "next/navigation";
+import { ConfirmButton } from "../../_components/ConfirmButton";
 import { db } from "@/lib/db";
 import { takeFlash } from "@/lib/flash";
 import { ago, fmtBytes, pct } from "@/lib/format";
@@ -257,9 +258,14 @@ export default async function LabDetail({
                       <label className="muted" style={{ margin: 0, display: "inline-flex", gap: 4, alignItems: "center" }}>
                         <input type="checkbox" name="deleteData" style={{ width: "auto" }} /> delete data
                       </label>
-                      <button type="submit" className="secondary" style={{ width: "auto", marginTop: 0, padding: "6px 10px" }}>
+                      <ConfirmButton
+                        type="submit"
+                        className="secondary"
+                        style={{ width: "auto", marginTop: 0, padding: "6px 10px" }}
+                        confirm={`Remove ${m.username} from ${lab.name}? If "delete data" is checked, their files are permanently erased.`}
+                      >
                         Remove
-                      </button>
+                      </ConfirmButton>
                     </form>
                   </td>
                 </tr>
@@ -317,9 +323,14 @@ export default async function LabDetail({
         </form>
         <form action={destroyLabAction}>
           <input type="hidden" name="labId" value={lab.id} />
-          <button type="submit" className="danger" style={{ width: 200, marginTop: 0 }}>
+          <ConfirmButton
+            type="submit"
+            className="danger"
+            style={{ width: 200, marginTop: 0 }}
+            confirm={`Destroy lab "${lab.name}"? This removes the container and ALL data (shared + every student), and deletes students that belong only to this lab. This cannot be undone.`}
+          >
             Destroy lab + data
-          </button>
+          </ConfirmButton>
         </form>
       </div>
     </>

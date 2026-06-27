@@ -59,6 +59,24 @@ def test_set_lab_quota_live(monkeypatch):
 
 def test_destroy_lab_removes_both_roots(monkeypatch):
     _created, _quotas, destroyed = _patch_zfs(monkeypatch)
+    from lab_agent.executors import docker
+
+    monkeypatch.setattr(docker, "remove_container", lambda name: None)
     labops.destroy_lab(_cfg(), {"lab": "bio"})
     assert "fast/labs/bio" in destroyed
     assert "slow/labs/bio" in destroyed
+
+
+def test_destroy_lab_removes_container_before_datasets(monkeypatch):
+    # The container must be removed first; otherwise its bind mounts keep the datasets busy and
+    # `zfs destroy -r` fails ("dataset is busy"). Assert remove_container runs before destroy.
+    _created, _quotas, _destroyed = _patch_zfs(monkeypatch)
+    from lab_agent.executors import docker
+
+    order: list[str] = []
+    monkeypatch.setattr(docker, "remove_container", lambda name: order.append(f"rm:{name}"))
+    monkeypatch.setattr(labops.zfs, "destroy_dataset",
+                        lambda name, *, recursive=True: order.append(f"destroy:{name}"))
+    labops.destroy_lab(_cfg(), {"lab": "bio"})
+    assert order[0] == "rm:lab-bio"
+    assert any(o.startswith("destroy:") for o in order[1:])

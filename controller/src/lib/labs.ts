@@ -220,12 +220,38 @@ export function updateLabSettings(labId: number, input: UpdateLabSettingsInput, 
   return false;
 }
 
+/** Set a lab's textual status by name. Used by the result ingest path (provisioning -> active). */
+export function markLabStatus(name: string, status: string): void {
+  db().prepare("UPDATE labs SET status = ? WHERE name = ?").run(status, name);
+}
+
 export function destroyLab(labId: number, actor?: string): void {
   const lab = getLab(labId);
   if (!lab) return;
+  // The node's lab.destroy tears down the container and every dataset (shared + all students), so
+  // student *data* goes with the lab. Mark deleting, capture members for orphan cleanup, then enqueue.
+  db().prepare("UPDATE labs SET status = 'deleting' WHERE id = ?").run(labId);
+  const memberIds = (db()
+    .prepare("SELECT student_id FROM lab_members WHERE lab_id = ?")
+    .all(labId) as { student_id: number }[]).map((r) => r.student_id);
+
   enqueueTask(lab.node_name, "lab.destroy", { lab: lab.name }, actor);
+  // Deleting the lab row cascades lab_members (ON DELETE CASCADE), removing every membership.
   db().prepare("DELETE FROM labs WHERE id = ?").run(labId);
-  audit(actor, "lab.destroy", lab.name);
+
+  // Students belong to labs: drop any student that is now a member of no lab at all (a student kept
+  // in another lab is left untouched). This is what "students are deleted on lab delete" means.
+  let orphansRemoved = 0;
+  for (const sid of memberIds) {
+    const stillMember = db()
+      .prepare("SELECT 1 FROM lab_members WHERE student_id = ? LIMIT 1")
+      .get(sid);
+    if (!stillMember) {
+      db().prepare("DELETE FROM students WHERE id = ?").run(sid);
+      orphansRemoved++;
+    }
+  }
+  audit(actor, "lab.destroy", lab.name, orphansRemoved ? `${orphansRemoved} students removed` : undefined);
 }
 
 export function audit(actor: string | undefined, action: string, target?: string, detail?: string): void {

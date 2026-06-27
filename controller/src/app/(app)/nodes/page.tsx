@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { ConfirmButton } from "../_components/ConfirmButton";
 import {
   deleteNodeAction,
   provisionNodeAction,
@@ -206,13 +207,14 @@ export default async function NodesPage({
                       )}{" "}
                       <form action={deleteNodeAction} style={{ display: "inline" }}>
                         <input type="hidden" name="name" value={n.name} />
-                        <button
+                        <ConfirmButton
                           type="submit"
                           className="secondary"
                           style={{ width: "auto", padding: "6px 12px", color: "var(--warn)" }}
+                          confirm={`Delete node "${n.name}"? This removes it from the controller (it fails if any labs are still pinned to it).`}
                         >
                           Delete
-                        </button>
+                        </ConfirmButton>
                       </form>
                     </td>
                   </tr>

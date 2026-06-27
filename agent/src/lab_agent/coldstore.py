@@ -48,25 +48,11 @@ def set_lab_quota(cfg: AgentConfig, lab: str, quota_bytes: int | None) -> str:
     return "slow quota set on the owner node (cold storage is SMB here)"
 
 
-def create_user(cfg: AgentConfig, lab: str, user: str, quota_bytes: int | None = None) -> None:
-    if cfg.slow_is_zfs:
-        zfs.create_dataset(paths.user_cold(cfg, lab, user), quota_bytes=quota_bytes)
-    else:
-        coldfs.ensure_dir(paths.cold_user(cfg, lab, user))
-
-
 def destroy_lab(cfg: AgentConfig, lab: str) -> None:
     if cfg.slow_is_zfs:
         zfs.destroy_dataset(paths.lab_slow(cfg, lab), recursive=True)
     else:
         coldfs.remove_tree(paths.cold_lab(cfg, lab), guard=cfg.cold_root)
-
-
-def destroy_user(cfg: AgentConfig, lab: str, user: str) -> None:
-    if cfg.slow_is_zfs:
-        zfs.destroy_dataset(paths.user_cold(cfg, lab, user), recursive=True)
-    else:
-        coldfs.remove_tree(paths.cold_user(cfg, lab, user), guard=cfg.cold_root)
 
 
 # --------------------------------------------------------------------------- mounts (for docker)
@@ -122,10 +108,20 @@ def shared_scan_dir(cfg: AgentConfig, lab: str) -> str | None:
 
 
 def user_scan_dir(cfg: AgentConfig, lab: str, user: str) -> str | None:
-    """Existing directory holding a student's cold data, or None (None on the SMB client)."""
+    """Existing directory holding a student's cold data, or None (None on the SMB client).
+
+    A student's cold storage is a plain subdir of the lab's single slow `users` dataset (no
+    per-student datasets), so resolve that dataset's mountpoint and join the username under it.
+    """
     if not cfg.slow_is_zfs:
         return None
-    return _zfs_scan_dir(paths.user_cold(cfg, lab, user))
+    import os
+
+    users_mp = _zfs_scan_dir(paths.lab_slow_users(cfg, lab))
+    if users_mp is None:
+        return None
+    d = os.path.join(users_mp, user)
+    return d if os.path.isdir(d) else None
 
 
 def _zfs_scan_dir(dataset: str) -> str | None:

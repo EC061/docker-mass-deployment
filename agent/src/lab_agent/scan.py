@@ -19,7 +19,7 @@ from typing import Any
 from . import coldstore
 from .config import AgentConfig
 from .executors import zfs
-from .paths import lab_fast_shared, user_scratch
+from .paths import lab_fast_shared, lab_fast_users
 
 
 @dataclass
@@ -66,6 +66,15 @@ def _zfs_dir(dataset: str) -> str | None:
     return mp
 
 
+def _user_subdir(parent_mp: str | None, user: str) -> str | None:
+    """A student's directory is a plain subdir of the lab's `users` dataset mountpoint (there are no
+    per-student datasets). Returns the subdir if it exists, else None."""
+    if parent_mp is None:
+        return None
+    d = os.path.join(parent_mp, user)
+    return d if os.path.isdir(d) else None
+
+
 def scan_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     """Dispatcher handler for oldfiles.scan.
 
@@ -76,14 +85,16 @@ def scan_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     users = params.get("users", [])
     threshold = float(params.get("threshold_days", 30))
 
-    # Each target resolves to a directory to walk. Fast datasets are always ZFS; cold-storage
-    # targets go through coldstore (a ZFS mountpoint, or an SMB directory).
+    # Each target resolves to a directory to walk. Shared data is its own ZFS dataset (or SMB dir);
+    # per-student data is a subdir of the lab's single fast/slow `users` dataset (no per-student
+    # datasets), so resolve the users mountpoint once and join each username under it.
     targets: list[tuple[str, str | None, str | None]] = [
         ("lab_fast_shared", None, _zfs_dir(lab_fast_shared(cfg, lab))),
         ("lab_slow_shared", None, coldstore.shared_scan_dir(cfg, lab)),
     ]
+    fast_users_mp = _zfs_dir(lab_fast_users(cfg, lab))
     for u in users:
-        targets.append(("user_scratch", u, _zfs_dir(user_scratch(cfg, lab, u))))
+        targets.append(("user_scratch", u, _user_subdir(fast_users_mp, u)))
         targets.append(("user_cold", u, coldstore.user_scan_dir(cfg, lab, u)))
 
     results = []
