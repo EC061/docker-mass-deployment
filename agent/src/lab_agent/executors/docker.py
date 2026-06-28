@@ -179,12 +179,17 @@ def du_path(name: str, path: str, *, timeout: float = 60.0) -> int | None:
     """Bytes used by an absolute path inside the container, or None on failure/timeout/missing path.
 
     ``path`` is interpolated into the argv, so callers must pass a trusted value — the only dynamic
-    component used here is a username already validated against ``users.USERNAME_RE``. ``du -sb``
-    reports apparent size in bytes; we take the leading integer. A bounded timeout means a student
-    who packs a directory with millions of tiny files can, at worst, make their *own* number
-    unavailable — the scan moves on rather than hanging.
+    component used here is a username already validated against ``users.USERNAME_RE``. We use
+    ``du -sB1`` (allocated blocks, in bytes) rather than ``du -sb`` (apparent size): on ZFS the
+    block count is the *physical* on-disk size — after compression and ignoring sparse-file holes —
+    which is exactly what the lab-level ``zfs list`` ``used`` and the per-lab quota account for. The
+    apparent size double-counts holes (a 400 GiB sparse file backed by 200 GiB of blocks reads as
+    400 GiB), so per-student totals could exceed the lab total; allocated blocks reconcile with it.
+    We take the leading integer. A bounded timeout means a student who packs a directory with
+    millions of tiny files can, at worst, make their *own* number unavailable — the scan moves on
+    rather than hanging.
     """
-    res = exec_in(name, ["du", "-sb", path], timeout=timeout)
+    res = exec_in(name, ["du", "-sB1", path], timeout=timeout)
     if not res.ok:
         return None
     first = res.stdout.strip().split(None, 1)
