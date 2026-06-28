@@ -245,9 +245,9 @@ class Agent:
             await asyncio.sleep(max(15, self.cfg.usage_publish_interval_s))
 
     def _publish_all_usage(self) -> None:
-        # Discover labs from ZFS usage AND from labs that have a fast `users` mount but no per-student
-        # datasets (the union ensures a freshly-provisioned lab with students but no ZFS user rows
-        # still publishes a roster). collect_zfs_usage already returns a row per lab (lab-level fast).
+        # collect_zfs_usage returns a row per lab (lab-level fast), so it enumerates the labs; the
+        # roster (provisioned scratch subdirs) is added per lab so a freshly-provisioned student is
+        # listed even before any per-student ZFS/docker numbers exist.
         grouped = usagereport.collect_zfs_usage(self.cfg)
         for lab, lab_usage in grouped.items():
             try:
@@ -284,7 +284,7 @@ class Agent:
         now = P.now_ms()
         interval_ms = max(60, self.cfg.docker_scan_interval_s) * 1000
         grouped = usagereport.collect_zfs_usage(self.cfg)
-        for lab, lab_usage in grouped.items():
+        for lab in grouped:
             cached = self.usage.docker_for(lab)
             age = None if cached.scanned_at is None else now - cached.scanned_at
             users_list = usagereport.list_lab_students(self.cfg, lab)

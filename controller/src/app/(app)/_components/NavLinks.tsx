@@ -7,6 +7,7 @@ const NAV: [string, string][] = [
   ["/nodes", "Nodes"],
   ["/labs", "Labs"],
   ["/students", "Students"],
+  ["/stats", "Stats"],
   ["/gpu", "GPU"],
   ["/logs", "Logs"],
   ["/announcements", "Announce"],
