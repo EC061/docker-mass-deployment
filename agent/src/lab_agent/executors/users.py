@@ -42,13 +42,14 @@ def add_user(container: str, username: str, password: str) -> CommandResult:
     validate_username(username)
     # Password is embedded in the stdin-piped script body, never in argv.
     #
-    # Users ARE granted sudo and added to the `docker` group so they can administer the box and run
-    # nested Docker. This reverses the original H-05 stance and is only safe because every lab
-    # container runs under the Sysbox runtime: its user-namespace remap means container-root (which
-    # sudo grants) maps to an UNPRIVILEGED host UID, so neither sudo nor the in-container Docker
-    # daemon is a path to host root. Note the tradeoff: a lab container is shared by all of its
-    # students, so sudo means they are no longer isolated from one another *within the lab* (host
-    # isolation is unaffected). umask 027 still keeps each student's files private by default.
+    # Users ARE granted sudo and added to the `docker` group so they can administer the box and use
+    # the shared in-container Docker daemon (image/Dockerfile) when a project genuinely needs a
+    # nested container. This is only safe because every lab container runs under the Sysbox runtime:
+    # its user-namespace remap means container-root (which sudo and Docker grant) maps to an
+    # UNPRIVILEGED host UID, so neither sudo nor the in-container daemon is a path to host root.
+    # Note the tradeoff: a lab container is shared by all its students, so sudo means they are no
+    # longer isolated from one another *within the lab* (host isolation is unaffected). umask 027
+    # still keeps each student's files private by default.
     script = f"""set -e
 u={username}
 if ! id "$u" >/dev/null 2>&1; then useradd -m -s /bin/bash "$u"; fi

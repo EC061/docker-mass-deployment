@@ -320,9 +320,13 @@ open **Settings** and configure:
 
 ### Build a lab base image
 
-A default Ubuntu image is in [image/](image/): it runs **systemd** as PID 1 with SSH **and a full
-Docker engine**, so under the Sysbox runtime users get host-isolated nested Docker. Each user is
-granted `sudo` and added to the `docker` group when the agent provisions them.
+A default Ubuntu image is in [image/](image/): it runs **systemd** as PID 1 with SSH and **one shared
+Docker daemon** for nested containers, whose data-root is pinned to the lab's fast tier
+(`/labdata/fast/docker`) and which can re-pass the GPU into nested containers via the NVIDIA toolkit.
+Under the Sysbox runtime this daemon (and per-user sudo) is host-isolated. Each user is granted `sudo`
+and added to the `docker` group when the agent provisions them. Nested Docker is a last resort — the
+lab container already has sudo, Python, and GPU access; see [STUDENT_GUIDE.md](STUDENT_GUIDE.md) for
+when/how to use it (GPU + storage passthrough).
 
 ```bash
 docker build -t custom-ssh ./image     # run on each node, or push to a registry the nodes can pull
