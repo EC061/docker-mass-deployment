@@ -25,11 +25,13 @@ describe("Server Actions reject unauthenticated callers", () => {
   let labs: typeof import("../src/app/(app)/labs/actions.js");
   let students: typeof import("../src/app/(app)/students/actions.js");
   let settings: typeof import("../src/app/(app)/settings/actions.js");
+  let backups: typeof import("../src/app/(app)/backups/actions.js");
 
   beforeAll(async () => {
     labs = await import("../src/app/(app)/labs/actions.js");
     students = await import("../src/app/(app)/students/actions.js");
     settings = await import("../src/app/(app)/settings/actions.js");
+    backups = await import("../src/app/(app)/backups/actions.js");
   });
 
   const fd = () => new FormData();
@@ -51,10 +53,13 @@ describe("Server Actions reject unauthenticated callers", () => {
       settings.saveGpuPolicyAction(fd()),
       settings.saveScrubSettingsAction(fd()),
       settings.scrubNowAction(),
-      settings.saveWebdavSettingsAction(fd()),
-      settings.backupNowAction(),
-      settings.restoreAction(fd()),
       settings.testEmailAction(fd()),
+      backups.saveWebdavSettingsAction(fd()),
+      backups.saveScheduleAction(fd()),
+      backups.testConnectionAction(),
+      backups.backupNowAction(),
+      backups.restoreAction(fd()),
+      backups.refreshAction(),
     ];
     for (const c of calls) {
       await expect(c).rejects.toThrow(/NEXT_REDIRECT:\/login/);

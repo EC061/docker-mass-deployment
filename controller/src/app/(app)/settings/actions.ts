@@ -162,35 +162,6 @@ export async function scrubNowAction() {
   redirect(`/settings?scrub=${encodeURIComponent(`Scrub started on ${count} node(s)`)}`);
 }
 
-export async function saveWebdavSettingsAction(formData: FormData) {
-  await requireAdmin();
-  setSetting("webdavUrl", String(formData.get("webdavUrl") ?? "").trim());
-  setSetting("webdavUser", String(formData.get("webdavUser") ?? "").trim());
-  const pass = String(formData.get("webdavPass") ?? "");
-  if (pass) setSetting("webdavPass", pass);
-  setSetting("webdavRetention", Number(formData.get("webdavRetention")) || 7);
-  setSetting("backupIntervalHours", Number(formData.get("backupIntervalHours")) || 0);
-  revalidatePath("/settings");
-}
-
-export async function backupNowAction() {
-  await requireAdmin();
-  const { backupAll } = await import("@/lib/backup");
-  const res = await backupAll();
-  redirect(`/settings?backup=${encodeURIComponent(res.ok ? `Backed up ${res.name}` : `Failed: ${res.error}`)}`);
-}
-
-export async function restoreAction(formData: FormData) {
-  await requireAdmin();
-  const name = String(formData.get("name") ?? "");
-  const { stageRestore } = await import("@/lib/backup");
-  const res = await stageRestore(name);
-  const msg = res.ok
-    ? "Restore staged — restart the controller to apply it"
-    : `Failed: ${res.error}`;
-  redirect(`/settings?backup=${encodeURIComponent(msg)}`);
-}
-
 export async function testEmailAction(formData: FormData) {
   await requireAdmin();
   const to = String(formData.get("to") ?? "").trim();

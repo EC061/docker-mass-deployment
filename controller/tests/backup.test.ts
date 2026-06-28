@@ -38,7 +38,11 @@ beforeAll(async () => {
   backup = await import("../src/lib/backup");
   dbmod.db().prepare("INSERT INTO settings (key, value) VALUES ('x','1')").run();
   settings.setSetting("webdavUrl", "https://dav.example/labmgr");
-  settings.setSetting("webdavRetention", 2);
+  // Keep the newest 2; disable the weekly/monthly/yearly tiers so the test exercises plain pruning.
+  settings.setSetting("backupKeepRecent", 2);
+  settings.setSetting("backupKeepWeekly", 0);
+  settings.setSetting("backupKeepMonthly", 0);
+  settings.setSetting("backupKeepYearly", 0);
 });
 
 describe("controller backup", () => {
@@ -53,11 +57,11 @@ describe("controller backup", () => {
 
   it("prunes timestamped backups beyond retention", async () => {
     await backup.backupNow(2000);
-    await backup.backupNow(3000); // retention=2 -> oldest (1000) pruned
-    const list = await backup.listBackups();
-    expect(list).not.toContain("controller-1000.db");
-    expect(list).toContain("controller-3000.db");
-    expect(list).toContain("controller-2000.db");
+    await backup.backupNow(3000); // keepRecent=2 -> oldest (1000) pruned
+    const names = (await backup.listBackups()).map((e) => e.name);
+    expect(names).not.toContain("controller-1000.db");
+    expect(names).toContain("controller-3000.db");
+    expect(names).toContain("controller-2000.db");
   });
 
   it("stages a restore to <dbPath>.restore", async () => {

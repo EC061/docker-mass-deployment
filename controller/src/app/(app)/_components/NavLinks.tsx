@@ -4,6 +4,7 @@ import { usePathname } from "next/navigation";
 import {
   Bell,
   Cpu,
+  DatabaseBackup,
   FlaskConical,
   HardDrive,
   LayoutDashboard,
@@ -24,6 +25,7 @@ const NAV: [string, string, LucideIcon][] = [
   ["/gpu", "GPU", Cpu],
   ["/logs", "Logs", ScrollText],
   ["/announcements", "Announce", Bell],
+  ["/backups", "Backups", DatabaseBackup],
   ["/settings", "Settings", Settings],
 ];
 

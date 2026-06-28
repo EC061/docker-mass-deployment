@@ -27,6 +27,98 @@ export function hourInTimezone(now: number, tz: string): number | null {
   }
 }
 
+/** Offset in ms such that local-wall-clock = utc + offset, for an instant in a timezone. */
+function tzOffsetMs(utcMs: number, tz: string): number {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+  const p: Record<string, number> = {};
+  for (const part of fmt.formatToParts(new Date(utcMs))) {
+    if (part.type !== "literal") p[part.type] = Number(part.value);
+  }
+  const asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return asUTC - utcMs;
+}
+
+/** The UTC instant for a wall-clock time on a given calendar day in a timezone. */
+function wallClockToUtc(
+  y: number,
+  mo: number,
+  d: number,
+  h: number,
+  mi: number,
+  tz: string,
+): number {
+  let ts = Date.UTC(y, mo, d, h, mi, 0);
+  // Two passes converge across DST boundaries (the offset depends on the instant we're solving for).
+  for (let i = 0; i < 2; i++) ts = Date.UTC(y, mo, d, h, mi, 0) - tzOffsetMs(ts, tz);
+  return ts;
+}
+
+/** The anchor-aligned schedule grid, or null when scheduled backups are off / misconfigured. */
+function backupGrid(now: number): { anchor: number; intervalMs: number } | null {
+  if (!getSetting("backupEnabled")) return null;
+  const intervalHours = getSetting("backupIntervalHours");
+  if (!(intervalHours > 0)) return null;
+  const tz = getSetting("backupTimezone");
+  let parts: Record<string, number>;
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    parts = {};
+    for (const part of fmt.formatToParts(new Date(now))) {
+      if (part.type !== "literal") parts[part.type] = Number(part.value);
+    }
+  } catch {
+    return null; // invalid timezone -> don't fire on a guess
+  }
+  const anchor = wallClockToUtc(
+    parts.year,
+    parts.month - 1,
+    parts.day,
+    getSetting("backupAnchorHour"),
+    getSetting("backupAnchorMinute"),
+    tz,
+  );
+  return { anchor, intervalMs: intervalHours * 3600 * 1000 };
+}
+
+/** First scheduled instant strictly after `ref` on the anchor grid, or null if disabled. */
+function slotAfter(ref: number, now: number): number | null {
+  const g = backupGrid(now);
+  if (!g) return null;
+  const k = Math.floor((ref - g.anchor) / g.intervalMs) + 1;
+  let next = g.anchor + k * g.intervalMs;
+  while (next <= ref) next += g.intervalMs;
+  return next;
+}
+
+/** The next scheduled backup instant (epoch ms), or null if scheduled backups are off. */
+export function nextBackupRun(now = Date.now()): number | null {
+  // Reference off the last run, but never further back than one interval, so a never-run or
+  // long-idle controller still shows a sensible near-future time rather than an ancient slot.
+  const intervalMs = getSetting("backupIntervalHours") * 3600 * 1000;
+  const ref = Math.max(getSetting("backupLastRun"), now - intervalMs);
+  return slotAfter(ref, now);
+}
+
+/** Whether a scheduled backup is due (the slot after the last run has arrived). */
+export function backupDue(now = Date.now()): boolean {
+  const next = slotAfter(getSetting("backupLastRun"), now);
+  return next !== null && now >= next;
+}
+
 /**
  * Enqueue a ZFS scrub to every online ZFS-capable node whose last scheduled scrub is older than the
  * configured interval, but only during the configured hour-of-day (in the configured timezone) so
@@ -100,16 +192,13 @@ export function scheduleOldFileScans(now = Date.now()): string[] {
 /** Start an hourly ticker: prune old data, run scheduled backups, and kick off due ZFS scrubs. */
 export function startMaintenance(): NodeJS.Timeout {
   pruneOldData();
-  let lastBackup = 0;
   const tick = () => {
     pruneOldData();
     scheduleScrubs();
     scheduleOldFileScans();
-    const intervalHours = getSetting("backupIntervalHours");
-    if (intervalHours > 0 && Date.now() - lastBackup >= intervalHours * 3600 * 1000) {
-      lastBackup = Date.now();
-      void backupAll();
-    }
+    // backupAll persists the last-run timestamp, so the schedule survives restarts and the next slot
+    // is computed off durable state rather than an in-memory counter.
+    if (backupDue()) void backupAll();
   };
   return setInterval(tick, 60 * 60 * 1000);
 }
