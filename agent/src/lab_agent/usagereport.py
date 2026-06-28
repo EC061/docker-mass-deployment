@@ -152,8 +152,8 @@ def list_lab_students(cfg: AgentConfig, lab: str) -> list[str]:
     set of per-student scratch subdirs that ``users.add_user`` creates (``/labusers/fast/<u>``). We
     list that directory and keep only entries that are valid usernames — this skips the root-owned
     ``.labquota`` dir and any stray files — so the roster reflects exactly the students added to the
-    lab, independent of whether per-student ZFS datasets exist. This is the roster source the snapshot
-    and docker scan need (``lab_usage.users`` is empty without per-student datasets).
+    lab, independent of whether per-student ZFS datasets exist. This is the roster source the
+    snapshot and docker scan need (``lab_usage.users`` is empty without per-student datasets).
     """
     try:
         entries = os.listdir(_fast_users_mp(cfg, lab))
@@ -185,7 +185,7 @@ def build_snapshot(
     # With no per-student ZFS datasets, scratch/cold no longer have cheap per-student metadata (the
     # lab quota covers everyone), so a student may appear only in the docker-layer measurement — or,
     # before any docker scan has run, in neither. Union the explicit ``roster`` (provisioned scratch
-    # subdirs) with both usage sources so every provisioned student is listed even with no numbers yet.
+    # subdirs) with both usage sources so every provisioned student is listed even without numbers.
     names = set(lab_usage.users.keys()) | set(docker_usage.per_user.keys())
     if roster:
         names |= set(roster)
