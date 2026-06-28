@@ -319,12 +319,14 @@ async function emailGpuEvent(
   const { sendGpuKillEmail, sendGpuWarningEmail } = await import("./mailer");
   if (p.state === "warned") {
     await sendGpuWarningEmail(row.email, {
+      username: p.user,
       lab: p.lab,
       pid: p.pid,
+      node,
       graceMinutes: getSetting("gpuGraceMinutes"),
     });
   } else {
-    await sendGpuKillEmail(row.email, { lab: p.lab, pid: p.pid });
+    await sendGpuKillEmail(row.email, { username: p.user, lab: p.lab, pid: p.pid, node });
   }
 }
 

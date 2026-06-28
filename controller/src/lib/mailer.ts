@@ -6,6 +6,10 @@
 
 import nodemailer from "nodemailer";
 import {
+  DEFAULT_GPU_KILL_BODY,
+  DEFAULT_GPU_KILL_SUBJECT,
+  DEFAULT_GPU_WARN_BODY,
+  DEFAULT_GPU_WARN_SUBJECT,
   DEFAULT_WELCOME_BODY,
   DEFAULT_WELCOME_SUBJECT,
   getSetting,
@@ -83,31 +87,49 @@ export interface CredentialEmail {
   studentId?: string | null;
 }
 
-export async function sendGpuWarningEmail(
-  to: string,
-  opts: { lab: string | null; pid: number | null; graceMinutes: number },
-): Promise<SendResult> {
-  return sendMail(
-    to,
-    "Idle GPU process warning",
-    `One of your processes (PID ${opts.pid ?? "?"}${opts.lab ? `, lab ${opts.lab}` : ""}) is holding GPU` +
-      ` memory but is not using the GPU.\n\nIf it stays idle it will be terminated in about ` +
-      `${opts.graceMinutes} minutes to free the GPU for others. If you still need it, start using ` +
-      `the GPU again or contact an admin.\n\n— Lab Manager`,
-  );
+export interface GpuEmailOpts {
+  username: string;
+  lab: string | null;
+  pid: number | null;
+  node: string;
+  graceMinutes?: number;
 }
 
-export async function sendGpuKillEmail(
-  to: string,
-  opts: { lab: string | null; pid: number | null },
-): Promise<SendResult> {
-  return sendMail(
-    to,
-    "Idle GPU process terminated",
-    `Your idle process (PID ${opts.pid ?? "?"}${opts.lab ? `, lab ${opts.lab}` : ""}) was terminated ` +
-      `because it held GPU memory without using the GPU. Please checkpoint long-running work and ` +
-      `keep the GPU active, or ask an admin to whitelist your job.\n\n— Lab Manager`,
-  );
+/** Build the {placeholder} substitution map shared by both GPU notification templates. */
+export function gpuEmailVars(opts: GpuEmailOpts): Record<string, string | number> {
+  return {
+    username: opts.username,
+    pid: opts.pid ?? "",
+    lab: opts.lab ?? "",
+    node: opts.node,
+    grace_minutes: opts.graceMinutes ?? "",
+  };
+}
+
+/** Render the GPU idle-warning email from the admin-editable template (or its default). */
+export function renderGpuWarningEmail(opts: GpuEmailOpts): { subject: string; body: string } {
+  const vars = gpuEmailVars(opts);
+  const subject = getSetting("gpuWarnEmailSubject").trim() || DEFAULT_GPU_WARN_SUBJECT;
+  const body = getSetting("gpuWarnEmailBody").trim() || DEFAULT_GPU_WARN_BODY;
+  return { subject: renderTemplate(subject, vars), body: renderTemplate(body, vars) };
+}
+
+/** Render the GPU termination email from the admin-editable template (or its default). */
+export function renderGpuKillEmail(opts: GpuEmailOpts): { subject: string; body: string } {
+  const vars = gpuEmailVars(opts);
+  const subject = getSetting("gpuKillEmailSubject").trim() || DEFAULT_GPU_KILL_SUBJECT;
+  const body = getSetting("gpuKillEmailBody").trim() || DEFAULT_GPU_KILL_BODY;
+  return { subject: renderTemplate(subject, vars), body: renderTemplate(body, vars) };
+}
+
+export async function sendGpuWarningEmail(to: string, opts: GpuEmailOpts): Promise<SendResult> {
+  const { subject, body } = renderGpuWarningEmail(opts);
+  return sendMail(to, subject, body);
+}
+
+export async function sendGpuKillEmail(to: string, opts: GpuEmailOpts): Promise<SendResult> {
+  const { subject, body } = renderGpuKillEmail(opts);
+  return sendMail(to, subject, body);
 }
 
 export interface QuotaEmail {
