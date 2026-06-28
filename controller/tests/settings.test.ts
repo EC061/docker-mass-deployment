@@ -86,15 +86,18 @@ describe("configuration helpers", () => {
     expect(settings.isSmtpConfigured()).toBe(true);
   });
 
-  it("isWebdavConfigured + webdavConfig strip the trailing slash", () => {
+  it("webdavConfig composes <url>/<baseDir>/<env>, normalising slashes", () => {
     settings.setSetting("webdavUrl", "");
     expect(settings.isWebdavConfigured()).toBe(false);
     settings.setSetting("webdavUrl", "https://dav.example/labmgr/");
+    settings.setSetting("webdavBaseDir", "/backups/");
     settings.setSetting("webdavUser", "bob");
     settings.setSetting("webdavPass", "pw");
     expect(settings.isWebdavConfigured()).toBe(true);
+    // env is "dev" outside NODE_ENV=production (see backupEnv()).
+    expect(settings.backupEnv()).toBe("dev");
     expect(settings.webdavConfig()).toEqual({
-      url: "https://dav.example/labmgr",
+      url: "https://dav.example/labmgr/backups/dev",
       user: "bob",
       pass: "pw",
     });
