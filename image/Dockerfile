@@ -1,16 +1,29 @@
-# Default lab base image: an SSH-accessible Ubuntu running systemd, with sudo, Python, and a full
-# Docker engine for nested containers.
+# Default lab base image: an SSH-accessible Ubuntu running systemd, with sudo, Python, and ONE shared
+# in-container Docker daemon for nested containers.
 #
-# Lab containers run under the Sysbox runtime (--runtime=sysbox-runc), which provides
-# Docker-in-Docker WITHOUT --privileged and remaps container-root to an UNPRIVILEGED host UID — so
-# the in-container Docker daemon and per-user sudo cannot reach host root. GPUs are injected at run
-# time via the NVIDIA Container Device Interface (--device nvidia.com/gpu=all), independent of the
-# OCI runtime, so they compose with sysbox-runc.
+# The daemon's data-root is pinned to /labdata/fast/docker — the lab's shared fast tier, which the
+# agent bind-mounts at run time. So all nested images/layers/containers live on big, persistent,
+# quota-counted storage (and the layer cache is shared across the lab) instead of bloating the
+# ephemeral container overlay. Storage driver is fuse-overlayfs because the data-root sits on a
+# bind-mounted ZFS dataset, where overlay2 is not supported (see the validation note below).
 #
-# systemd is PID 1 (Sysbox's supported pattern) so ssh and docker run as real services. Students are
+# Nested Docker is meant to be a LAST RESORT: the lab container already has sudo, Python, and direct
+# GPU access, so most work needs no inner container. When a project genuinely needs one, students run
+# `docker` directly (they are in the `docker` group); STUDENT_GUIDE.md shows how to pass the GPU and
+# bind-mount their own ~/scratch and ~/cold-storage into the inner container.
+#
+# Lab containers run under the Sysbox runtime (--runtime=sysbox-runc), which provides nested Docker
+# WITHOUT --privileged and remaps container-root to an UNPRIVILEGED host UID — so the in-container
+# Docker daemon (and per-user sudo) cannot reach host root. The daemon therefore runs root-IN-CONTAINER
+# but is rootless/host-isolated from the host's point of view. GPUs reach the lab container via the
+# NVIDIA Container Device Interface (--device nvidia.com/gpu=all), independent of the OCI runtime, so
+# they compose with sysbox-runc; nvidia-container-toolkit is installed so the inner daemon can re-pass
+# those GPUs into nested containers (CDI spec regenerated at boot by nvidia-cdi.service).
+#
+# systemd is PID 1 (Sysbox's supported pattern) so ssh + docker run as real services. Students are
 # added later as Linux users by the agent (docker exec useradd ...), so this image does NOT create
-# users at boot. The agent bind-mounts lab data at /labdata/{fast,slow} and per-student datasets
-# under /labusers/{fast,slow}; the agent wires each student's ~/scratch and ~/cold-storage.
+# users at boot. The agent bind-mounts lab data at /labdata/{fast,slow} and per-student datasets under
+# /labusers/{fast,slow}; the agent wires each student's ~/scratch and ~/cold-storage.
 #
 # Build + tag for use as a lab image:
 #   docker build -t custom-ssh ./image
@@ -32,6 +45,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 # Docker engine (for nested containers), from Docker's official apt repo, pinned to the noble channel.
+# fuse-overlayfs is the storage driver (data-root lives on a bind-mounted ZFS dataset; see daemon.json).
 RUN install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \
@@ -39,8 +53,33 @@ RUN install -m 0755 -d /etc/apt/keyrings \
         > /etc/apt/sources.list.d/docker.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
-        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin \
+        docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin fuse-overlayfs \
     && rm -rf /var/lib/apt/lists/*
+
+# NVIDIA Container Toolkit, so the in-container daemon can re-pass the lab container's GPUs into nested
+# containers (via `--gpus all` or `--device nvidia.com/gpu=all`). The CDI spec is generated at boot.
+RUN curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey \
+        | gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+    && curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list \
+        | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' \
+        > /etc/apt/sources.list.d/nvidia-container-toolkit.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends nvidia-container-toolkit \
+    && rm -rf /var/lib/apt/lists/*
+
+# Pin the daemon's data-root to the lab's shared fast tier and select the fuse-overlayfs driver (the
+# data-root is a bind-mounted ZFS dataset, where overlay2 is unsupported). CDI is enabled and the
+# nvidia runtime registered so nested containers can request the GPU. The agent bind-mounts
+# /labdata/fast at run time; Docker creates /labdata/fast/docker on first start.
+RUN mkdir -p /etc/docker \
+    && printf '%s\n' \
+        '{' \
+        '  "data-root": "/labdata/fast/docker",' \
+        '  "storage-driver": "fuse-overlayfs",' \
+        '  "features": { "cdi": true },' \
+        '  "runtimes": { "nvidia": { "path": "nvidia-container-runtime", "runtimeArgs": [] } }' \
+        '}' \
+        > /etc/docker/daemon.json
 
 # Harden sshd: students authenticate with passwords, but root login is off, brute force is throttled,
 # and the login window is short. Instructors can still use key auth. (Per-user sudo is granted by the
@@ -62,12 +101,14 @@ RUN sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh
 COPY labquota /usr/local/bin/labquota
 # Oneshot unit: regenerate unique SSH host keys on first boot, before sshd starts.
 COPY ssh-hostkeys.service /etc/systemd/system/ssh-hostkeys.service
+# Oneshot unit: generate the inner NVIDIA CDI spec (if GPUs present) before docker starts.
+COPY nvidia-cdi.service /etc/systemd/system/nvidia-cdi.service
 RUN chmod +x /usr/local/bin/labquota \
-    && systemctl enable ssh docker ssh-hostkeys \
+    && systemctl enable ssh docker ssh-hostkeys nvidia-cdi \
     # Strip systemd units that are useless or noisy inside a container.
     && systemctl mask systemd-udevd.service systemd-udevd-kernel.socket systemd-udevd-control.socket \
         systemd-modules-load.service sys-kernel-debug.mount sys-kernel-tracing.mount
 
 EXPOSE 22
-# systemd as PID 1 (runs unprivileged under Sysbox); it brings up ssh + docker.
+# systemd as PID 1 (runs unprivileged under Sysbox); it brings up ssh + the shared docker daemon.
 CMD ["/sbin/init"]

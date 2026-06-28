@@ -31,7 +31,8 @@ def test_add_user_script_creates_user_and_links(cap):
     assert "ln -sfn /labusers/slow/" in script
     assert "umask 027" in script
     # Users are granted sudo + docker-group membership (safe only because lab containers run under
-    # the Sysbox runtime, which remaps container-root to an unprivileged host UID).
+    # the Sysbox runtime, which remaps container-root to an unprivileged host UID) so they can use the
+    # shared in-container Docker daemon when a project needs a nested container.
     assert "usermod -aG sudo,docker" in script
     assert "groupadd docker" in script
     assert "chpasswd" in script

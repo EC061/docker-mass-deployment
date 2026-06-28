@@ -56,6 +56,50 @@ labquota --refresh    # recompute installed-software sizes (and watch the progre
 home) is measured periodically; `labquota --refresh` asks the server for a fresh measurement if the
 last one is over an hour old.
 
+## Running Docker (only if you really need it)
+
+> **Try not to use Docker here.** Your lab container already gives you `sudo`, Python, and direct
+> access to the GPUs — for almost everything (installing packages, running training, notebooks) you do
+> **not** need a nested container. Reach for Docker **only** when a project genuinely requires it, e.g.
+> it ships a `Dockerfile`/`docker-compose.yml` you must run as-is. Nested containers are slower to
+> start and share one daemon with your whole lab.
+
+When you do need it, Docker is already installed and running — no setup. You're in the `docker` group,
+so just run `docker`:
+
+```bash
+docker run --rm hello-world
+```
+
+All images and containers are stored on the lab's **shared fast tier** (`/labdata/fast`), so they
+count against your lab's storage quota and the image cache is shared with your labmates. Clean up
+images you no longer need with `docker image prune`.
+
+### Passing your GPU into a container
+
+Add `--gpus all` (verify with `nvidia-smi` inside the container):
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+```
+
+### Passing your scratch and cold storage into a container
+
+Bind-mount your own folders so work survives the container and lands on the right storage tier. Use
+the real paths (your `~/scratch` and `~/cold-storage` are symlinks):
+
+```bash
+docker run --rm -it --gpus all \
+  -v "$(readlink -f ~/scratch):/scratch" \
+  -v "$(readlink -f ~/cold-storage):/cold-storage" \
+  -w /scratch \
+  nvidia/cuda:12.4.0-base-ubuntu22.04 bash
+```
+
+Anything written to `/scratch` or `/cold-storage` inside the container appears in your `~/scratch` /
+`~/cold-storage` and persists. **Don't** store data only inside the container's own filesystem — it's
+on the shared fast tier and is lost when the container is removed.
+
 ## GPUs
 
 All of the server's GPUs are available to your lab. To keep them fair for everyone, there is an
