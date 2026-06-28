@@ -26,6 +26,7 @@ vi.mock("../src/lib/webdav", () => ({
     store.delete(name);
   }),
   list: vi.fn(async () => [...store.keys()]),
+  listStrict: vi.fn(async () => [...store.keys()]),
 }));
 
 let dbmod: typeof import("../src/lib/db");
@@ -71,5 +72,25 @@ describe("controller backup", () => {
     expect(existsSync(staged)).toBe(true);
     expect(readFileSync(staged).subarray(0, 15).toString()).toBe("SQLite format 3");
     rmSync(staged);
+  });
+});
+
+describe("webdavStatus", () => {
+  it("reports ok with the available backups when the collection is reachable", async () => {
+    const webdav = await import("../src/lib/webdav");
+    vi.mocked(webdav.listStrict).mockResolvedValueOnce(["controller-2000.db", "controller-3000.db"]);
+    const st = await backup.webdavStatus();
+    expect(st).toMatchObject({ configured: true, ok: true });
+    expect(st.backups.map((b) => b.name)).toEqual(["controller-3000.db", "controller-2000.db"]);
+  });
+
+  it("reports not-ok with the error when the listing fails", async () => {
+    const webdav = await import("../src/lib/webdav");
+    vi.mocked(webdav.listStrict).mockRejectedValueOnce(new Error("WebDAV PROPFIND failed: 401 Unauthorized"));
+    const st = await backup.webdavStatus();
+    expect(st.configured).toBe(true);
+    expect(st.ok).toBe(false);
+    expect(st.error).toMatch(/401/);
+    expect(st.backups).toEqual([]);
   });
 });

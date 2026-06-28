@@ -158,6 +158,36 @@ export async function listBackups(): Promise<BackupEntry[]> {
     .sort((a, b) => b.stamp - a.stamp);
 }
 
+export interface WebdavStatus {
+  configured: boolean;
+  ok: boolean;
+  error?: string;
+  backups: BackupEntry[];
+}
+
+/**
+ * Live, read-only reachability check for the configured WebDAV target. A single PROPFIND tells us
+ * whether the collection is reachable with the saved credentials and, as a side effect, returns the
+ * available backups — so the UI can show the actual connection state instead of a silent empty list.
+ */
+export async function webdavStatus(): Promise<WebdavStatus> {
+  if (!isWebdavConfigured()) return { configured: false, ok: false, backups: [] };
+  try {
+    const backups = (await webdav.listStrict(webdavConfig()))
+      .map((name) => ({ name, stamp: parseStamp(name) }))
+      .filter((e): e is BackupEntry => e.stamp !== null)
+      .sort((a, b) => b.stamp - a.stamp);
+    return { configured: true, ok: true, backups };
+  } catch (err) {
+    return {
+      configured: true,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err),
+      backups: [],
+    };
+  }
+}
+
 /** Verify the WebDAV target is reachable and writable with the configured credentials. */
 export async function testConnection(): Promise<{ ok: boolean; error?: string }> {
   if (!isWebdavConfigured()) return { ok: false, error: "WebDAV not configured" };
