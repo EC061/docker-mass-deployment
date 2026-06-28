@@ -32,6 +32,11 @@ export interface Settings {
   smtpSecure: boolean; // true = implicit TLS (465); false = STARTTLS/none
   // Optional public hostname students SSH to (falls back to the node name).
   sshHostOverride: string;
+  // Welcome email sent to a student when added to a lab. Both fields support {placeholder}
+  // substitution (see WELCOME_EMAIL_VARS / renderTemplate in lib/mailer.ts). Empty falls back to
+  // the built-in default.
+  welcomeEmailSubject: string;
+  welcomeEmailBody: string;
   // GPU idle-kill policy (broadcast to agents as gpu.policy.update).
   gpuEnabled: boolean;
   gpuUtilThreshold: number;
@@ -57,7 +62,41 @@ export interface Settings {
   // the agent reports scrub status/errors back via heartbeat telemetry.
   scrubEnabled: boolean;
   scrubIntervalDays: number; // scrub each node at most this often
+  scrubHour: number; // hour of day (0-23, in scrubTimezone) at which scrubs may start
+  scrubTimezone: string; // IANA tz name (e.g. "America/New_York") the scrub hour is evaluated in
 }
+
+/** Placeholders the welcome-email template understands, shown to the admin in the settings UI. */
+export const WELCOME_EMAIL_VARS: { key: string; desc: string }[] = [
+  { key: "name", desc: "student's full name (falls back to username)" },
+  { key: "username", desc: "login username" },
+  { key: "password", desc: "generated initial password" },
+  { key: "host", desc: "SSH host (override or node name)" },
+  { key: "port", desc: "SSH port" },
+  { key: "lab", desc: "lab name" },
+  { key: "node", desc: "node name the lab runs on" },
+  { key: "student_id", desc: "student ID (may be blank)" },
+  { key: "email", desc: "student's email address" },
+];
+
+export const DEFAULT_WELCOME_SUBJECT = "Your access to lab {lab}";
+
+export const DEFAULT_WELCOME_BODY = `Hello {name},
+
+You have been added to the lab "{lab}" on {node}. Connect over SSH:
+
+    ssh {username}@{host} -p {port}
+
+  Username: {username}
+  Password: {password}
+
+Your home directory contains:
+  ~/scratch        fast storage for working data
+  ~/cold-storage   slower storage for data you want to keep but rarely touch
+
+Please change your password after first login (run: passwd).
+
+— Lab Manager`;
 
 export const DEFAULT_SETTINGS: Settings = {
   fastQuotaDefaultBytes: 2 * TIB,
@@ -74,6 +113,8 @@ export const DEFAULT_SETTINGS: Settings = {
   smtpFrom: "",
   smtpSecure: false,
   sshHostOverride: "",
+  welcomeEmailSubject: DEFAULT_WELCOME_SUBJECT,
+  welcomeEmailBody: DEFAULT_WELCOME_BODY,
   gpuEnabled: false,
   gpuUtilThreshold: 5,
   gpuIdleMinutes: 20,
@@ -94,6 +135,8 @@ export const DEFAULT_SETTINGS: Settings = {
   backupIntervalHours: 24,
   scrubEnabled: false,
   scrubIntervalDays: 30,
+  scrubHour: 2,
+  scrubTimezone: "UTC",
 };
 
 export function isWebdavConfigured(): boolean {

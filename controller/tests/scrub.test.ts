@@ -55,7 +55,9 @@ describe("scrub scheduling", () => {
     enqueueTask.mockClear();
     settings.setSetting("scrubEnabled", true);
     settings.setSetting("scrubIntervalDays", 30);
-    const now = 1_000_000_000_000;
+    const now = 1_000_000_000_000; // 2001-09-09 01:46 UTC -> hour 1
+    settings.setSetting("scrubTimezone", "UTC");
+    settings.setSetting("scrubHour", 1); // match `now`'s hour so the time-of-day gate passes
     addNode("zfs-due", { zfs: true }, null); // never scrubbed -> due
     addNode("smb-only", { zfs: false }, null); // no ZFS -> skip
     addNode("recent", { zfs: true }, now - 1 * 86400 * 1000); // 1 day ago -> not due
@@ -70,6 +72,28 @@ describe("scrub scheduling", () => {
       last_scrub: number;
     };
     expect(row.last_scrub).toBe(now);
+  });
+
+  it("only scrubs during the configured hour in the configured timezone", () => {
+    enqueueTask.mockClear();
+    settings.setSetting("scrubEnabled", true);
+    settings.setSetting("scrubIntervalDays", 30);
+    settings.setSetting("scrubTimezone", "UTC");
+    addNode("tz-node", { zfs: true }, null);
+    // 2026-06-27 09:00:00 UTC -> hour 9.
+    const at9 = Date.UTC(2026, 5, 27, 9, 0, 0);
+    settings.setSetting("scrubHour", 14); // window is 14:00, current is 09:00 -> skip
+    expect(maintenance.scheduleScrubs(at9)).toEqual([]);
+    settings.setSetting("scrubHour", 9); // now within the window -> scrub
+    expect(maintenance.scheduleScrubs(at9)).toContain("tz-node");
+  });
+
+  it("hourInTimezone converts UTC instants to a zone's local hour", () => {
+    const noonUtc = Date.UTC(2026, 0, 15, 12, 0, 0);
+    expect(maintenance.hourInTimezone(noonUtc, "UTC")).toBe(12);
+    // US Eastern in January is UTC-5 -> 07:00.
+    expect(maintenance.hourInTimezone(noonUtc, "America/New_York")).toBe(7);
+    expect(maintenance.hourInTimezone(noonUtc, "Not/AZone")).toBeNull();
   });
 });
 

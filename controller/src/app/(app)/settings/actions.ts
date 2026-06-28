@@ -73,6 +73,14 @@ export async function saveSmtpSettingsAction(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveWelcomeEmailAction(formData: FormData) {
+  await requireAdmin();
+  // Empty falls back to the built-in default at render time, so store the trimmed value as-is.
+  setSetting("welcomeEmailSubject", String(formData.get("welcomeEmailSubject") ?? "").trim());
+  setSetting("welcomeEmailBody", String(formData.get("welcomeEmailBody") ?? ""));
+  revalidatePath("/settings");
+}
+
 export async function saveAlertSettingsAction(formData: FormData) {
   await requireAdmin();
   setSetting("alertsEnabled", formData.get("alertsEnabled") === "on");
@@ -104,6 +112,20 @@ export async function saveScrubSettingsAction(formData: FormData) {
   await requireAdmin();
   setSetting("scrubEnabled", formData.get("scrubEnabled") === "on");
   setSetting("scrubIntervalDays", Number(formData.get("scrubIntervalDays")) || 30);
+  const hour = Number(formData.get("scrubHour"));
+  setSetting("scrubHour", Number.isFinite(hour) && hour >= 0 && hour <= 23 ? Math.trunc(hour) : 2);
+  const tz = String(formData.get("scrubTimezone") ?? "").trim();
+  // Validate the IANA name by round-tripping it through Intl; reject anything DateTimeFormat won't take.
+  let validTz = "UTC";
+  try {
+    if (tz) {
+      new Intl.DateTimeFormat("en-US", { timeZone: tz });
+      validTz = tz;
+    }
+  } catch {
+    validTz = "UTC";
+  }
+  setSetting("scrubTimezone", validTz);
   revalidatePath("/settings");
 }
 
