@@ -94,6 +94,31 @@ def test_build_snapshot_shape():
     assert bob["docker_home_used"] == 80
 
 
+def test_build_snapshot_lists_roster_with_no_usage():
+    """A provisioned student must appear even before any ZFS/docker usage exists for them."""
+    snap = usagereport.build_snapshot(
+        cfg(), "bio", usagereport.LabUsage(), usagereport.DockerUsage(),
+        roster=["carol", "dave"], now=1,
+    )
+    assert [s["username"] for s in snap["students"]] == ["carol", "dave"]
+    carol = snap["students"][0]
+    assert carol["scratch"] is None and carol["cold"] is None and carol["docker_home_used"] is None
+
+
+def test_list_lab_students_from_fast_users_mount(tmp_path, monkeypatch):
+    monkeypatch.setattr(usagereport.zfs, "get_mountpoint", lambda ds: str(tmp_path))
+    (tmp_path / "alice").mkdir()
+    (tmp_path / "bob").mkdir()
+    (tmp_path / usagereport.LABQUOTA_DIRNAME).mkdir()  # root-owned, must be skipped
+    (tmp_path / "not a user").mkdir()  # invalid username, skipped
+    assert usagereport.list_lab_students(cfg(), "bio") == ["alice", "bob"]
+
+
+def test_list_lab_students_missing_mount(monkeypatch):
+    monkeypatch.setattr(usagereport.zfs, "get_mountpoint", lambda ds: "/nonexistent/path")
+    assert usagereport.list_lab_students(cfg(), "bio") == []
+
+
 def test_docker_datasets_telemetry_rows():
     usage = usagereport.DockerUsage(total_used=300, per_user={"alice": 120})
     rows = usagereport.docker_datasets("bio", usage)
