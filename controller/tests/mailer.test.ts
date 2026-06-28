@@ -127,11 +127,20 @@ describe("templated emails", () => {
   });
 
   it("gpu warning and kill emails mention the pid", async () => {
-    await mailer.sendGpuWarningEmail("a@uga.edu", { lab: "bio", pid: 42, graceMinutes: 10 });
+    await mailer.sendGpuWarningEmail("a@uga.edu", { username: "alice", lab: "bio", pid: 42, node: "gpu-01", graceMinutes: 10 });
     expect(sent[0].text).toContain("PID 42");
     expect(sent[0].text).toContain("10 minutes");
-    await mailer.sendGpuKillEmail("a@uga.edu", { lab: null, pid: 7 });
+    await mailer.sendGpuKillEmail("a@uga.edu", { username: "bob", lab: null, pid: 7, node: "gpu-01" });
     expect(sent[1].text).toContain("PID 7");
+  });
+
+  it("gpu emails render the admin-editable template", async () => {
+    configureSmtp();
+    settings.setSetting("gpuWarnEmailSubject", "Heads up {username}");
+    settings.setSetting("gpuWarnEmailBody", "PID {pid} on {node} — {grace_minutes}m left");
+    await mailer.sendGpuWarningEmail("a@uga.edu", { username: "alice", lab: "bio", pid: 42, node: "gpu-01", graceMinutes: 15 });
+    expect(sent[0].subject).toBe("Heads up alice");
+    expect(sent[0].text).toBe("PID 42 on gpu-01 — 15m left");
   });
 
   it("removal email distinguishes deleted vs retained data", async () => {

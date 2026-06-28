@@ -108,6 +108,16 @@ export async function saveGpuPolicyAction(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveGpuEmailsAction(formData: FormData) {
+  await requireAdmin();
+  // Empty falls back to the built-in default at render time, so store the trimmed value as-is.
+  setSetting("gpuWarnEmailSubject", String(formData.get("gpuWarnEmailSubject") ?? "").trim());
+  setSetting("gpuWarnEmailBody", String(formData.get("gpuWarnEmailBody") ?? ""));
+  setSetting("gpuKillEmailSubject", String(formData.get("gpuKillEmailSubject") ?? "").trim());
+  setSetting("gpuKillEmailBody", String(formData.get("gpuKillEmailBody") ?? ""));
+  revalidatePath("/settings");
+}
+
 export async function saveScrubSettingsAction(formData: FormData) {
   await requireAdmin();
   setSetting("scrubEnabled", formData.get("scrubEnabled") === "on");

@@ -45,6 +45,13 @@ export interface Settings {
   gpuImmediate: boolean;
   gpuWhitelistUsers: string; // comma-separated
   gpuWhitelistLabs: string; // comma-separated
+  // Emails sent to a student when their idle GPU process is warned / terminated. Both support
+  // {placeholder} substitution (see GPU_EMAIL_VARS / renderGpu*Email in lib/mailer.ts). Empty
+  // falls back to the built-in default.
+  gpuWarnEmailSubject: string;
+  gpuWarnEmailBody: string;
+  gpuKillEmailSubject: string;
+  gpuKillEmailBody: string;
   // Alerting + logs.
   alertsEnabled: boolean;
   alertLevel: "WARN" | "ERROR"; // minimum log level that triggers an admin alert
@@ -98,6 +105,35 @@ Please change your password after first login (run: passwd).
 
 — Lab Manager`;
 
+/** Placeholders the GPU notification templates understand, shown to the admin in the settings UI. */
+export const GPU_EMAIL_VARS: { key: string; desc: string }[] = [
+  { key: "username", desc: "owner's login username" },
+  { key: "pid", desc: "process id (may be blank)" },
+  { key: "lab", desc: "lab name (may be blank)" },
+  { key: "node", desc: "node the process runs on" },
+  { key: "grace_minutes", desc: "minutes before termination (warning email only)" },
+];
+
+export const DEFAULT_GPU_WARN_SUBJECT = "Idle GPU process warning";
+
+export const DEFAULT_GPU_WARN_BODY = `Hello {username},
+
+One of your processes (PID {pid}) on node {node} is holding GPU memory but is not using the GPU.
+
+If it stays idle it will be terminated in about {grace_minutes} minutes to free the GPU for others. If you still need it, start using the GPU again or contact an admin.
+
+— Lab Manager`;
+
+export const DEFAULT_GPU_KILL_SUBJECT = "Idle GPU process terminated";
+
+export const DEFAULT_GPU_KILL_BODY = `Hello {username},
+
+Your idle process (PID {pid}) on node {node} was terminated because it held GPU memory without using the GPU.
+
+Please checkpoint long-running work and keep the GPU active, or ask an admin to whitelist your job.
+
+— Lab Manager`;
+
 export const DEFAULT_SETTINGS: Settings = {
   fastQuotaDefaultBytes: 2 * TIB,
   slowQuotaDefaultBytes: 3 * TIB,
@@ -122,6 +158,10 @@ export const DEFAULT_SETTINGS: Settings = {
   gpuImmediate: false,
   gpuWhitelistUsers: "",
   gpuWhitelistLabs: "",
+  gpuWarnEmailSubject: DEFAULT_GPU_WARN_SUBJECT,
+  gpuWarnEmailBody: DEFAULT_GPU_WARN_BODY,
+  gpuKillEmailSubject: DEFAULT_GPU_KILL_SUBJECT,
+  gpuKillEmailBody: DEFAULT_GPU_KILL_BODY,
   alertsEnabled: true,
   alertLevel: "ERROR",
   alertDedupMinutes: 15,
