@@ -78,21 +78,47 @@ export interface ImportRow {
 
 const USERNAME_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
 
-export function applyMapping(parsed: ParsedCsv, mapping: ColumnMapping): ImportRow[] {
+/** A row's fields before validation — what the browser sends to the import action. */
+export interface RawImportRow {
+  username?: string;
+  email?: string;
+  name?: string;
+  studentId?: string;
+}
+
+/**
+ * Validate + normalize already-extracted rows (username lowercased/trimmed, intra-batch dedup,
+ * optional email-required check). Shared by applyMapping (browser preview) and the import server
+ * action, so the server re-validates exactly what the browser showed — the client is never trusted.
+ */
+export function validateImportRows(
+  rows: RawImportRow[],
+  opts: { requireEmail?: boolean } = {},
+): ImportRow[] {
   const seen = new Set<string>();
-  return parsed.rows.map((r) => {
+  return rows.map((r) => {
     const issues: string[] = [];
-    const username = (r[mapping.username] ?? "").trim().toLowerCase();
-    const email = mapping.email ? (r[mapping.email] ?? "").trim() : undefined;
-    const name = mapping.name ? (r[mapping.name] ?? "").trim() : undefined;
-    const studentId = mapping.studentId ? (r[mapping.studentId] ?? "").trim() : undefined;
+    const username = (r.username ?? "").trim().toLowerCase();
+    const email = r.email?.trim() || undefined;
+    const name = r.name?.trim() || undefined;
+    const studentId = r.studentId?.trim() || undefined;
 
     if (!username) issues.push("missing username");
     else if (!USERNAME_RE.test(username)) issues.push("invalid username");
     else if (seen.has(username)) issues.push("duplicate username in file");
-    seen.add(username);
-    if (mapping.email && !email) issues.push("missing email");
+    if (username) seen.add(username);
+    if (opts.requireEmail && !email) issues.push("missing email");
 
     return { username, email, name, studentId, issues };
   });
+}
+
+export function applyMapping(parsed: ParsedCsv, mapping: ColumnMapping): ImportRow[] {
+  const raw = parsed.rows.map((r) => ({
+    username: r[mapping.username] ?? "",
+    email: mapping.email ? (r[mapping.email] ?? "") : undefined,
+    name: mapping.name ? (r[mapping.name] ?? "") : undefined,
+    studentId: mapping.studentId ? (r[mapping.studentId] ?? "") : undefined,
+  }));
+  return validateImportRows(raw, { requireEmail: !!mapping.email });
 }
