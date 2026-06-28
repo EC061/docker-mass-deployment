@@ -125,7 +125,7 @@ export default async function LogsPage({
                   <td>{l.msg}</td>
                   <td>
                     {l.task_id ? (
-                      <a href={`/logs?task=${encodeURIComponent(l.task_id)}`} title={l.task_id}>
+                      <a href={`/tasks/${encodeURIComponent(l.task_id)}`} title={l.task_id}>
                         {l.task_id.slice(0, 8)}
                       </a>
                     ) : (
