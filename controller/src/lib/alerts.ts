@@ -59,8 +59,14 @@ export function maybeAlertOnLog(row: {
   void alertAdmins(key, subject, body);
 }
 
-export function alertNodeOffline(node: string): void {
-  void alertAdmins(`node-offline:${node}`, `Node offline: ${node}`, `Node ${node} disconnected from the controller.`);
+export function alertNodeOffline(node: string, label?: string): void {
+  // `label` is the node's UI alias when set, so the alert reads "GPU Box A (gpu-01)".
+  const display = label && label !== node ? `${label} (${node})` : node;
+  void alertAdmins(
+    `node-offline:${node}`,
+    `Node offline: ${display}`,
+    `Node ${display} has been disconnected from the controller for longer than the grace window.`,
+  );
 }
 
 export function alertTaskFailed(node: string, action: string, error: string): void {

@@ -232,6 +232,29 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     ALTER TABLE labs ADD COLUMN last_oldfile_scan INTEGER;
     `,
   },
+  {
+    id: "0006_node_alias_announcements",
+    sql: `
+    -- Human-friendly display name for a node, set in the UI. The 'name' stays the DNS-label
+    -- identity used for auth/queueing; alias is purely cosmetic (shown in the UI and alerts).
+    ALTER TABLE nodes ADD COLUMN alias TEXT;
+
+    -- Service announcements broadcast by email to students and/or PIs. One row per send,
+    -- kept for an audit trail and shown as recent history on the Announcements page.
+    CREATE TABLE announcements (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts INTEGER NOT NULL,
+      actor TEXT,
+      audiences TEXT NOT NULL,    -- comma-separated: students,pis
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL,
+      recipients INTEGER NOT NULL, -- distinct addresses targeted
+      sent INTEGER NOT NULL,       -- addresses the SMTP send succeeded for
+      skipped INTEGER NOT NULL DEFAULT 0  -- 1 if SMTP was not configured (nothing sent)
+    );
+    CREATE INDEX idx_announcements_ts ON announcements(ts);
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {
