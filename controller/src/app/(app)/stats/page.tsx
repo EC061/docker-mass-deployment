@@ -1,10 +1,39 @@
-import { fmtBytes, pct } from "@/lib/format";
-import { buildStats } from "@/lib/stats";
+import { ago, fmtBytes, pct } from "@/lib/format";
+import { buildStats, type LabStats } from "@/lib/stats";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { usageScanAction } from "./actions";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Per-lab scan control: offer a "Scan now" button only when a per-student usage scan is actually
+ * warranted (never run, or stale) and none is already in flight; otherwise just show how fresh the
+ * data is. The button enqueues a usage.scan task on the lab's node.
+ */
+function ScanControl({ lab }: { lab: LabStats }) {
+  return (
+    <form action={usageScanAction} className="flex items-center gap-2 text-xs">
+      <input type="hidden" name="labId" value={lab.labId} />
+      {lab.scanPending ? (
+        <span className="text-muted-foreground">scanning…</span>
+      ) : lab.scanStale ? (
+        <>
+          <Button type="submit" variant="outline" size="sm">
+            Scan now
+          </Button>
+          <span className="text-muted-foreground">
+            {lab.usageScannedAt ? `updated ${ago(lab.usageScannedAt)}` : "never scanned"}
+          </span>
+        </>
+      ) : (
+        <span className="text-muted-foreground">updated {ago(lab.usageScannedAt)}</span>
+      )}
+    </form>
+  );
+}
 
 function quotaCell(used: number | null, quota: number | null) {
   if (used === null) return <span className="text-muted-foreground">—</span>;
@@ -33,9 +62,10 @@ export default async function StatsPage() {
         <p className="text-sm text-muted-foreground">
           Per-student storage by node and lab. <strong className="text-foreground">Image</strong> is a
           student&apos;s writable-layer (overlayfs) usage; <strong className="text-foreground">Fast</strong>{" "}
-          is scratch; <strong className="text-foreground">Cold</strong> is cold storage. Fast/Cold are
-          usually reported only at the lab level (the lab quota covers all students). Numbers come from
-          the latest agent usage report.
+          is scratch; <strong className="text-foreground">Cold</strong> is cold storage. Per-student
+          Fast/Cold come from a periodic per-lab <em>du</em> scan (use <strong className="text-foreground">Scan
+          now</strong> to refresh); the <strong className="text-foreground">Lab total</strong> row shows
+          live usage against the lab quota.
         </p>
       </div>
 
@@ -61,15 +91,18 @@ export default async function StatsPage() {
 
               {node.labs.map((lab) => (
                 <div key={lab.labId} className="space-y-2">
-                  <h4 className="text-sm font-semibold">
-                    <a href={`/labs/${lab.labId}`} className="text-primary hover:underline">
-                      {lab.labName}
-                    </a>{" "}
-                    <span className="font-normal text-muted-foreground">
-                      · image {lab.image} · {lab.students.length} student
-                      {lab.students.length === 1 ? "" : "s"}
-                    </span>
-                  </h4>
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <h4 className="text-sm font-semibold">
+                      <a href={`/labs/${lab.labId}`} className="text-primary hover:underline">
+                        {lab.labName}
+                      </a>{" "}
+                      <span className="font-normal text-muted-foreground">
+                        · image {lab.image} · {lab.students.length} student
+                        {lab.students.length === 1 ? "" : "s"}
+                      </span>
+                    </h4>
+                    <ScanControl lab={lab} />
+                  </div>
                   <Table>
                     <TableHeader>
                       <TableRow>

@@ -99,6 +99,19 @@ export function ingestTelemetry(node: string, payload: any): void {
     }
   }
 
+  // Per-lab usage-scan freshness: when the agent last ran the per-student du breakdown. Only ever
+  // moves forward, so a stale heartbeat (or one from before a scan) can't roll it back.
+  for (const u of (payload.usage_scans ?? []) as { lab?: string; scanned_at?: number | null }[]) {
+    if (!u.lab || typeof u.scanned_at !== "number") continue;
+    const labId = labIdByName(u.lab);
+    if (labId === null) continue;
+    db()
+      .prepare(
+        "UPDATE labs SET usage_scanned_at = ? WHERE id = ? AND (usage_scanned_at IS NULL OR usage_scanned_at < ?)",
+      )
+      .run(u.scanned_at, labId, u.scanned_at);
+  }
+
   // GPU snapshot: replace this node's rows with the current process list.
   const gpu = (payload.gpu_processes ?? []) as any[];
   const tx = db().transaction(() => {

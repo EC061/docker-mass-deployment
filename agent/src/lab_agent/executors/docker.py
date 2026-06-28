@@ -175,15 +175,16 @@ def writable_layer_size(name: str) -> int | None:
         return None
 
 
-def du_home(name: str, username: str, *, timeout: float = 60.0) -> int | None:
-    """Bytes used by a student's home directory inside the container, or None on failure/timeout.
+def du_path(name: str, path: str, *, timeout: float = 60.0) -> int | None:
+    """Bytes used by an absolute path inside the container, or None on failure/timeout/missing path.
 
-    The username is the only interpolated value; callers must have validated it (users.USERNAME_RE)
-    before this point. ``du -sb`` reports apparent size in bytes; we take the leading integer. A
-    bounded timeout means a student who packs their home with millions of tiny files can, at worst,
-    make their *own* number unavailable — the scan moves on rather than hanging.
+    ``path`` is interpolated into the argv, so callers must pass a trusted value — the only dynamic
+    component used here is a username already validated against ``users.USERNAME_RE``. ``du -sb``
+    reports apparent size in bytes; we take the leading integer. A bounded timeout means a student
+    who packs a directory with millions of tiny files can, at worst, make their *own* number
+    unavailable — the scan moves on rather than hanging.
     """
-    res = exec_in(name, ["du", "-sb", f"/home/{username}"], timeout=timeout)
+    res = exec_in(name, ["du", "-sb", path], timeout=timeout)
     if not res.ok:
         return None
     first = res.stdout.strip().split(None, 1)
@@ -193,3 +194,12 @@ def du_home(name: str, username: str, *, timeout: float = 60.0) -> int | None:
         return int(first[0])
     except (ValueError, TypeError):
         return None
+
+
+def du_home(name: str, username: str, *, timeout: float = 60.0) -> int | None:
+    """Bytes used by a student's home directory (installed software) inside the container.
+
+    Counts ``/home/<u>`` only; the student's scratch/cold-storage live there as symlinks, which
+    ``du`` does not follow, so the fast/cold tiers are measured separately (see ``du_path``).
+    """
+    return du_path(name, f"/home/{username}", timeout=timeout)
