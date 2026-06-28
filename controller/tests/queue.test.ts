@@ -42,6 +42,19 @@ describe("enqueueTask", () => {
   });
 });
 
+describe("getTask", () => {
+  it("returns the full task row by uuid, or null for an unknown id", () => {
+    const frame = queue.enqueueTask("gpu-1", "student.add", { username: "alice" }, "admin");
+    const row = queue.getTask(frame.id);
+    expect(row).not.toBeNull();
+    expect(row!.action).toBe("student.add");
+    expect(row!.node).toBe("gpu-1");
+    expect(row!.requested_by).toBe("admin");
+    expect(JSON.parse(row!.params!)).toEqual({ username: "alice" });
+    expect(queue.getTask("no-such-uuid")).toBeNull();
+  });
+});
+
 describe("claim / ack", () => {
   it("claims a queued task for the destination node, then acks it (no redelivery)", () => {
     const frame = queue.enqueueTask("worker-node", "lab.set_quota", { lab: "x" });

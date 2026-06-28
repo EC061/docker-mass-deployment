@@ -69,6 +69,28 @@ export function enqueueTask(
   return frame;
 }
 
+export interface TaskRow {
+  task_uuid: string;
+  job_id: number | null;
+  node: string;
+  action: string;
+  params: string | null;
+  requested_by: string | null;
+  state: string;
+  result: string | null;
+  error: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** Fetch a single task's full record by its UUID, or null if unknown. */
+export function getTask(taskUuid: string): TaskRow | null {
+  const row = db().prepare("SELECT * FROM task_log WHERE task_uuid = ?").get(taskUuid) as
+    | TaskRow
+    | undefined;
+  return row ?? null;
+}
+
 /** Claim the next pending task for a node, or null if the queue is empty. */
 export function claimTask(node: string, workerId: string): { jobId: number; frame: TaskFrame } | null {
   const job = nodeQueue(node).claimOne(workerId);
