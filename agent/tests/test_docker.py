@@ -130,7 +130,7 @@ def test_du_home_parses_leading_int(monkeypatch):
     monkeypatch.setattr(docker, "run", fake_run)
     assert du_home("lab-bio", "alice") == 98304
     # du runs inside the container against the student's home directory.
-    assert captured["args"] == ["docker", "exec", "-i", "lab-bio", "du", "-sb", "/home/alice"]
+    assert captured["args"] == ["docker", "exec", "-i", "lab-bio", "du", "-sB1", "/home/alice"]
 
 
 def test_du_home_none_on_failure(monkeypatch):
