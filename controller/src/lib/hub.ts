@@ -26,7 +26,19 @@ interface NodeConn {
 }
 
 const connections = new Map<string, NodeConn>();
+// Pending offline-alert timers, keyed by node. A disconnect schedules one; a reconnect within the
+// grace window cancels it, so transient blips (agent restart, brief network drop) never page admins.
+const pendingOfflineAlerts = new Map<string, NodeJS.Timeout>();
 const WORKER_PREFIX = "controller-hub";
+
+/** Cancel any pending offline alert for a node (it came back before the grace window elapsed). */
+function cancelOfflineAlert(node: string): void {
+  const t = pendingOfflineAlerts.get(node);
+  if (t) {
+    clearTimeout(t);
+    pendingOfflineAlerts.delete(node);
+  }
+}
 
 export function connectedNodes(): string[] {
   return [...connections.keys()];
@@ -323,6 +335,8 @@ function handleTelemetry(node: string, frame: any): void {
 // ----------------------------------------------------------------- node registry
 
 function registerNode(node: string, capabilities: unknown): void {
+  // The node is back: drop any in-flight offline alert before it fires.
+  cancelOfflineAlert(node);
   const now = Date.now();
   db()
     .prepare(
@@ -340,7 +354,26 @@ function deregisterNode(node: string): void {
     connections.delete(node);
   }
   db().prepare(`UPDATE nodes SET online = 0, last_seen = ? WHERE name = ?`).run(Date.now(), node);
-  alertNodeOffline(node);
+
+  // Don't page admins on a momentary drop. Wait out the grace window; if the node hasn't reconnected
+  // (and isn't claimed by a fresh socket) by then, alert. A reconnect cancels the timer in
+  // registerNode. A second disconnect just reschedules (clear the old timer first).
+  cancelOfflineAlert(node);
+  const graceMs = Math.max(0, getSetting("nodeOfflineGraceSeconds")) * 1000;
+  const fire = () => {
+    pendingOfflineAlerts.delete(node);
+    if (connections.has(node)) return; // reconnected
+    const row = db().prepare("SELECT online, alias FROM nodes WHERE name = ?").get(node) as
+      | { online: number; alias: string | null }
+      | undefined;
+    if (!row || row.online === 1) return; // gone or back online
+    alertNodeOffline(node, row.alias ?? undefined);
+  };
+  if (graceMs === 0) {
+    fire();
+  } else {
+    pendingOfflineAlerts.set(node, setTimeout(fire, graceMs));
+  }
 }
 
 /** Wire the hub to the HTTP server's upgrade event for a given path. */

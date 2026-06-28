@@ -2,7 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
-import { deleteNode, isValidNodeName, provisionNode, revokeNode, rotateNodeToken } from "@/lib/nodes";
+import { deleteNode, isValidNodeName, provisionNode, revokeNode, rotateNodeToken, setNodeAlias } from "@/lib/nodes";
 
 // The freshly issued token is shown once on the Nodes page so the admin can paste the printed
 // `lab-agent set-token` command onto the node. It is never stored in plaintext.
@@ -32,6 +32,20 @@ export async function revokeNodeAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim().toLowerCase();
   revokeNode(name, admin.email);
   redirect("/nodes?revoked=" + encodeURIComponent(name));
+}
+
+export async function setNodeAliasAction(formData: FormData) {
+  const admin = await requireAdmin();
+  const name = String(formData.get("name") ?? "").trim().toLowerCase();
+  const alias = String(formData.get("alias") ?? "");
+  let error: string | null = null;
+  try {
+    setNodeAlias(name, alias, admin.email);
+  } catch (e) {
+    error = e instanceof Error ? e.message : "could not set alias";
+  }
+  if (error) redirect("/nodes?error=" + encodeURIComponent(error));
+  redirect("/nodes");
 }
 
 export async function deleteNodeAction(formData: FormData) {

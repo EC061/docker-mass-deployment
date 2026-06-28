@@ -44,6 +44,7 @@ export interface Settings {
   alertsEnabled: boolean;
   alertLevel: "WARN" | "ERROR"; // minimum log level that triggers an admin alert
   alertDedupMinutes: number; // suppress duplicate alerts (same key) within this window
+  nodeOfflineGraceSeconds: number; // tolerate a node disconnect this long before alerting admins
   logRetentionDays: number;
   quotaAlertPct: number; // email the PI when a lab pool crosses this percent
   // WebDAV backup target.
@@ -83,6 +84,7 @@ export const DEFAULT_SETTINGS: Settings = {
   alertsEnabled: true,
   alertLevel: "ERROR",
   alertDedupMinutes: 15,
+  nodeOfflineGraceSeconds: 60,
   logRetentionDays: 30,
   quotaAlertPct: 90,
   webdavUrl: "",

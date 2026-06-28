@@ -191,6 +191,10 @@ export default async function SettingsPage({
             <input name="quotaAlertPct" type="number" defaultValue={s.quotaAlertPct} />
           </div>
           <div>
+            <label>Node offline grace (seconds)</label>
+            <input name="nodeOfflineGraceSeconds" type="number" min={0} defaultValue={s.nodeOfflineGraceSeconds} />
+          </div>
+          <div>
             <label>Log retention (days)</label>
             <input name="logRetentionDays" type="number" defaultValue={s.logRetentionDays} />
           </div>

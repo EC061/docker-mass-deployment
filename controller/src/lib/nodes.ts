@@ -93,6 +93,18 @@ export function rotateNodeToken(name: string, actor: string): string {
   return provisionNode(name, actor);
 }
 
+/**
+ * Set (or clear) a node's human-friendly alias. The alias is cosmetic — the node `name` remains the
+ * identity used for auth and task queueing. Pass an empty string to clear it.
+ */
+export function setNodeAlias(name: string, alias: string, actor: string): void {
+  const exists = db().prepare("SELECT 1 FROM nodes WHERE name = ?").get(name);
+  if (!exists) throw new Error(`unknown node '${name}'`);
+  const clean = alias.trim().slice(0, 64) || null;
+  db().prepare("UPDATE nodes SET alias = ? WHERE name = ?").run(clean, name);
+  audit(actor, "node.alias", name, clean ?? "(cleared)");
+}
+
 /** Remove a node from the allow-list (its token stops working immediately). */
 export function revokeNode(name: string, actor: string): void {
   db().prepare("UPDATE nodes SET allowed = 0 WHERE name = ?").run(name);
@@ -125,8 +137,8 @@ export function deleteNode(name: string, actor: string): void {
   audit(actor, "node.delete", name);
 }
 
-function audit(actor: string, action: string, target: string): void {
+function audit(actor: string, action: string, target: string, detail?: string): void {
   db()
-    .prepare("INSERT INTO audit_log (ts, actor, action, target) VALUES (?, ?, ?, ?)")
-    .run(Date.now(), actor, action, target);
+    .prepare("INSERT INTO audit_log (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)")
+    .run(Date.now(), actor, action, target, detail ?? null);
 }

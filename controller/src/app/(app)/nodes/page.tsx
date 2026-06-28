@@ -5,12 +5,14 @@ import {
   provisionNodeAction,
   revokeNodeAction,
   rotateNodeTokenAction,
+  setNodeAliasAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 interface NodeRow {
   name: string;
+  alias: string | null;
   online: number;
   last_seen: number | null;
   capabilities: string | null;
@@ -87,7 +89,7 @@ export default async function NodesPage({
 
   const nodes = db()
     .prepare(
-      "SELECT name, online, last_seen, capabilities, pools, scrub_status, allowed, auth_mode, token_pinned_at FROM nodes ORDER BY name",
+      "SELECT name, alias, online, last_seen, capabilities, pools, scrub_status, allowed, auth_mode, token_pinned_at FROM nodes ORDER BY name",
     )
     .all() as NodeRow[];
 
@@ -163,7 +165,36 @@ export default async function NodesPage({
                     : "ZFS";
                 return (
                   <tr key={n.name}>
-                    <td>{n.name}</td>
+                    <td>
+                      {n.alias ? (
+                        <>
+                          <div>{n.alias}</div>
+                          <div className="muted" style={{ fontSize: 12 }}>{n.name}</div>
+                        </>
+                      ) : (
+                        n.name
+                      )}
+                      <form
+                        action={setNodeAliasAction}
+                        style={{ display: "flex", gap: 4, marginTop: 6 }}
+                      >
+                        <input type="hidden" name="name" value={n.name} />
+                        <input
+                          name="alias"
+                          defaultValue={n.alias ?? ""}
+                          placeholder="alias"
+                          maxLength={64}
+                          style={{ width: 110, padding: "2px 6px", fontSize: 12 }}
+                        />
+                        <button
+                          type="submit"
+                          className="secondary"
+                          style={{ width: "auto", padding: "2px 8px", fontSize: 12 }}
+                        >
+                          Save
+                        </button>
+                      </form>
+                    </td>
                     <td>
                       <span className={`badge ${n.online ? "online" : "offline"}`}>
                         {n.online ? "online" : "offline"}

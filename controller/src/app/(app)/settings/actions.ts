@@ -79,6 +79,8 @@ export async function saveAlertSettingsAction(formData: FormData) {
   const level = String(formData.get("alertLevel") ?? "ERROR");
   setSetting("alertLevel", level === "WARN" ? "WARN" : "ERROR");
   setSetting("alertDedupMinutes", Number(formData.get("alertDedupMinutes")) || 15);
+  const grace = Number(formData.get("nodeOfflineGraceSeconds"));
+  setSetting("nodeOfflineGraceSeconds", Number.isFinite(grace) && grace >= 0 ? Math.trunc(grace) : 60);
   setSetting("logRetentionDays", Number(formData.get("logRetentionDays")) || 30);
   setSetting("quotaAlertPct", Number(formData.get("quotaAlertPct")) || 90);
   revalidatePath("/settings");
