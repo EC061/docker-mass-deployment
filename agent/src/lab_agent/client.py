@@ -17,6 +17,7 @@ import asyncio
 import json
 import ssl
 import threading
+from typing import Any
 
 import websockets
 
@@ -41,6 +42,10 @@ class Agent:
         self.dispatcher = Dispatcher(cfg, self.log)
         self.usage = UsageState()
         self._docker_lock = threading.Lock()  # single-flight guard for the docker-layer scan
+        # On-demand usage scan (Stats page "Scan now"). Registered here rather than in the
+        # dispatcher's builtins because it reuses the agent's shared scan cache + single-flight
+        # lock, which live on the Agent, not the Dispatcher.
+        self.dispatcher.register(P.A_USAGE_SCAN, self._handle_usage_scan)
         self._connected = asyncio.Event()
 
     # ------------------------------------------------------------------ helpers
@@ -331,6 +336,20 @@ class Agent:
             usagereport.publish_snapshot(self.cfg, lab, snapshot)
         except Exception as exc:
             self.log.warn("usage", f"docker scan failed for lab '{lab}': {exc}", lab=lab)
+
+    def _handle_usage_scan(self, cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
+        """Controller-triggered usage scan for one lab (Stats page "Scan now").
+
+        Blocks on the same single-flight lock the background loop uses, so it never double-scans a
+        container, then refreshes the shared cache. The fresh per-student numbers reach the
+        controller on the next heartbeat; the returned ``scanned_at`` is the freshness timestamp.
+        """
+        lab = params["lab"]
+        users_list = params.get("users") or usagereport.list_lab_students(cfg, lab)
+        with self._docker_lock:
+            self._scan_docker_lab(lab, users_list)
+        usage = self.usage.docker_for(lab)
+        return {"lab": lab, "scanned_at": usage.scanned_at}, f"usage scan complete for '{lab}'"
 
     # ----------------------------------------------------------------- weekly in-container patching
 

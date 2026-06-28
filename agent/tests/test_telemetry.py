@@ -94,3 +94,33 @@ def test_collect_heartbeat_assembles_all_sections(monkeypatch):
     assert datasets == {"fast/labs/bio", "slow/labs/bio"}
     assert {s["pool"] for s in hb["scrub"]} == {"fast", "slow"}
     assert hb["gpu_processes"] == [{"pid": 1, "vram_bytes": 1024}]
+    # No scan cache passed -> no per-student du rows, no scan timestamps.
+    assert hb["usage_scans"] == []
+
+
+def test_collect_heartbeat_includes_scan_breakdown(monkeypatch):
+    """A populated scan cache contributes per-student docker/fast/slow rows + a scan timestamp."""
+    from lab_agent import usagereport
+
+    cfg = _cfg()
+    monkeypatch.setattr(telemetry, "run",
+                        lambda args, **kw: CommandResult(True, [], 0, f"{args[-1]}\t10\t1\t9\n", ""))
+    monkeypatch.setattr(telemetry.zfs, "list_usage", lambda root: [])
+    monkeypatch.setattr(telemetry.coldstore, "list_usage", lambda cfg: [])
+    monkeypatch.setattr(telemetry.zfs, "scrub_status",
+                        lambda p: SimpleNamespace(to_dict=lambda: {"pool": p}))
+    monkeypatch.setattr(telemetry, "list_gpu_processes", lambda: [])
+
+    state = usagereport.UsageState()
+    state.set_docker("bio", usagereport.DockerUsage(
+        scanned_at=777, total_used=300, per_user={"alice": 120},
+        per_user_fast={"alice": 40}, per_user_slow={"alice": 10},
+    ))
+
+    hb = telemetry.collect_heartbeat(cfg, state)
+    rows = {(d["pool"], d["dataset"]): d["used_bytes"] for d in hb["datasets"]}
+    assert rows[("docker", "docker/labs/bio")] == 300
+    assert rows[("docker", "docker/labs/bio/users/alice")] == 120
+    assert rows[("fast", "fast/labs/bio/users/alice")] == 40
+    assert rows[("slow", "slow/labs/bio/users/alice")] == 10
+    assert hb["usage_scans"] == [{"lab": "bio", "scanned_at": 777}]

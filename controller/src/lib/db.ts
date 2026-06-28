@@ -255,6 +255,14 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     CREATE INDEX idx_announcements_ts ON announcements(ts);
     `,
   },
+  {
+    id: "0007_usage_scan_time",
+    sql: `
+    -- Last time the agent ran a per-student usage (du) scan for this lab, reported by its heartbeat.
+    -- Drives the Stats page freshness ("updated X ago") and the conditional "Scan now" button.
+    ALTER TABLE labs ADD COLUMN usage_scanned_at INTEGER;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

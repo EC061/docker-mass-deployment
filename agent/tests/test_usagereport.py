@@ -94,6 +94,22 @@ def test_build_snapshot_shape():
     assert bob["docker_home_used"] == 80
 
 
+def test_build_snapshot_falls_back_to_du_for_scratch_and_cold():
+    """With no per-student ZFS dataset, scratch/cold come from the docker scan's du measurement
+    (used-only, no per-student quota)."""
+    docker_usage = usagereport.DockerUsage(
+        scanned_at=5, per_user={"alice": 120},
+        per_user_fast={"alice": 40}, per_user_slow={"alice": 10},
+    )
+    snap = usagereport.build_snapshot(
+        cfg(), "bio", usagereport.LabUsage(), docker_usage, roster=["alice"], now=1
+    )
+    alice = snap["students"][0]
+    assert alice["scratch"] == {"used": 40, "quota": None}
+    assert alice["cold"] == {"used": 10, "quota": None}
+    assert alice["docker_home_used"] == 120
+
+
 def test_build_snapshot_lists_roster_with_no_usage():
     """A provisioned student must appear even before any ZFS/docker usage exists for them."""
     snap = usagereport.build_snapshot(
@@ -130,6 +146,25 @@ def test_docker_datasets_telemetry_rows():
 def test_docker_datasets_omits_total_when_unknown():
     rows = usagereport.docker_datasets("bio", usagereport.DockerUsage(per_user={"alice": 120}))
     assert all(r["dataset"] != "docker/labs/bio" for r in rows)
+
+
+def test_tier_datasets_per_student_fast_and_cold():
+    usage = usagereport.DockerUsage(
+        per_user_fast={"alice": 40, "bob": 60}, per_user_slow={"alice": 10}
+    )
+    rows = usagereport.tier_datasets("bio", usage)
+    assert {"pool": "fast", "dataset": "fast/labs/bio/users/alice", "used_bytes": 40,
+            "quota_bytes": None} in rows
+    assert {"pool": "fast", "dataset": "fast/labs/bio/users/bob", "used_bytes": 60,
+            "quota_bytes": None} in rows
+    assert {"pool": "slow", "dataset": "slow/labs/bio/users/alice", "used_bytes": 10,
+            "quota_bytes": None} in rows
+    # bob has no cold measurement -> no slow row for him.
+    assert all(r["dataset"] != "slow/labs/bio/users/bob" for r in rows)
+
+
+def test_tier_datasets_empty_without_scan():
+    assert usagereport.tier_datasets("bio", usagereport.DockerUsage()) == []
 
 
 # --------------------------------------------------------------------------- request dir + scan
@@ -196,22 +231,50 @@ def test_publish_and_status_write(tmp_path, monkeypatch):
     assert (base / usagereport.STATUS_FILE).exists()
 
 
-def test_run_docker_scan_collects_per_home(monkeypatch):
+def test_run_docker_scan_collects_per_student_tiers(monkeypatch):
     monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
     monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: 1000)
     monkeypatch.setattr(usagereport.docker, "du_home", lambda name, u: {"alice": 600, "bob": 300}[u])
+    # Scratch + cold-storage are measured per student via du on /labusers/{fast,slow}/<u>.
+    du_paths = {
+        "/labusers/fast/alice": 40, "/labusers/slow/alice": 10,
+        "/labusers/fast/bob": 60, "/labusers/slow/bob": 20,
+    }
+    monkeypatch.setattr(usagereport.docker, "du_path", lambda name, p: du_paths.get(p))
     seen = []
     usage = usagereport.run_docker_scan(
         cfg(), "bio", ["alice", "bob"], progress=lambda d, t, c: seen.append((d, t, c)), now=42
     )
     assert usage.total_used == 1000
     assert usage.per_user == {"alice": 600, "bob": 300}
-    assert usage.unattributed == 100  # 1000 - 900
+    assert usage.per_user_fast == {"alice": 40, "bob": 60}
+    assert usage.per_user_slow == {"alice": 10, "bob": 20}
+    assert usage.unattributed == 100  # 1000 - 900 (docker homes only)
     assert usage.scanned_at == 42 and usage.status == "idle"
     assert seen == [(0, 2, "alice"), (1, 2, "bob")]
+
+
+def test_run_docker_scan_skips_cold_on_smb(monkeypatch):
+    """On the SMB cold-storage backend the owner node reports cold usage, so this node measures
+    scratch per student but never cold."""
+    monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
+    monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: 0)
+    monkeypatch.setattr(usagereport.docker, "du_home", lambda name, u: 0)
+    calls = []
+
+    def fake_du_path(name, p):
+        calls.append(p)
+        return 5
+
+    monkeypatch.setattr(usagereport.docker, "du_path", fake_du_path)
+    usage = usagereport.run_docker_scan(cfg(slow_backend="smb"), "bio", ["alice"], now=1)
+    assert usage.per_user_fast == {"alice": 5}
+    assert usage.per_user_slow == {}  # cold not measured on the SMB client
+    assert calls == ["/labusers/fast/alice"]  # never du'd the cold dir
 
 
 def test_run_docker_scan_no_container(monkeypatch):
     monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: False)
     usage = usagereport.run_docker_scan(cfg(), "bio", ["alice"], now=42)
     assert usage.total_used is None and usage.per_user == {} and usage.scanned_at == 42
+    assert usage.per_user_fast == {} and usage.per_user_slow == {}

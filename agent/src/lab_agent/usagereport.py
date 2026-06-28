@@ -57,12 +57,20 @@ REFRESH_MARKER = ".labquota-refresh"
 
 @dataclass
 class DockerUsage:
-    """Cached docker writable-layer measurement for one lab (updated only by a scan)."""
+    """Cached per-student usage from the expensive ``du`` scan (updated only by a scan).
+
+    Holds the container writable layer total plus, for each student, the three numbers the cheap
+    publish loop cannot get from ZFS metadata: their docker home (installed software), and — since
+    there are no per-student ZFS datasets — their scratch (fast) and cold (slow) directory sizes
+    measured with ``du``.
+    """
 
     scanned_at: int | None = None  # epoch ms of the last successful scan
     status: str = "idle"  # "idle" | "running"
     total_used: int | None = None  # container writable layer (SizeRw)
-    per_user: dict[str, int] = field(default_factory=dict)  # username -> du bytes
+    per_user: dict[str, int] = field(default_factory=dict)  # username -> docker-home du bytes
+    per_user_fast: dict[str, int] = field(default_factory=dict)  # username -> scratch du bytes
+    per_user_slow: dict[str, int] = field(default_factory=dict)  # username -> cold-storage du bytes
     unattributed: int | None = None  # total - sum(per_user), files outside any home (/tmp, etc.)
 
     def to_dict(self) -> dict[str, Any]:
@@ -71,6 +79,8 @@ class DockerUsage:
             "status": self.status,
             "total_used": self.total_used,
             "per_user": dict(self.per_user),
+            "per_user_fast": dict(self.per_user_fast),
+            "per_user_slow": dict(self.per_user_slow),
             "unattributed": self.unattributed,
         }
 
@@ -193,11 +203,19 @@ def build_snapshot(
     students = []
     for name in usernames:
         tiers = lab_usage.users.get(name, {})
+        # Prefer ZFS metadata when per-student datasets exist; otherwise fall back to the docker
+        # scan's ``du`` measurement (used-only, no per-student quota — the lab quota covers all).
+        scratch = _usage_pair(tiers.get("fast"))
+        if scratch is None and name in docker_usage.per_user_fast:
+            scratch = {"used": docker_usage.per_user_fast[name], "quota": None}
+        cold = _usage_pair(tiers.get("slow"))
+        if cold is None and name in docker_usage.per_user_slow:
+            cold = {"used": docker_usage.per_user_slow[name], "quota": None}
         students.append(
             {
                 "username": name,
-                "scratch": _usage_pair(tiers.get("fast")),  # None: no per-student dataset
-                "cold": _usage_pair(tiers.get("slow")),  # None: no per-student dataset/SMB
+                "scratch": scratch,
+                "cold": cold,
                 "docker_home_used": docker_usage.per_user.get(name),
             }
         )
@@ -243,6 +261,31 @@ def docker_datasets(lab: str, docker_usage: DockerUsage) -> list[dict[str, Any]]
                 "quota_bytes": None,
             }
         )
+    return rows
+
+
+def tier_datasets(lab: str, docker_usage: DockerUsage) -> list[dict[str, Any]]:
+    """Telemetry rows for the per-student scratch (fast) / cold (slow) ``du`` breakdown.
+
+    With no per-student ZFS datasets, scratch/cold have no cheap per-student metadata, so the scan
+    measures each student's directory with ``du`` instead (the lab-level fast/slow rows still come
+    from ZFS metadata in the heartbeat). Dataset names mirror the ZFS layout
+    (``<pool>/labs/<lab>/users/<u>``) so the controller's ``parseDataset`` maps them to the right
+    lab/student. quota is omitted — the per-student number is a breakdown, not a quota (the lab
+    quota covers everyone), so it must never raise a PI quota alert.
+    """
+    rows: list[dict[str, Any]] = []
+    tiers = (("fast", docker_usage.per_user_fast), ("slow", docker_usage.per_user_slow))
+    for pool, per_user in tiers:
+        for user, used in per_user.items():
+            rows.append(
+                {
+                    "pool": pool,
+                    "dataset": f"{pool}/labs/{lab}/users/{user}",
+                    "used_bytes": used,
+                    "quota_bytes": None,
+                }
+            )
     return rows
 
 
@@ -347,10 +390,14 @@ def run_docker_scan(
     progress: ProgressCb | None = None,
     now: int | None = None,
 ) -> DockerUsage:
-    """Measure the container writable layer + per-home usage. The expensive path (`du` per home).
+    """Measure the container writable layer + per-student usage. The expensive path (`du` per dir).
 
-    Returns an idle DockerUsage with whatever was measured. Missing container / failed `du` degrade
-    to None/omitted entries rather than raising, so one bad lab never breaks the loop.
+    For each student we ``du`` three directories inside the container: their docker home (installed
+    software), their scratch (``/labusers/fast/<u>``) and — only when this node owns cold storage
+    (local ZFS; on the SMB client the owner node reports it) — their cold-storage
+    (``/labusers/slow/<u>``). Returns an idle DockerUsage with whatever was measured. Missing
+    container / failed ``du`` degrade to None/omitted entries rather than raising, so one bad lab
+    never breaks the loop.
     """
     now = now if now is not None else now_ms()
     container = docker.container_name(lab)
@@ -358,13 +405,23 @@ def run_docker_scan(
         return DockerUsage(scanned_at=now, status="idle")
     total = docker.writable_layer_size(container)
     per_user: dict[str, int] = {}
+    per_user_fast: dict[str, int] = {}
+    per_user_slow: dict[str, int] = {}
     valid = [u for u in usernames if users.USERNAME_RE.match(u)]
+    measure_cold = cfg.slow_is_zfs
     for i, user in enumerate(valid):
         if progress is not None:
             progress(i, len(valid), user)
-        used = docker.du_home(container, user)
-        if used is not None:
-            per_user[user] = used
+        home = docker.du_home(container, user)
+        if home is not None:
+            per_user[user] = home
+        fast = docker.du_path(container, f"/labusers/fast/{user}")
+        if fast is not None:
+            per_user_fast[user] = fast
+        if measure_cold:
+            cold = docker.du_path(container, f"/labusers/slow/{user}")
+            if cold is not None:
+                per_user_slow[user] = cold
     unattributed = None
     if total is not None:
         unattributed = max(0, total - sum(per_user.values()))
@@ -373,5 +430,7 @@ def run_docker_scan(
         status="idle",
         total_used=total,
         per_user=per_user,
+        per_user_fast=per_user_fast,
+        per_user_slow=per_user_slow,
         unattributed=unattributed,
     )

@@ -29,6 +29,7 @@ export interface Lab {
   container_options: string | null;
   status: string;
   created_at: number;
+  usage_scanned_at: number | null; // last per-student usage (du) scan time, from agent telemetry
 }
 
 export interface ContainerOptions {

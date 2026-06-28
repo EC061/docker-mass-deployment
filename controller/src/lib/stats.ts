@@ -30,7 +30,14 @@ export interface LabStats {
     fast: { used: number | null; quota: number | null };
     slow: { used: number | null; quota: number | null };
   };
+  usageScannedAt: number | null; // when the per-student du breakdown was last computed
+  scanStale: boolean; // no scan yet, or older than USAGE_STALE_MS -> offer a "Scan now" button
+  scanPending: boolean; // a usage.scan task is queued/sent for this lab and not yet done
 }
+
+// A per-student usage scan older than this warrants offering a manual rescan. Matches the agent's
+// default unprompted docker-scan cadence (docker_scan_interval_s = 1h).
+const USAGE_STALE_MS = 60 * 60 * 1000;
 
 export interface NodeStats {
   node: string;
@@ -64,6 +71,23 @@ function latestSamples(): Map<string, Cell> {
   return map;
 }
 
+/** Set of `${node}::${labName}` with an in-flight (queued/sent) usage.scan task. */
+function pendingUsageScans(): Set<string> {
+  const rows = db()
+    .prepare("SELECT node, params FROM task_log WHERE action = 'usage.scan' AND state IN ('queued', 'sent')")
+    .all() as { node: string; params: string | null }[];
+  const set = new Set<string>();
+  for (const r of rows) {
+    try {
+      const lab = (JSON.parse(r.params ?? "{}") as { lab?: string }).lab;
+      if (lab) set.add(`${r.node}::${lab}`);
+    } catch {
+      /* ignore malformed params */
+    }
+  }
+  return set;
+}
+
 export function buildStats(): NodeStats[] {
   const samples = latestSamples();
   const used = (labId: number, sid: number | "L", pool: string): number | null =>
@@ -74,6 +98,8 @@ export function buildStats(): NodeStats[] {
   };
 
   const labs = listLabs();
+  const pending = pendingUsageScans();
+  const now = Date.now();
   const byNode = new Map<string, NodeStats>();
 
   for (const lab of labs) {
@@ -88,6 +114,7 @@ export function buildStats(): NodeStats[] {
     }));
     students.sort((a, b) => (b.docker ?? 0) - (a.docker ?? 0) || a.username.localeCompare(b.username));
 
+    const usageScannedAt = lab.usage_scanned_at ?? null;
     const labStats: LabStats = {
       labId: lab.id,
       labName: lab.name,
@@ -98,6 +125,9 @@ export function buildStats(): NodeStats[] {
         fast: cell(lab.id, "fast"),
         slow: cell(lab.id, "slow"),
       },
+      usageScannedAt,
+      scanStale: usageScannedAt === null || now - usageScannedAt > USAGE_STALE_MS,
+      scanPending: pending.has(`${lab.node_name}::${lab.name}`),
     };
 
     let node = byNode.get(lab.node_name);

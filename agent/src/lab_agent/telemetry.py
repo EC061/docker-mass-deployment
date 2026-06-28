@@ -51,14 +51,28 @@ def _dataset_usage(cfg: AgentConfig, docker_state: Any = None) -> list[dict[str,
             }
         )
     out.extend(coldstore.list_usage(cfg))
-    # Cached docker writable-layer usage (pool="docker"), so the controller stores per-student
-    # "installed software" alongside the ZFS tiers. Computed by the scan loop, not measured here.
+    # Cached scan results: the docker writable layer (pool="docker") plus the per-student scratch/
+    # cold ``du`` breakdown (pool="fast"/"slow"), so the controller stores per-student usage that
+    # ZFS metadata can't break down. Computed by the scan loop / on demand, not measured here.
     if docker_state is not None:
         from . import usagereport
 
         for lab, usage in docker_state.all_docker().items():
             out.extend(usagereport.docker_datasets(lab, usage))
+            out.extend(usagereport.tier_datasets(lab, usage))
     return out
+
+
+def _usage_scans(docker_state: Any = None) -> list[dict[str, Any]]:
+    """Per-lab timestamp of the last per-student usage (``du``) scan, so the controller can show
+    data freshness and decide whether an on-demand rescan is warranted."""
+    if docker_state is None:
+        return []
+    return [
+        {"lab": lab, "scanned_at": usage.scanned_at}
+        for lab, usage in docker_state.all_docker().items()
+        if usage.scanned_at is not None
+    ]
 
 
 def collect_heartbeat(cfg: AgentConfig, docker_state: Any = None) -> dict[str, Any]:
@@ -67,4 +81,5 @@ def collect_heartbeat(cfg: AgentConfig, docker_state: Any = None) -> dict[str, A
         "datasets": _dataset_usage(cfg, docker_state),
         "scrub": [zfs.scrub_status(p).to_dict() for p in cfg.scrub_pools],
         "gpu_processes": list_gpu_processes(),
+        "usage_scans": _usage_scans(docker_state),
     }

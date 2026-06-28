@@ -104,6 +104,25 @@ describe("telemetry ingestion", () => {
     expect(aliceRow.atime_count).toBe(5);
   });
 
+  it("records per-lab usage-scan time and only moves it forward", () => {
+    ingest.ingestTelemetry("gpu-1", {
+      datasets: [],
+      usage_scans: [{ lab: "bio", scanned_at: 5000 }],
+      gpu_processes: [],
+    });
+    const after = db.db().prepare("SELECT usage_scanned_at FROM labs WHERE name='bio'").get() as any;
+    expect(after.usage_scanned_at).toBe(5000);
+
+    // An older (stale) report must not roll the timestamp back.
+    ingest.ingestTelemetry("gpu-1", {
+      datasets: [],
+      usage_scans: [{ lab: "bio", scanned_at: 1000 }],
+      gpu_processes: [],
+    });
+    const stale = db.db().prepare("SELECT usage_scanned_at FROM labs WHERE name='bio'").get() as any;
+    expect(stale.usage_scanned_at).toBe(5000);
+  });
+
   it("stores docker-pool samples (installed software) without raising a PI quota alert", () => {
     ingest.ingestTelemetry("gpu-1", {
       pools: [{ name: "fast", free: 100 }],
