@@ -6,6 +6,7 @@
 
 import { db } from "./db";
 import { enqueueTask } from "./queue";
+import { env } from "./env";
 import { decryptSecret, encryptSecret } from "./secrets";
 
 export const TIB = 1024 ** 4;
@@ -59,12 +60,30 @@ export interface Settings {
   nodeOfflineGraceSeconds: number; // tolerate a node disconnect this long before alerting admins
   logRetentionDays: number;
   quotaAlertPct: number; // email the PI when a lab pool crosses this percent
-  // WebDAV backup target.
-  webdavUrl: string; // e.g. https://dav.example.com/labmgr
+  // WebDAV backup target. Backups are written under <webdavUrl>/<webdavBaseDir>/<env> where env is
+  // "prod" or "dev" (derived from NODE_ENV) so a shared store keeps the two deployments separate.
+  webdavUrl: string; // connection root, e.g. https://dav.example.com/dav
   webdavUser: string;
   webdavPass: string;
-  webdavRetention: number; // keep this many timestamped backups
-  backupIntervalHours: number; // 0 disables scheduled backups
+  webdavBaseDir: string; // collection under the root, e.g. /backups
+  // Scheduled backups run every backupIntervalHours, aligned to an anchor time-of-day evaluated in
+  // backupTimezone (so "daily at 02:00" survives DST). backupEnabled gates the scheduler.
+  backupEnabled: boolean;
+  backupIntervalHours: number; // hours between runs (must be > 0)
+  backupAnchorHour: number; // 0-23, the time-of-day the schedule is aligned to
+  backupAnchorMinute: number; // 0-59
+  backupTimezone: string; // IANA tz the anchor time is evaluated in
+  // Grandfather-father-son retention: keep the newest N, plus the newest backup in each of the most
+  // recent N weeks, months, and years.
+  backupKeepRecent: number;
+  backupKeepWeekly: number;
+  backupKeepMonthly: number;
+  backupKeepYearly: number;
+  // Last-run state, written by the backup runner and surfaced as status in the UI.
+  backupLastRun: number; // epoch ms, 0 = never
+  backupLastStatus: "" | "ok" | "failed";
+  backupLastError: string;
+  backupLastName: string;
   // Scheduled ZFS scrub. The controller enqueues node.scrub to each ZFS-capable node when due;
   // the agent reports scrub status/errors back via heartbeat telemetry.
   scrubEnabled: boolean;
@@ -171,8 +190,20 @@ export const DEFAULT_SETTINGS: Settings = {
   webdavUrl: "",
   webdavUser: "",
   webdavPass: "",
-  webdavRetention: 7,
+  webdavBaseDir: "/backups",
+  backupEnabled: false,
   backupIntervalHours: 24,
+  backupAnchorHour: 2,
+  backupAnchorMinute: 0,
+  backupTimezone: "America/New_York",
+  backupKeepRecent: 7,
+  backupKeepWeekly: 4,
+  backupKeepMonthly: 12,
+  backupKeepYearly: 3,
+  backupLastRun: 0,
+  backupLastStatus: "",
+  backupLastError: "",
+  backupLastName: "",
   scrubEnabled: false,
   scrubIntervalDays: 30,
   scrubHour: 2,
@@ -183,9 +214,21 @@ export function isWebdavConfigured(): boolean {
   return getSetting("webdavUrl").trim() !== "";
 }
 
+/** Which environment's backup collection this deployment reads/writes. */
+export function backupEnv(): "prod" | "dev" {
+  return env.isProd ? "prod" : "dev";
+}
+
+/**
+ * The env-scoped WebDAV collection backups are written to: <webdavUrl>/<webdavBaseDir>/<env>.
+ * All slashes are normalised so the parts join cleanly regardless of leading/trailing slashes.
+ */
 export function webdavConfig() {
+  const root = getSetting("webdavUrl").trim().replace(/\/+$/, "");
+  const base = getSetting("webdavBaseDir").trim().replace(/^\/+|\/+$/g, "");
+  const url = [root, base, backupEnv()].filter(Boolean).join("/");
   return {
-    url: getSetting("webdavUrl").trim().replace(/\/$/, ""),
+    url,
     user: getSetting("webdavUser"),
     pass: getSetting("webdavPass"),
   };

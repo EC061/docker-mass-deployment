@@ -22,10 +22,19 @@ function dav(url: string, init: RequestInit): Promise<Response> {
 }
 
 export async function ensureCollection(cfg: WebdavConfig): Promise<void> {
-  // MKCOL is idempotent enough: 405/301 means it already exists.
-  const res = await dav(cfg.url, { method: "MKCOL", headers: authHeader(cfg) });
-  if (![200, 201, 204, 301, 405].includes(res.status)) {
-    // Not fatal — some servers disallow MKCOL on an existing collection.
+  // MKCOL is not recursive, so walk the URL's path and create each segment from the root outward
+  // (e.g. /db-backup, /db-backup/backups, /db-backup/backups/dev). Non-success statuses are ignored:
+  // 405/301 means the collection already exists, and some servers disallow MKCOL on existing ones.
+  let u: URL;
+  try {
+    u = new URL(cfg.url);
+  } catch {
+    return;
+  }
+  let path = "";
+  for (const seg of u.pathname.split("/").filter(Boolean)) {
+    path += `/${seg}`;
+    await dav(`${u.origin}${path}`, { method: "MKCOL", headers: authHeader(cfg) }).catch(() => {});
   }
 }
 

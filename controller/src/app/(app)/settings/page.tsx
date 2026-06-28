@@ -1,22 +1,17 @@
-import { listBackups } from "@/lib/backup";
-import { getSettings, GPU_EMAIL_VARS, isWebdavConfigured, TIB, WELCOME_EMAIL_VARS } from "@/lib/settings";
+import { getSettings, GPU_EMAIL_VARS, TIB, WELCOME_EMAIL_VARS } from "@/lib/settings";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
-  backupNowAction,
-  restoreAction,
   saveAlertSettingsAction,
   saveGpuEmailsAction,
   saveGpuPolicyAction,
   saveScrubSettingsAction,
   saveSmtpSettingsAction,
   saveStorageSettingsAction,
-  saveWebdavSettingsAction,
   saveWelcomeEmailAction,
   scrubNowAction,
   testEmailAction,
@@ -42,18 +37,10 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ smtp?: string; backup?: string; scrub?: string }>;
+  searchParams: Promise<{ smtp?: string; scrub?: string }>;
 }) {
-  const { smtp, backup, scrub } = await searchParams;
+  const { smtp, scrub } = await searchParams;
   const s = getSettings();
-  let backups: string[] = [];
-  if (isWebdavConfigured()) {
-    try {
-      backups = await listBackups();
-    } catch {
-      backups = [];
-    }
-  }
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
@@ -349,74 +336,6 @@ export default async function SettingsPage({
               Scrub now
             </Button>
           </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">WebDAV backup</h3>
-          {backup && <p className="text-sm text-primary">{backup}</p>}
-          <form action={saveWebdavSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="sm:col-span-2">
-              <Label>WebDAV base URL</Label>
-              <Input name="webdavUrl" defaultValue={s.webdavUrl} placeholder="https://dav.example.com/labmgr" />
-            </div>
-            <div>
-              <Label>Username</Label>
-              <Input name="webdavUser" defaultValue={s.webdavUser} />
-            </div>
-            <div>
-              <Label>Password</Label>
-              <Input name="webdavPass" type="password" placeholder={s.webdavPass ? "•••••• (unchanged)" : ""} />
-            </div>
-            <div>
-              <Label>Keep last N backups</Label>
-              <Input name="webdavRetention" type="number" defaultValue={s.webdavRetention} />
-            </div>
-            <div>
-              <Label>Backup every (hours, 0=off)</Label>
-              <Input name="backupIntervalHours" type="number" defaultValue={s.backupIntervalHours} />
-            </div>
-            <div className="sm:col-span-2">
-              <Button type="submit">Save WebDAV</Button>
-            </div>
-          </form>
-          <form action={backupNowAction}>
-            <Button type="submit" variant="secondary">
-              Back up now
-            </Button>
-          </form>
-          {backups.length > 0 && (
-            <div className="space-y-2 pt-2">
-              <h4 className="text-sm font-semibold">Restore</h4>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Backup</TableHead>
-                    <TableHead></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {backups.map((b) => (
-                    <TableRow key={b}>
-                      <TableCell>{b}</TableCell>
-                      <TableCell className="text-right">
-                        <form action={restoreAction}>
-                          <input type="hidden" name="name" value={b} />
-                          <Button type="submit" variant="secondary" size="sm">
-                            Stage restore
-                          </Button>
-                        </form>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-              <p className="text-xs text-muted-foreground">
-                Staging a restore takes effect after the controller restarts.
-              </p>
-            </div>
-          )}
         </CardContent>
       </Card>
     </div>
