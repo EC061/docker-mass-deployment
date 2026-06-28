@@ -145,6 +145,23 @@ def collect_zfs_usage(cfg: AgentConfig) -> dict[str, LabUsage]:
     return out
 
 
+def list_lab_students(cfg: AgentConfig, lab: str) -> list[str]:
+    """Enumerate a lab's provisioned students by listing its fast ``users`` mountpoint subdirs.
+
+    With no per-student ZFS datasets, the only durable host-side record of who is provisioned is the
+    set of per-student scratch subdirs that ``users.add_user`` creates (``/labusers/fast/<u>``). We
+    list that directory and keep only entries that are valid usernames — this skips the root-owned
+    ``.labquota`` dir and any stray files — so the roster reflects exactly the students added to the
+    lab, independent of whether per-student ZFS datasets exist. This is the roster source the snapshot
+    and docker scan need (``lab_usage.users`` is empty without per-student datasets).
+    """
+    try:
+        entries = os.listdir(_fast_users_mp(cfg, lab))
+    except OSError:
+        return []
+    return sorted(e for e in entries if users.USERNAME_RE.match(e))
+
+
 # --------------------------------------------------------------------------- snapshot building
 
 
@@ -160,14 +177,19 @@ def build_snapshot(
     lab_usage: LabUsage,
     docker_usage: DockerUsage,
     *,
+    roster: list[str] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     """Pure builder: assemble the JSON snapshot for one lab from live ZFS + cached docker usage."""
     now = now if now is not None else now_ms()
     # With no per-student ZFS datasets, scratch/cold no longer have cheap per-student metadata (the
-    # lab quota covers everyone), so a student may appear only in the docker-layer measurement.
-    # Union both sources so every known student is still listed, with whatever numbers exist.
-    usernames = sorted(set(lab_usage.users.keys()) | set(docker_usage.per_user.keys()))
+    # lab quota covers everyone), so a student may appear only in the docker-layer measurement — or,
+    # before any docker scan has run, in neither. Union the explicit ``roster`` (provisioned scratch
+    # subdirs) with both usage sources so every provisioned student is listed even with no numbers yet.
+    names = set(lab_usage.users.keys()) | set(docker_usage.per_user.keys())
+    if roster:
+        names |= set(roster)
+    usernames = sorted(names)
     students = []
     for name in usernames:
         tiers = lab_usage.users.get(name, {})

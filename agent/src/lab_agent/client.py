@@ -245,12 +245,16 @@ class Agent:
             await asyncio.sleep(max(15, self.cfg.usage_publish_interval_s))
 
     def _publish_all_usage(self) -> None:
+        # Discover labs from ZFS usage AND from labs that have a fast `users` mount but no per-student
+        # datasets (the union ensures a freshly-provisioned lab with students but no ZFS user rows
+        # still publishes a roster). collect_zfs_usage already returns a row per lab (lab-level fast).
         grouped = usagereport.collect_zfs_usage(self.cfg)
         for lab, lab_usage in grouped.items():
             try:
                 usagereport.ensure_labquota_dirs(self.cfg, lab)
+                roster = usagereport.list_lab_students(self.cfg, lab)
                 snapshot = usagereport.build_snapshot(
-                    self.cfg, lab, lab_usage, self.usage.docker_for(lab)
+                    self.cfg, lab, lab_usage, self.usage.docker_for(lab), roster=roster
                 )
                 usagereport.publish_snapshot(self.cfg, lab, snapshot)
             except Exception as exc:  # one bad lab must not stop the others
@@ -283,7 +287,7 @@ class Agent:
         for lab, lab_usage in grouped.items():
             cached = self.usage.docker_for(lab)
             age = None if cached.scanned_at is None else now - cached.scanned_at
-            users_list = sorted(lab_usage.users.keys())
+            users_list = usagereport.list_lab_students(self.cfg, lab)
             requested = usagereport.newest_request(self.cfg, lab, users_list)
             due = age is None or age >= interval_ms
             # Honor a student request only if it is newer than the last scan (so one touch triggers
@@ -320,8 +324,9 @@ class Agent:
             )
             # Republish immediately so the student sees fresh numbers without waiting a cycle.
             grouped = usagereport.collect_zfs_usage(self.cfg)
+            roster = usagereport.list_lab_students(self.cfg, lab)
             snapshot = usagereport.build_snapshot(
-                self.cfg, lab, grouped.get(lab, usagereport.LabUsage()), usage
+                self.cfg, lab, grouped.get(lab, usagereport.LabUsage()), usage, roster=roster
             )
             usagereport.publish_snapshot(self.cfg, lab, snapshot)
         except Exception as exc:
