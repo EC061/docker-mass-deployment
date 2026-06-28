@@ -204,6 +204,23 @@ sudo lab-agent set-token <TOKEN-FROM-UI>
 Each node has its own token; the controller only accepts allow-listed nodes (so a stolen token can't
 impersonate another node). Check readiness any time with `lab-agent doctor`.
 
+**Upgrading the agent:** re-running `uv tool install --force` replaces the installed code in place;
+the existing `/etc/lab-agent/config.toml` and token are left untouched, so you only need to restart
+the service afterwards. From a released tag:
+
+```bash
+sudo uvx --locked --from "git+https://github.com/EC061/docker-mass-deployment@v1.0.0#subdirectory=agent" \
+    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent   # re-runs install with the new code
+sudo systemctl restart lab-agent.service
+```
+
+Or from a local checkout of this repo on the node (e.g. for development builds):
+
+```bash
+sudo UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --from ./agent lab-agent
+sudo systemctl restart lab-agent.service
+```
+
 ### 1.7 Sharing cold storage between two nodes over SMB (optional)
 
 When two nodes need their containers to see the **same** cold data, one node owns the slow ZFS pool
