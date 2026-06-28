@@ -1,37 +1,40 @@
+import { Loader2, RefreshCw } from "lucide-react";
 import { ago, fmtBytes, pct } from "@/lib/format";
 import { buildStats, type LabStats } from "@/lib/stats";
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { SubmitButton } from "@/components/SubmitButton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ScanAutoRefresh } from "./_components/ScanAutoRefresh";
 import { usageScanAction } from "./actions";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Per-lab scan control: offer a "Scan now" button only when a per-student usage scan is actually
- * warranted (never run, or stale) and none is already in flight; otherwise just show how fresh the
- * data is. The button enqueues a usage.scan task on the lab's node.
+ * Per-lab scan control. The admin always has a "Scan now" button to force a fresh per-student usage
+ * (du) scan, and whenever one is in flight a "scanning…" indicator is shown alongside it (the
+ * page-level <ScanAutoRefresh> polls so that indicator clears on its own when the agent reports the
+ * scan done). The freshness ("updated Xm ago") is always shown, tinted when the data is stale.
+ * The button enqueues a usage.scan task on the lab's node.
  */
 function ScanControl({ lab }: { lab: LabStats }) {
   return (
-    <form action={usageScanAction} className="flex items-center gap-2 text-xs">
-      <input type="hidden" name="labId" value={lab.labId} />
-      {lab.scanPending ? (
-        <span className="text-muted-foreground">scanning…</span>
-      ) : lab.scanStale ? (
-        <>
-          <Button type="submit" variant="outline" size="sm">
-            Scan now
-          </Button>
-          <span className="text-muted-foreground">
-            {lab.usageScannedAt ? `updated ${ago(lab.usageScannedAt)}` : "never scanned"}
-          </span>
-        </>
-      ) : (
-        <span className="text-muted-foreground">updated {ago(lab.usageScannedAt)}</span>
+    <div className="flex flex-wrap items-center gap-2 text-xs">
+      <form action={usageScanAction}>
+        <input type="hidden" name="labId" value={lab.labId} />
+        <SubmitButton variant="outline" size="sm" icon={<RefreshCw />} pendingText="Scanning…">
+          Scan now
+        </SubmitButton>
+      </form>
+      {lab.scanPending && (
+        <span className="inline-flex items-center gap-1.5 text-muted-foreground" aria-live="polite">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" /> scanning…
+        </span>
       )}
-    </form>
+      <span className={lab.scanStale && !lab.scanPending ? "text-amber-500" : "text-muted-foreground"}>
+        {lab.usageScannedAt ? `updated ${ago(lab.usageScannedAt)}` : "never scanned"}
+      </span>
+    </div>
   );
 }
 
@@ -54,9 +57,11 @@ function quotaCell(used: number | null, quota: number | null) {
 export default async function StatsPage() {
   const nodes = buildStats();
   const totalLabs = nodes.reduce((n, x) => n + x.labs.length, 0);
+  const anyScanPending = nodes.some((n) => n.labs.some((l) => l.scanPending));
 
   return (
     <div className="space-y-4">
+      <ScanAutoRefresh active={anyScanPending} />
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">Storage stats</h1>
         <p className="text-sm text-muted-foreground">
