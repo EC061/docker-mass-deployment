@@ -1,5 +1,11 @@
 import { db } from "@/lib/db";
 import { ConfirmButton } from "../_components/ConfirmButton";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   deleteNodeAction,
   provisionNodeAction,
@@ -94,168 +100,180 @@ export default async function NodesPage({
     .all() as NodeRow[];
 
   return (
-    <>
-      <h2>Nodes</h2>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold tracking-tight">Nodes</h1>
 
       {error && (
-        <div className="card" style={{ borderColor: "var(--warn)", marginBottom: 16 }}>
-          <p style={{ color: "var(--warn)" }}>{error}</p>
-        </div>
+        <Card className="border-warn/50">
+          <CardContent>
+            <p className="text-sm text-warn">{error}</p>
+          </CardContent>
+        </Card>
       )}
 
       {deleted && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <p className="muted">Node “{deleted}” was deleted.</p>
-        </div>
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Node “{deleted}” was deleted.</p>
+          </CardContent>
+        </Card>
       )}
 
       {provisioned && token && (
-        <div className="card" style={{ borderColor: "var(--accent, #5fa0c2)", marginBottom: 16 }}>
-          <h3>Token for node “{provisioned}”</h3>
-          <p className="muted">Shown once. Run this on the node, then the agent reconnects automatically:</p>
-          <pre style={{ overflowX: "auto", padding: 12, background: "var(--panel-2)" }}>
-            <code>sudo lab-agent set-token {token}</code>
-          </pre>
-          <p className="muted" style={{ fontSize: 12 }}>
-            (Equivalent to writing the token into <code>/etc/lab-agent/config.toml</code> and running
-            <code> systemctl restart lab-agent</code>.)
-          </p>
-        </div>
+        <Card className="border-primary/50">
+          <CardContent className="space-y-2">
+            <h3 className="text-base font-semibold">Token for node “{provisioned}”</h3>
+            <p className="text-sm text-muted-foreground">
+              Shown once. Run this on the node, then the agent reconnects automatically:
+            </p>
+            <pre className="overflow-x-auto rounded-md bg-muted p-3 text-sm">
+              <code>sudo lab-agent set-token {token}</code>
+            </pre>
+            <p className="text-xs text-muted-foreground">
+              (Equivalent to writing the token into <code>/etc/lab-agent/config.toml</code> and running
+              <code> systemctl restart lab-agent</code>.)
+            </p>
+          </CardContent>
+        </Card>
       )}
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <h3>Register a node</h3>
-        <form action={provisionNodeAction} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-          <input name="name" placeholder="node name (e.g. gpu-01)" required pattern="[a-z0-9][a-z0-9\-]{0,62}" />
-          <button type="submit">Provision token</button>
-        </form>
-        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-          Adds the node to the allow-list and issues a per-node token. Only allow-listed nodes may connect.
-        </p>
-      </div>
+      <Card>
+        <CardContent className="space-y-2">
+          <h3 className="text-base font-semibold">Register a node</h3>
+          <form action={provisionNodeAction} className="flex flex-wrap items-center gap-2">
+            <Input
+              name="name"
+              placeholder="node name (e.g. gpu-01)"
+              required
+              pattern="[a-z0-9][a-z0-9\-]{0,62}"
+              className="w-full sm:w-64"
+            />
+            <Button type="submit">Provision token</Button>
+          </form>
+          <p className="text-xs text-muted-foreground">
+            Adds the node to the allow-list and issues a per-node token. Only allow-listed nodes may
+            connect.
+          </p>
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        {nodes.length === 0 ? (
-          <p className="muted">No nodes have connected yet.</p>
-        ) : (
-          <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Node</th>
-                <th>Status</th>
-                <th>Auth</th>
-                <th>GPUs</th>
-                <th>Pools</th>
-                <th>Cold storage</th>
-                <th>Scrub</th>
-                <th>Issues</th>
-                <th>Last seen</th>
-                <th>Token</th>
-              </tr>
-            </thead>
-            <tbody>
-              {nodes.map((n) => {
-                const caps = n.capabilities ? JSON.parse(n.capabilities) : {};
-                const pools = n.pools ? JSON.parse(n.pools) : [];
-                const scrub = scrubSummary(n.scrub_status);
-                const coldText =
-                  caps.slow_backend === "smb"
-                    ? `SMB${caps.slow_shared ? " (shared)" : ""}`
-                    : "ZFS";
-                return (
-                  <tr key={n.name}>
-                    <td>
-                      {n.alias ? (
-                        <>
-                          <div>{n.alias}</div>
-                          <div className="muted" style={{ fontSize: 12 }}>{n.name}</div>
-                        </>
-                      ) : (
-                        n.name
-                      )}
-                      <form
-                        action={setNodeAliasAction}
-                        style={{ display: "flex", gap: 4, marginTop: 6 }}
-                      >
-                        <input type="hidden" name="name" value={n.name} />
-                        <input
-                          name="alias"
-                          defaultValue={n.alias ?? ""}
-                          placeholder="alias"
-                          maxLength={64}
-                          style={{ width: 110, padding: "2px 6px", fontSize: 12 }}
-                        />
-                        <button
-                          type="submit"
-                          className="secondary"
-                          style={{ width: "auto", padding: "2px 8px", fontSize: 12 }}
-                        >
-                          Save
-                        </button>
-                      </form>
-                    </td>
-                    <td>
-                      <span className={`badge ${n.online ? "online" : "offline"}`}>
-                        {n.online ? "online" : "offline"}
-                      </span>
-                    </td>
-                    <td style={n.allowed !== 1 ? { color: "var(--warn)" } : undefined}>{authLabel(n)}</td>
-                    <td>{caps.gpu_count ?? 0}</td>
-                    <td>
-                      {pools.length === 0
-                        ? "—"
-                        : pools.map((p: any) => `${p.name}: ${fmtBytes(p.free)} free`).join(", ")}
-                    </td>
-                    <td>{coldText}</td>
-                    <td style={scrub.bad ? { color: "var(--warn)" } : undefined}>{scrub.text}</td>
-                    <td>
-                      {caps.issues && caps.issues.length > 0 ? (
-                        <span style={{ color: "var(--warn)" }}>{caps.issues.length}</span>
-                      ) : (
-                        "—"
-                      )}
-                    </td>
-                    <td className="muted">{ago(n.last_seen)}</td>
-                    <td style={{ whiteSpace: "nowrap" }}>
-                      <form action={rotateNodeTokenAction} style={{ display: "inline" }}>
-                        <input type="hidden" name="name" value={n.name} />
-                        <button type="submit" className="secondary" style={{ width: "auto", padding: "6px 12px" }}>
-                          Rotate
-                        </button>
-                      </form>{" "}
-                      {n.allowed === 1 && (
-                        <form action={revokeNodeAction} style={{ display: "inline" }}>
+      <Card>
+        <CardContent>
+          {nodes.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No nodes have connected yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Node</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Auth</TableHead>
+                  <TableHead>GPUs</TableHead>
+                  <TableHead>Pools</TableHead>
+                  <TableHead>Cold storage</TableHead>
+                  <TableHead>Scrub</TableHead>
+                  <TableHead>Issues</TableHead>
+                  <TableHead>Last seen</TableHead>
+                  <TableHead>Token</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {nodes.map((n) => {
+                  const caps = n.capabilities ? JSON.parse(n.capabilities) : {};
+                  const pools = n.pools ? JSON.parse(n.pools) : [];
+                  const scrub = scrubSummary(n.scrub_status);
+                  const coldText =
+                    caps.slow_backend === "smb"
+                      ? `SMB${caps.slow_shared ? " (shared)" : ""}`
+                      : "ZFS";
+                  return (
+                    <TableRow key={n.name}>
+                      <TableCell>
+                        {n.alias ? (
+                          <>
+                            <div>{n.alias}</div>
+                            <div className="text-xs text-muted-foreground">{n.name}</div>
+                          </>
+                        ) : (
+                          n.name
+                        )}
+                        <form action={setNodeAliasAction} className="mt-1.5 flex gap-1">
                           <input type="hidden" name="name" value={n.name} />
-                          <button
-                            type="submit"
-                            className="secondary"
-                            style={{ width: "auto", padding: "6px 12px", color: "var(--warn)" }}
-                          >
-                            Revoke
-                          </button>
+                          <Input
+                            name="alias"
+                            defaultValue={n.alias ?? ""}
+                            placeholder="alias"
+                            maxLength={64}
+                            className="h-7 w-28 text-xs"
+                          />
+                          <Button type="submit" variant="secondary" size="sm" className="h-7">
+                            Save
+                          </Button>
                         </form>
-                      )}{" "}
-                      <form action={deleteNodeAction} style={{ display: "inline" }}>
-                        <input type="hidden" name="name" value={n.name} />
-                        <ConfirmButton
-                          type="submit"
-                          className="secondary"
-                          style={{ width: "auto", padding: "6px 12px", color: "var(--warn)" }}
-                          confirm={`Delete node "${n.name}"? This removes it from the controller (it fails if any labs are still pinned to it).`}
-                        >
-                          Delete
-                        </ConfirmButton>
-                      </form>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </div>
-    </>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={n.online ? "ok" : "err"}>
+                          {n.online ? "online" : "offline"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className={n.allowed !== 1 ? "text-warn" : undefined}>
+                        {authLabel(n)}
+                      </TableCell>
+                      <TableCell>{caps.gpu_count ?? 0}</TableCell>
+                      <TableCell>
+                        {pools.length === 0
+                          ? "—"
+                          : pools.map((p: any) => `${p.name}: ${fmtBytes(p.free)} free`).join(", ")}
+                      </TableCell>
+                      <TableCell>{coldText}</TableCell>
+                      <TableCell className={scrub.bad ? "text-warn" : undefined}>{scrub.text}</TableCell>
+                      <TableCell>
+                        {caps.issues && caps.issues.length > 0 ? (
+                          <span className="text-warn">{caps.issues.length}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap text-muted-foreground">
+                        {ago(n.last_seen)}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        <div className="flex gap-1.5">
+                          <form action={rotateNodeTokenAction}>
+                            <input type="hidden" name="name" value={n.name} />
+                            <Button type="submit" variant="secondary" size="sm">
+                              Rotate
+                            </Button>
+                          </form>
+                          {n.allowed === 1 && (
+                            <form action={revokeNodeAction}>
+                              <input type="hidden" name="name" value={n.name} />
+                              <Button type="submit" variant="secondary" size="sm" className="text-warn">
+                                Revoke
+                              </Button>
+                            </form>
+                          )}
+                          <form action={deleteNodeAction}>
+                            <input type="hidden" name="name" value={n.name} />
+                            <ConfirmButton
+                              variant="secondary"
+                              size="sm"
+                              className="text-err"
+                              confirm={`Delete node "${n.name}"? This removes it from the controller (it fails if any labs are still pinned to it).`}
+                            >
+                              Delete
+                            </ConfirmButton>
+                          </form>
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

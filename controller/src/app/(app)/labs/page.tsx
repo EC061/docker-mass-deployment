@@ -5,6 +5,9 @@ import { containerOptionsOf, listLabs } from "@/lib/labs";
 import { getSettings, TIB } from "@/lib/settings";
 import { createLabAction } from "./actions";
 import { CreateLabForm, type LabTemplate, type NodeOpt } from "./_components/CreateLabForm";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const dynamic = "force-dynamic";
 
@@ -46,80 +49,88 @@ export default async function LabsPage({
   });
 
   return (
-    <>
-      <h2>Labs</h2>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold tracking-tight">Labs</h1>
 
       {importedMsg && (
-        <div className="card" style={{ borderColor: "var(--accent)", marginBottom: 16 }}>
-          <p style={{ margin: 0, color: "var(--accent)" }}>{importedMsg}</p>
-        </div>
+        <Card className="border-primary/50">
+          <CardContent>
+            <p className="text-sm text-primary">{importedMsg}</p>
+          </CardContent>
+        </Card>
       )}
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Create lab</h3>
-        {nodes.length === 0 ? (
-          <p className="muted">Connect a node first — a lab is pinned to one node.</p>
-        ) : (
-          <CreateLabForm
-            nodes={nodes}
-            labs={templates}
-            defaultFastTb={settings.fastQuotaDefaultBytes / TIB}
-            defaultSlowTb={settings.slowQuotaDefaultBytes / TIB}
-            action={createLabAction}
-          />
-        )}
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Create lab</h3>
+          {nodes.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              Connect a node first — a lab is pinned to one node.
+            </p>
+          ) : (
+            <CreateLabForm
+              nodes={nodes}
+              labs={templates}
+              defaultFastTb={settings.fastQuotaDefaultBytes / TIB}
+              defaultSlowTb={settings.slowQuotaDefaultBytes / TIB}
+              action={createLabAction}
+            />
+          )}
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        {labs.length === 0 ? (
-          <p className="muted">No labs yet.</p>
-        ) : (
-          <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Lab</th>
-                <th>Node</th>
-                <th>Fast</th>
-                <th>Slow</th>
-                <th>SSH</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {labs.map((lab) => {
-                const fast = latestUsage(lab.id, "fast");
-                const slow = latestUsage(lab.id, "slow");
-                return (
-                  <tr key={lab.id}>
-                    <td>
-                      <a href={`/labs/${lab.id}`}>{lab.name}</a>
-                    </td>
-                    <td>
-                      {lab.node_name}{" "}
-                      <span className={`badge ${lab.online ? "online" : "offline"}`}>
-                        {lab.online ? "online" : "offline"}
-                      </span>
-                    </td>
-                    <td>
-                      {fmtBytes(fast?.used ?? 0)} / {fmtBytes(lab.fast_quota_bytes)}
-                      {fast && pct(fast.used, lab.fast_quota_bytes) !== null
-                        ? ` (${pct(fast.used, lab.fast_quota_bytes)}%)`
-                        : ""}
-                    </td>
-                    <td>
-                      {fmtBytes(slow?.used ?? 0)} / {fmtBytes(lab.slow_quota_bytes)}
-                    </td>
-                    <td>{lab.ssh_port ?? "—"}</td>
-                    <td>{lab.status}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </div>
-    </>
+      <Card>
+        <CardContent>
+          {labs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No labs yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Lab</TableHead>
+                  <TableHead>Node</TableHead>
+                  <TableHead>Fast</TableHead>
+                  <TableHead>Slow</TableHead>
+                  <TableHead>SSH</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {labs.map((lab) => {
+                  const fast = latestUsage(lab.id, "fast");
+                  const slow = latestUsage(lab.id, "slow");
+                  return (
+                    <TableRow key={lab.id}>
+                      <TableCell>
+                        <a href={`/labs/${lab.id}`} className="font-medium text-primary hover:underline">
+                          {lab.name}
+                        </a>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {lab.node_name}{" "}
+                        <Badge variant={lab.online ? "ok" : "err"}>
+                          {lab.online ? "online" : "offline"}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {fmtBytes(fast?.used ?? 0)} / {fmtBytes(lab.fast_quota_bytes)}
+                        {fast && pct(fast.used, lab.fast_quota_bytes) !== null
+                          ? ` (${pct(fast.used, lab.fast_quota_bytes)}%)`
+                          : ""}
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {fmtBytes(slow?.used ?? 0)} / {fmtBytes(lab.slow_quota_bytes)}
+                      </TableCell>
+                      <TableCell>{lab.ssh_port ?? "—"}</TableCell>
+                      <TableCell>{lab.status}</TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

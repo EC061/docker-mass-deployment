@@ -3,6 +3,8 @@ import { listMembers } from "@/lib/students";
 import { ConfirmButton } from "../_components/ConfirmButton";
 import { ImportStudentsForm } from "./_components/ImportStudentsForm";
 import { importStudentsAction, removeStudentAction } from "./actions";
+import { Card, CardContent } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const dynamic = "force-dynamic";
 
@@ -14,76 +16,79 @@ export default async function StudentsPage() {
   const totalMemberships = labsWithMembers.reduce((n, l) => n + l.members.length, 0);
 
   return (
-    <>
-      <h2>Students</h2>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold tracking-tight">Students</h1>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Import from CSV</h3>
-        <ImportStudentsForm
-          labs={labs.map((l) => ({ id: l.id, name: l.name }))}
-          importAction={importStudentsAction}
-        />
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Import from CSV</h3>
+          <ImportStudentsForm
+            labs={labs.map((l) => ({ id: l.id, name: l.name }))}
+            importAction={importStudentsAction}
+          />
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Students by lab</h3>
-        {totalMemberships === 0 ? (
-          <p className="muted">No students yet.</p>
-        ) : (
-          labsWithMembers
-            .filter((l) => l.members.length > 0)
-            .map(({ lab, members }) => (
-              <div key={lab.id} style={{ marginBottom: 20 }}>
-                <h4 style={{ margin: "8px 0" }}>
-                  <a href={`/labs/${lab.id}`}>{lab.name}</a>{" "}
-                  <span className="muted" style={{ fontWeight: 400 }}>
-                    · {lab.node_name} · {members.length} student{members.length === 1 ? "" : "s"}
-                  </span>
-                </h4>
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>Username</th>
-                        <th>Email</th>
-                        <th>Name</th>
-                        <th>Student ID</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
+      <Card>
+        <CardContent className="space-y-4">
+          <h3 className="text-base font-semibold">Students by lab</h3>
+          {totalMemberships === 0 ? (
+            <p className="text-sm text-muted-foreground">No students yet.</p>
+          ) : (
+            labsWithMembers
+              .filter((l) => l.members.length > 0)
+              .map(({ lab, members }) => (
+                <div key={lab.id} className="space-y-2">
+                  <h4 className="text-sm font-semibold">
+                    <a href={`/labs/${lab.id}`} className="text-primary hover:underline">
+                      {lab.name}
+                    </a>{" "}
+                    <span className="font-normal text-muted-foreground">
+                      · {lab.node_name} · {members.length} student{members.length === 1 ? "" : "s"}
+                    </span>
+                  </h4>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Username</TableHead>
+                        <TableHead>Email</TableHead>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Student ID</TableHead>
+                        <TableHead></TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {members.map((m) => (
-                        <tr key={m.member_id}>
-                          <td>{m.username}</td>
-                          <td>{m.email ?? "—"}</td>
-                          <td>{m.name ?? "—"}</td>
-                          <td>{m.student_id ?? "—"}</td>
-                          <td style={{ textAlign: "right" }}>
-                            <form action={removeStudentAction} style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
+                        <TableRow key={m.member_id}>
+                          <TableCell>{m.username}</TableCell>
+                          <TableCell>{m.email ?? "—"}</TableCell>
+                          <TableCell>{m.name ?? "—"}</TableCell>
+                          <TableCell>{m.student_id ?? "—"}</TableCell>
+                          <TableCell className="text-right">
+                            <form action={removeStudentAction} className="flex items-center justify-end gap-2">
                               <input type="hidden" name="labId" value={lab.id} />
                               <input type="hidden" name="studentId" value={m.id} />
-                              <label className="muted" style={{ margin: 0, display: "inline-flex", gap: 4, alignItems: "center" }}>
-                                <input type="checkbox" name="deleteData" style={{ width: "auto" }} /> delete data
+                              <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                <input type="checkbox" name="deleteData" className="accent-primary" /> delete data
                               </label>
                               <ConfirmButton
-                                type="submit"
-                                className="secondary"
-                                style={{ width: "auto", marginTop: 0, padding: "6px 10px" }}
+                                variant="secondary"
+                                size="sm"
                                 confirm={`Remove ${m.username} from ${lab.name}? If "delete data" is checked, their files are permanently erased.`}
                               >
                                 Remove
                               </ConfirmButton>
                             </form>
-                          </td>
-                        </tr>
+                          </TableCell>
+                        </TableRow>
                       ))}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 </div>
-              </div>
-            ))
-        )}
-      </div>
-    </>
+              ))
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
