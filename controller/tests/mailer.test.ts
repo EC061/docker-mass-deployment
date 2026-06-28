@@ -88,6 +88,25 @@ describe("templated emails", () => {
     expect(sent[0].text).toContain("Password: pw123");
   });
 
+  it("renderTemplate substitutes known tokens and leaves unknown ones intact", () => {
+    const out = mailer.renderTemplate("hi {name} on {node}, missing {nope}", { name: "Al", node: "n1" });
+    expect(out).toBe("hi Al on n1, missing {nope}");
+  });
+
+  it("credential email honors a custom subject/body template with the node variable", async () => {
+    settings.setSetting("welcomeEmailSubject", "Welcome {name} to {lab}");
+    settings.setSetting("welcomeEmailBody", "User {username} pw {password} on node {node} ({host})");
+    await mailer.sendCredentialEmail({
+      to: "a@uga.edu", name: "Alice", username: "alice", password: "pw123",
+      host: "gpu-1.uga.edu", port: 2222, lab: "bio", node: "gpu-1",
+    });
+    expect(sent[0].subject).toBe("Welcome Alice to bio");
+    expect(sent[0].text).toBe("User alice pw pw123 on node gpu-1 (gpu-1.uga.edu)");
+    // Restore defaults so later tests see the built-in template.
+    settings.setSetting("welcomeEmailSubject", "");
+    settings.setSetting("welcomeEmailBody", "");
+  });
+
   it("quota email lists the per-student breakdown", async () => {
     await mailer.sendQuotaEmail({
       to: "pi@uga.edu", lab: "bio", pool: "fast", pct: 92,

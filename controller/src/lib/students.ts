@@ -108,6 +108,8 @@ export async function addStudentToLab(
       host,
       port: lab.ssh_port ?? 22,
       lab: lab.name,
+      node: lab.node_name,
+      studentId: record.student_id,
     });
     emailed = res.sent;
   }

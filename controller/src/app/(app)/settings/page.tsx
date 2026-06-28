@@ -1,5 +1,5 @@
 import { listBackups } from "@/lib/backup";
-import { getSettings, isWebdavConfigured, TIB } from "@/lib/settings";
+import { getSettings, isWebdavConfigured, TIB, WELCOME_EMAIL_VARS } from "@/lib/settings";
 import {
   backupNowAction,
   restoreAction,
@@ -9,9 +9,25 @@ import {
   saveSmtpSettingsAction,
   saveStorageSettingsAction,
   saveWebdavSettingsAction,
+  saveWelcomeEmailAction,
   scrubNowAction,
   testEmailAction,
 } from "./actions";
+
+// A short list of common IANA timezones for the scrub schedule picker (free text still allowed).
+const COMMON_TIMEZONES = [
+  "UTC",
+  "America/New_York",
+  "America/Chicago",
+  "America/Denver",
+  "America/Los_Angeles",
+  "Europe/London",
+  "Europe/Berlin",
+  "Asia/Kolkata",
+  "Asia/Shanghai",
+  "Asia/Tokyo",
+  "Australia/Sydney",
+];
 
 export const dynamic = "force-dynamic";
 
@@ -129,6 +145,45 @@ export default async function SettingsPage({
       </div>
 
       <div className="card">
+        <h3 style={{ marginTop: 0 }}>Welcome email template</h3>
+        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
+          Sent to a student (with an email on file) when they are added to a lab. Use{" "}
+          <code>{"{placeholder}"}</code> tokens below; unknown tokens are left as-is. Leave a field
+          blank to use the built-in default.
+        </p>
+        <form action={saveWelcomeEmailAction} style={{ display: "grid", gap: 12, maxWidth: 640 }}>
+          <div>
+            <label>Subject</label>
+            <input name="welcomeEmailSubject" defaultValue={s.welcomeEmailSubject} />
+          </div>
+          <div>
+            <label>Body</label>
+            <textarea
+              name="welcomeEmailBody"
+              rows={16}
+              defaultValue={s.welcomeEmailBody}
+              style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 13, width: "100%" }}
+            />
+          </div>
+          <div>
+            <label style={{ marginBottom: 4 }}>Available variables</label>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "var(--muted)" }}>
+              {WELCOME_EMAIL_VARS.map((v) => (
+                <li key={v.key}>
+                  <code>{`{${v.key}}`}</code> — {v.desc}
+                </li>
+              ))}
+            </ul>
+          </div>
+          <div>
+            <button type="submit" style={{ width: 180 }}>
+              Save template
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="card">
         <h3 style={{ marginTop: 0 }}>GPU idle policy</h3>
         <form action={saveGpuPolicyAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -221,6 +276,19 @@ export default async function SettingsPage({
           <div>
             <label>Scrub every (days)</label>
             <input name="scrubIntervalDays" type="number" defaultValue={s.scrubIntervalDays} />
+          </div>
+          <div>
+            <label>Start at hour (0–23)</label>
+            <input name="scrubHour" type="number" min={0} max={23} defaultValue={s.scrubHour} />
+          </div>
+          <div>
+            <label>Timezone</label>
+            <input name="scrubTimezone" defaultValue={s.scrubTimezone} list="scrub-tz-list" placeholder="UTC" />
+            <datalist id="scrub-tz-list">
+              {COMMON_TIMEZONES.map((tz) => (
+                <option key={tz} value={tz} />
+              ))}
+            </datalist>
           </div>
           <div style={{ gridColumn: "1 / -1" }}>
             <button type="submit" style={{ width: 140 }}>

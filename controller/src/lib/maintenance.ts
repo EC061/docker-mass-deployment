@@ -16,13 +16,30 @@ export function pruneOldData(): { logs: number; gpuEvents: number } {
   return { logs, gpuEvents };
 }
 
+/** Current hour-of-day (0-23) in an IANA timezone, or null if the tz name is invalid. */
+export function hourInTimezone(now: number, tz: string): number | null {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", hour12: false });
+    const h = Number(fmt.format(new Date(now)));
+    return Number.isFinite(h) ? h % 24 : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Enqueue a ZFS scrub to every online ZFS-capable node whose last scheduled scrub is older than
- * the configured interval. Agents report scrub status/errors back via heartbeat telemetry, so we
- * only need to kick scrubs off here. Returns the nodes a scrub was scheduled for.
+ * Enqueue a ZFS scrub to every online ZFS-capable node whose last scheduled scrub is older than the
+ * configured interval, but only during the configured hour-of-day (in the configured timezone) so
+ * scrubs run off-peak. Agents report scrub status/errors back via heartbeat telemetry, so we only
+ * need to kick scrubs off here. Returns the nodes a scrub was scheduled for. Since the maintenance
+ * ticker runs hourly, the configured hour is effectively a one-hour window.
  */
 export function scheduleScrubs(now = Date.now()): string[] {
   if (!getSetting("scrubEnabled")) return [];
+  // Gate on time-of-day: only proceed when the current hour matches the configured scrub hour. An
+  // invalid timezone falls back to "no gate" so a misconfiguration never silently disables scrubs.
+  const hour = hourInTimezone(now, getSetting("scrubTimezone"));
+  if (hour !== null && hour !== getSetting("scrubHour")) return [];
   const intervalMs = getSetting("scrubIntervalDays") * 86400 * 1000;
   const nodes = db()
     .prepare("SELECT name, last_scrub, capabilities FROM nodes WHERE online = 1")

@@ -5,7 +5,23 @@
  */
 
 import nodemailer from "nodemailer";
-import { getSetting, isSmtpConfigured } from "./settings";
+import {
+  DEFAULT_WELCOME_BODY,
+  DEFAULT_WELCOME_SUBJECT,
+  getSetting,
+  isSmtpConfigured,
+} from "./settings";
+
+/**
+ * Substitute {placeholder} tokens in a template. Unknown tokens are left untouched so a typo in the
+ * admin's template is visible rather than silently dropped. Values are coerced to strings; a
+ * null/undefined value renders as an empty string.
+ */
+export function renderTemplate(template: string, vars: Record<string, string | number | null | undefined>): string {
+  return template.replace(/\{(\w+)\}/g, (whole, key: string) =>
+    Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key] ?? "") : whole,
+  );
+}
 
 export interface SendResult {
   sent: boolean;
@@ -63,6 +79,8 @@ export interface CredentialEmail {
   host: string;
   port: number;
   lab: string;
+  node?: string;
+  studentId?: string | null;
 }
 
 export async function sendGpuWarningEmail(
@@ -118,22 +136,30 @@ You may want to ask students to clean up old files, or request a larger quota.
   return sendMail(info.to, `Lab ${info.lab} is at ${info.pct}% of its ${info.pool} quota`, text);
 }
 
+/** Build the {placeholder} substitution map for the welcome email from a credential payload. */
+export function welcomeEmailVars(info: CredentialEmail): Record<string, string | number> {
+  return {
+    name: info.name ?? info.username,
+    username: info.username,
+    password: info.password,
+    host: info.host,
+    port: info.port,
+    lab: info.lab,
+    node: info.node ?? info.host,
+    student_id: info.studentId ?? "",
+    email: info.to,
+  };
+}
+
+/** Render the welcome email's subject + body from the admin-editable template (or its default). */
+export function renderWelcomeEmail(info: CredentialEmail): { subject: string; body: string } {
+  const vars = welcomeEmailVars(info);
+  const subject = getSetting("welcomeEmailSubject").trim() || DEFAULT_WELCOME_SUBJECT;
+  const body = getSetting("welcomeEmailBody").trim() || DEFAULT_WELCOME_BODY;
+  return { subject: renderTemplate(subject, vars), body: renderTemplate(body, vars) };
+}
+
 export async function sendCredentialEmail(info: CredentialEmail): Promise<SendResult> {
-  const text = `Hello ${info.name ?? info.username},
-
-You have been added to the lab "${info.lab}". Connect over SSH:
-
-    ssh ${info.username}@${info.host} -p ${info.port}
-
-  Username: ${info.username}
-  Password: ${info.password}
-
-Your home directory contains:
-  ~/scratch        fast storage for working data
-  ~/cold-storage   slower storage for data you want to keep but rarely touch
-
-Please change your password after first login (run: passwd).
-
-— Lab Manager`;
-  return sendMail(info.to, `Your access to lab ${info.lab}`, text);
+  const { subject, body } = renderWelcomeEmail(info);
+  return sendMail(info.to, subject, body);
 }
