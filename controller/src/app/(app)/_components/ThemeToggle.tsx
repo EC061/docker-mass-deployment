@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { Moon, Sun } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
 type Theme = "dark" | "light";
 
@@ -28,11 +30,17 @@ export function ThemeToggle() {
     }
   }
 
-  // Render a stable label until the effect resolves the real theme.
-  const label = theme === "light" ? "🌙  Dark mode" : "☀️  Light mode";
   return (
-    <button type="button" className="theme-toggle" onClick={toggle} suppressHydrationWarning>
-      {theme === null ? "Theme" : label}
-    </button>
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      className="w-full justify-center"
+      onClick={toggle}
+      suppressHydrationWarning
+    >
+      {theme === null ? null : theme === "light" ? <Moon /> : <Sun />}
+      {theme === null ? "Theme" : theme === "light" ? "Dark mode" : "Light mode"}
+    </Button>
   );
 }

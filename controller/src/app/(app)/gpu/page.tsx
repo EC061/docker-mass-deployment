@@ -1,5 +1,7 @@
 import { db } from "@/lib/db";
 import { ago, fmtBytes } from "@/lib/format";
+import { Card, CardContent } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const dynamic = "force-dynamic";
 
@@ -31,80 +33,80 @@ export default function GpuPage() {
     .all() as EventRow[];
 
   return (
-    <>
-      <h2>GPU</h2>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold tracking-tight">GPU</h1>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Live processes</h3>
-        {snapshot.length === 0 ? (
-          <p className="muted">No GPU processes reported.</p>
-        ) : (
-          <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Node</th>
-                <th>PID</th>
-                <th>User</th>
-                <th>Lab</th>
-                <th>VRAM</th>
-                <th>Util %</th>
-              </tr>
-            </thead>
-            <tbody>
-              {snapshot.map((r) => (
-                <tr key={`${r.node}-${r.pid}`}>
-                  <td>{r.node}</td>
-                  <td>{r.pid}</td>
-                  <td>{r.user ?? "—"}</td>
-                  <td>{r.lab ?? "—"}</td>
-                  <td>{fmtBytes(r.vram_bytes)}</td>
-                  <td style={{ color: (r.util ?? 0) <= 5 ? "var(--warn)" : "var(--text)" }}>
-                    {r.util ?? "—"}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Live processes</h3>
+          {snapshot.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No GPU processes reported.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Node</TableHead>
+                  <TableHead>PID</TableHead>
+                  <TableHead>User</TableHead>
+                  <TableHead>Lab</TableHead>
+                  <TableHead>VRAM</TableHead>
+                  <TableHead>Util %</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {snapshot.map((r) => (
+                  <TableRow key={`${r.node}-${r.pid}`}>
+                    <TableCell>{r.node}</TableCell>
+                    <TableCell>{r.pid}</TableCell>
+                    <TableCell>{r.user ?? "—"}</TableCell>
+                    <TableCell>{r.lab ?? "—"}</TableCell>
+                    <TableCell>{fmtBytes(r.vram_bytes)}</TableCell>
+                    <TableCell className={(r.util ?? 0) <= 5 ? "text-warn" : undefined}>
+                      {r.util ?? "—"}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Recent idle-kill events</h3>
-        {events.length === 0 ? (
-          <p className="muted">No events yet.</p>
-        ) : (
-          <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>When</th>
-                <th>Node</th>
-                <th>PID</th>
-                <th>User</th>
-                <th>Lab</th>
-                <th>State</th>
-              </tr>
-            </thead>
-            <tbody>
-              {events.map((e, i) => (
-                <tr key={i}>
-                  <td className="muted">{ago(e.ts)}</td>
-                  <td>{e.node}</td>
-                  <td>{e.pid ?? "—"}</td>
-                  <td>{e.user ?? "—"}</td>
-                  <td>{e.lab ?? "—"}</td>
-                  <td style={{ color: e.state === "killed" ? "var(--err)" : "var(--warn)" }}>
-                    {e.state}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </div>
-    </>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Recent idle-kill events</h3>
+          {events.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No events yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>When</TableHead>
+                  <TableHead>Node</TableHead>
+                  <TableHead>PID</TableHead>
+                  <TableHead>User</TableHead>
+                  <TableHead>Lab</TableHead>
+                  <TableHead>State</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {events.map((e, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="text-muted-foreground">{ago(e.ts)}</TableCell>
+                    <TableCell>{e.node}</TableCell>
+                    <TableCell>{e.pid ?? "—"}</TableCell>
+                    <TableCell>{e.user ?? "—"}</TableCell>
+                    <TableCell>{e.lab ?? "—"}</TableCell>
+                    <TableCell className={e.state === "killed" ? "text-err" : "text-warn"}>
+                      {e.state}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

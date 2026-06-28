@@ -4,6 +4,12 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { applyMapping, parseCsv, type ImportRow } from "@/lib/csv";
 import type { ImportResult } from "../actions";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export interface LabOpt {
   id: number;
@@ -88,14 +94,14 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
     }
   }
 
-  if (labs.length === 0) return <p className="muted">Create a lab first.</p>;
+  if (labs.length === 0) return <p className="text-sm text-muted-foreground">Create a lab first.</p>;
 
   return (
-    <div>
-      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 10 }}>
+    <div className="space-y-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         <div>
-          <label>Target lab</label>
-          <select value={labId} onChange={(e) => setLabId(Number(e.target.value))}>
+          <Label>Target lab</Label>
+          <Select value={labId} onChange={(e) => setLabId(Number(e.target.value))}>
             <option value={0} disabled>
               Select lab…
             </option>
@@ -104,23 +110,23 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
                 {l.name}
               </option>
             ))}
-          </select>
+          </Select>
         </div>
         <div>
-          <label>Username column</label>
-          <input value={cols.username} onChange={(e) => set({ username: e.target.value })} />
+          <Label>Username column</Label>
+          <Input value={cols.username} onChange={(e) => set({ username: e.target.value })} />
         </div>
         <div>
-          <label>Email column</label>
-          <input value={cols.email} onChange={(e) => set({ email: e.target.value })} />
+          <Label>Email column</Label>
+          <Input value={cols.email} onChange={(e) => set({ email: e.target.value })} />
         </div>
         <div>
-          <label>Name column</label>
-          <input value={cols.name} onChange={(e) => set({ name: e.target.value })} />
+          <Label>Name column</Label>
+          <Input value={cols.name} onChange={(e) => set({ name: e.target.value })} />
         </div>
         <div>
-          <label>Student ID column</label>
-          <input
+          <Label>Student ID column</Label>
+          <Input
             value={cols.studentId}
             placeholder="(optional)"
             onChange={(e) => set({ studentId: e.target.value })}
@@ -128,77 +134,71 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 16, alignItems: "center", flexWrap: "wrap" }}>
+      <div className="flex flex-wrap items-center gap-4">
         <div>
-          <label>CSV file</label>
-          <input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onFile(e.target.files?.[0])} />
+          <Label>CSV file</Label>
+          <Input type="file" accept=".csv,text/csv,text/plain" onChange={(e) => onFile(e.target.files?.[0])} />
         </div>
-        {fileName && <span className="muted" style={{ fontSize: 12 }}>{fileName}</span>}
+        {fileName && <span className="text-xs text-muted-foreground">{fileName}</span>}
       </div>
 
-      <label style={{ marginTop: 10 }}>…or paste CSV (first row = headers)</label>
-      <textarea
-        value={csvText}
-        onChange={(e) => {
-          setCsvText(e.target.value);
-          setResult(null);
-        }}
-        rows={6}
-        style={{
-          width: "100%",
-          fontFamily: "monospace",
-          background: "var(--panel-2)",
-          color: "var(--text)",
-          border: "1px solid var(--border)",
-          borderRadius: 7,
-          padding: 10,
-        }}
-        placeholder={"username,email,name\nalice,alice@uga.edu,Alice A."}
-      />
+      <div>
+        <Label>…or paste CSV (first row = headers)</Label>
+        <Textarea
+          value={csvText}
+          onChange={(e) => {
+            setCsvText(e.target.value);
+            setResult(null);
+          }}
+          rows={6}
+          className="font-mono"
+          placeholder={"username,email,name\nalice,alice@uga.edu,Alice A."}
+        />
+      </div>
 
       {rows.length > 0 && (
-        <div style={{ marginTop: 10 }}>
-          <p style={{ margin: "6px 0" }}>
+        <div className="space-y-2">
+          <p className="text-sm">
             <strong>{validRows.length}</strong> valid
             {invalidCount > 0 && (
               <>
-                , <span style={{ color: "var(--danger, #e06)" }}>{invalidCount}</span> will be skipped
+                , <span className="text-err">{invalidCount}</span> will be skipped
               </>
             )}
             {headers.length > 0 && (
-              <span className="muted" style={{ fontSize: 12 }}>
+              <span className="text-xs text-muted-foreground">
                 {" "}· detected columns: {headers.join(", ")}
               </span>
             )}
           </p>
-          <div className="table-wrap" style={{ maxHeight: 320, overflow: "auto" }}>
-            <table>
-              <thead>
-                <tr>
-                  <th>Username</th>
-                  <th>Email</th>
-                  <th>Name</th>
-                  <th>Student ID</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
+          <div className="max-h-80 overflow-auto rounded-md border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Username</TableHead>
+                  <TableHead>Email</TableHead>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Student ID</TableHead>
+                  <TableHead>Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {rows.slice(0, PREVIEW_LIMIT).map((r, i) => (
-                  <tr key={i} style={r.issues.length ? { opacity: 0.6 } : undefined}>
-                    <td>{r.username || "—"}</td>
-                    <td>{r.email ?? "—"}</td>
-                    <td>{r.name ?? "—"}</td>
-                    <td>{r.studentId ?? "—"}</td>
-                    <td style={{ color: r.issues.length ? "var(--danger, #e06)" : "var(--ok)" }}>
+                  <TableRow key={i} className={r.issues.length ? "opacity-60" : undefined}>
+                    <TableCell>{r.username || "—"}</TableCell>
+                    <TableCell>{r.email ?? "—"}</TableCell>
+                    <TableCell>{r.name ?? "—"}</TableCell>
+                    <TableCell>{r.studentId ?? "—"}</TableCell>
+                    <TableCell className={r.issues.length ? "text-err" : "text-ok"}>
                       {r.issues.length ? r.issues.join("; ") : "ok"}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
+              </TableBody>
+            </Table>
           </div>
           {rows.length > PREVIEW_LIMIT && (
-            <p className="muted" style={{ fontSize: 12 }}>
+            <p className="text-xs text-muted-foreground">
               Showing first {PREVIEW_LIMIT} of {rows.length} rows.
             </p>
           )}
@@ -206,20 +206,19 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
       )}
 
       {result && (
-        <p style={{ color: result.error ? "var(--danger, #e06)" : "var(--ok)" }}>
+        <p className={`text-sm ${result.error ? "text-err" : "text-ok"}`}>
           {result.error ? result.error : `Imported ${result.added}, skipped ${result.skipped}.`}
         </p>
       )}
 
-      <button
+      <Button
         type="button"
         onClick={onImport}
         disabled={submitting || validRows.length === 0 || !labId}
-        style={{ width: 200, marginTop: 8 }}
       >
         {submitting ? "Importing…" : `Import ${validRows.length} student${validRows.length === 1 ? "" : "s"}`}
-      </button>
-      <p className="muted" style={{ fontSize: 12 }}>
+      </Button>
+      <p className="text-xs text-muted-foreground">
         The CSV is parsed in your browser; only the rows above are sent. Rows with a
         missing/invalid/duplicate username (or missing email when an email column is given) are skipped.
       </p>

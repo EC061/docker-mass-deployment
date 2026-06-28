@@ -1,5 +1,11 @@
 import { db } from "@/lib/db";
 import { ago } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const dynamic = "force-dynamic";
 
@@ -52,93 +58,97 @@ export default async function LogsPage({
   }[]).map((r) => r.node);
 
   const color = (lvl: string) =>
-    lvl === "ERROR" ? "var(--err)" : lvl === "WARN" ? "var(--warn)" : "var(--muted)";
+    lvl === "ERROR" ? "text-err" : lvl === "WARN" ? "text-warn" : "text-muted-foreground";
 
   return (
-    <>
-      <h2>Logs</h2>
-      <div className="card">
-        <form method="get" style={{ display: "flex", gap: 10, alignItems: "end", flexWrap: "wrap" }}>
-          <div>
-            <label>Level</label>
-            <select name="level" defaultValue={level}>
-              {LEVELS.map((l) => (
-                <option key={l} value={l}>
-                  {l || "all"}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label>Node</label>
-            <select name="node" defaultValue={node}>
-              <option value="">all</option>
-              {nodes.map((n) => (
-                <option key={n} value={n}>
-                  {n}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label>Search</label>
-            <input name="q" defaultValue={q} placeholder="message / source" />
-          </div>
-          {task && <input type="hidden" name="task" value={task} />}
-          <button type="submit" style={{ width: 110, marginTop: 0 }}>
-            Filter
-          </button>
-          {(level || node || q || task) && (
-            <a href="/logs" style={{ marginBottom: 9 }}>
-              clear
-            </a>
-          )}
-        </form>
-        {task && <p className="muted">Filtered to task {task}</p>}
-      </div>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold tracking-tight">Logs</h1>
+      <Card>
+        <CardContent className="space-y-2">
+          <form method="get" className="flex flex-wrap items-end gap-3">
+            <div>
+              <Label>Level</Label>
+              <Select name="level" defaultValue={level} className="w-32">
+                {LEVELS.map((l) => (
+                  <option key={l} value={l}>
+                    {l || "all"}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label>Node</Label>
+              <Select name="node" defaultValue={node} className="w-40">
+                <option value="">all</option>
+                {nodes.map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div>
+              <Label>Search</Label>
+              <Input name="q" defaultValue={q} placeholder="message / source" />
+            </div>
+            {task && <input type="hidden" name="task" value={task} />}
+            <Button type="submit">Filter</Button>
+            {(level || node || q || task) && (
+              <a href="/logs" className="pb-2 text-sm text-primary hover:underline">
+                clear
+              </a>
+            )}
+          </form>
+          {task && <p className="text-sm text-muted-foreground">Filtered to task {task}</p>}
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        {logs.length === 0 ? (
-          <p className="muted">No matching logs.</p>
-        ) : (
-          <div className="table-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Time</th>
-                <th>Level</th>
-                <th>Node</th>
-                <th>Source</th>
-                <th>Message</th>
-                <th>Task</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((l, i) => (
-                <tr key={i}>
-                  <td className="muted" title={new Date(l.ts).toISOString()}>
-                    {ago(l.ts)}
-                  </td>
-                  <td style={{ color: color(l.level), fontWeight: 600 }}>{l.level}</td>
-                  <td>{l.node ?? "—"}</td>
-                  <td>{l.source ?? "—"}</td>
-                  <td>{l.msg}</td>
-                  <td>
-                    {l.task_id ? (
-                      <a href={`/tasks/${encodeURIComponent(l.task_id)}`} title={l.task_id}>
-                        {l.task_id.slice(0, 8)}
-                      </a>
-                    ) : (
-                      "—"
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          </div>
-        )}
-      </div>
-    </>
+      <Card>
+        <CardContent>
+          {logs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No matching logs.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Level</TableHead>
+                  <TableHead>Node</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Message</TableHead>
+                  <TableHead>Task</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {logs.map((l, i) => (
+                  <TableRow key={i}>
+                    <TableCell className="whitespace-nowrap text-muted-foreground" title={new Date(l.ts).toISOString()}>
+                      {ago(l.ts)}
+                    </TableCell>
+                    <TableCell className={`font-semibold ${color(l.level)}`}>{l.level}</TableCell>
+                    <TableCell>{l.node ?? "—"}</TableCell>
+                    <TableCell>{l.source ?? "—"}</TableCell>
+                    <TableCell>{l.msg}</TableCell>
+                    <TableCell>
+                      {l.task_id ? (
+                        <a
+                          href={`/tasks/${encodeURIComponent(l.task_id)}`}
+                          title={l.task_id}
+                          className="text-primary hover:underline"
+                        >
+                          {l.task_id.slice(0, 8)}
+                        </a>
+                      ) : (
+                        "—"
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

@@ -2,6 +2,12 @@ import { audienceCounts, recentAnnouncements } from "@/lib/announcements";
 import { isSmtpConfigured } from "@/lib/settings";
 import { ago } from "@/lib/format";
 import { sendAnnouncementAction } from "./actions";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const dynamic = "force-dynamic";
 
@@ -17,91 +23,102 @@ export default async function AnnouncementsPage({
   const smtpOk = isSmtpConfigured();
 
   return (
-    <>
-      <h2>Announcements</h2>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold tracking-tight">Announcements</h1>
 
       {msg && (
-        <div className="card" style={{ marginBottom: 16 }}>
-          <p className="muted">{msg}</p>
-        </div>
+        <Card>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">{msg}</p>
+          </CardContent>
+        </Card>
       )}
 
       {!smtpOk && (
-        <div className="card" style={{ borderColor: "var(--warn)", marginBottom: 16 }}>
-          <p style={{ color: "var(--warn)" }}>
-            SMTP is not configured, so announcements cannot be delivered. Set it up under{" "}
-            <a href="/settings">Settings → Email</a> first.
-          </p>
-        </div>
+        <Card className="border-warn/50">
+          <CardContent>
+            <p className="text-sm text-warn">
+              SMTP is not configured, so announcements cannot be delivered. Set it up under{" "}
+              <a href="/settings" className="underline">
+                Settings → Email
+              </a>{" "}
+              first.
+            </p>
+          </CardContent>
+        </Card>
       )}
 
-      <div className="card" style={{ marginBottom: 16 }}>
-        <h3 style={{ marginTop: 0 }}>Send a service announcement</h3>
-        <form action={sendAnnouncementAction}>
-          <label>
-            Subject
-            <input name="subject" required maxLength={200} placeholder="e.g. Scheduled maintenance Saturday" />
-          </label>
-          <label>
-            Message
-            <textarea name="body" required rows={6} placeholder="Write your announcement…" />
-          </label>
-          <fieldset style={{ border: "1px solid var(--border)", borderRadius: 6, padding: 12, margin: "12px 0" }}>
-            <legend className="muted" style={{ fontSize: 12 }}>Recipients</legend>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6, marginRight: 20 }}>
-              <input type="checkbox" name="students" defaultChecked style={{ width: "auto" }} />
-              All users ({counts.students})
-            </label>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input type="checkbox" name="pis" style={{ width: "auto" }} />
-              All PIs ({counts.pis})
-            </label>
-          </fieldset>
-          <button type="submit" style={{ width: "auto" }}>Send announcement</button>
-        </form>
-        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>
-          Sent by email to the distinct addresses in the selected audiences. A PI who is also a user is
-          mailed once.
-        </p>
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Send a service announcement</h3>
+          <form action={sendAnnouncementAction} className="space-y-3">
+            <div>
+              <Label>Subject</Label>
+              <Input name="subject" required maxLength={200} placeholder="e.g. Scheduled maintenance Saturday" />
+            </div>
+            <div>
+              <Label>Message</Label>
+              <Textarea name="body" required rows={6} placeholder="Write your announcement…" />
+            </div>
+            <fieldset className="rounded-md border border-border p-3">
+              <legend className="px-1 text-xs text-muted-foreground">Recipients</legend>
+              <div className="flex flex-wrap gap-x-6 gap-y-2">
+                <label className="flex items-center gap-1.5 text-sm">
+                  <input type="checkbox" name="students" defaultChecked className="accent-primary" />
+                  All users ({counts.students})
+                </label>
+                <label className="flex items-center gap-1.5 text-sm">
+                  <input type="checkbox" name="pis" className="accent-primary" />
+                  All PIs ({counts.pis})
+                </label>
+              </div>
+            </fieldset>
+            <Button type="submit">Send announcement</Button>
+          </form>
+          <p className="text-xs text-muted-foreground">
+            Sent by email to the distinct addresses in the selected audiences. A PI who is also a user
+            is mailed once.
+          </p>
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Recent announcements</h3>
-        {history.length === 0 ? (
-          <p className="muted">Nothing sent yet.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>When</th>
-                  <th>By</th>
-                  <th>To</th>
-                  <th>Subject</th>
-                  <th>Delivered</th>
-                </tr>
-              </thead>
-              <tbody>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Recent announcements</h3>
+          {history.length === 0 ? (
+            <p className="text-sm text-muted-foreground">Nothing sent yet.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>When</TableHead>
+                  <TableHead>By</TableHead>
+                  <TableHead>To</TableHead>
+                  <TableHead>Subject</TableHead>
+                  <TableHead>Delivered</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {history.map((a) => (
-                  <tr key={a.id}>
-                    <td className="muted">{ago(a.ts)}</td>
-                    <td>{a.actor ?? "—"}</td>
-                    <td>{a.audiences.replace("students", "users").replace(/,/g, ", ")}</td>
-                    <td>{a.subject}</td>
-                    <td>
+                  <TableRow key={a.id}>
+                    <TableCell className="whitespace-nowrap text-muted-foreground">{ago(a.ts)}</TableCell>
+                    <TableCell>{a.actor ?? "—"}</TableCell>
+                    <TableCell>{a.audiences.replace("students", "users").replace(/,/g, ", ")}</TableCell>
+                    <TableCell>{a.subject}</TableCell>
+                    <TableCell>
                       {a.skipped ? (
-                        <span style={{ color: "var(--warn)" }}>skipped (no SMTP)</span>
+                        <span className="text-warn">skipped (no SMTP)</span>
                       ) : (
                         `${a.sent}/${a.recipients}`
                       )}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </>
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

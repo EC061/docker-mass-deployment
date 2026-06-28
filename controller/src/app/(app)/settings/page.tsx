@@ -1,5 +1,12 @@
 import { listBackups } from "@/lib/backup";
 import { getSettings, isWebdavConfigured, TIB, WELCOME_EMAIL_VARS } from "@/lib/settings";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
+import { Textarea } from "@/components/ui/textarea";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   backupNowAction,
   restoreAction,
@@ -47,329 +54,326 @@ export default async function SettingsPage({
     }
   }
   return (
-    <>
-      <h2>Settings</h2>
+    <div className="space-y-4">
+      <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Storage & ports</h3>
-        <form action={saveStorageSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
-          <div>
-            <label>Default fast quota (TB)</label>
-            <input name="fastTb" type="number" step="0.5" defaultValue={s.fastQuotaDefaultBytes / TIB} />
-          </div>
-          <div>
-            <label>Default slow quota (TB)</label>
-            <input name="slowTb" type="number" step="0.5" defaultValue={s.slowQuotaDefaultBytes / TIB} />
-          </div>
-          <div>
-            <label>SSH port range start</label>
-            <input name="sshPortStart" type="number" defaultValue={s.sshPortStart} />
-          </div>
-          <div>
-            <label>SSH port range end</label>
-            <input name="sshPortEnd" type="number" defaultValue={s.sshPortEnd} />
-          </div>
-          <div>
-            <label>Old-file threshold (days)</label>
-            <input name="oldFileThresholdDays" type="number" defaultValue={s.oldFileThresholdDays} />
-          </div>
-          <div>
-            <label>Old-file scan interval (days)</label>
-            <input name="oldFileScanIntervalDays" type="number" defaultValue={s.oldFileScanIntervalDays} />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label style={{ display: "inline-flex", gap: 6, alignItems: "center" }}>
-              <input
-                type="checkbox"
-                name="oldFileScanEnabled"
-                defaultChecked={s.oldFileScanEnabled}
-                style={{ width: "auto" }}
-              />
-              Run nightly old-file scans automatically
-            </label>
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <button type="submit" style={{ width: 140 }}>
-              Save
-            </button>
-          </div>
-        </form>
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Storage &amp; ports</h3>
+          <form action={saveStorageSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label>Default fast quota (TB)</Label>
+              <Input name="fastTb" type="number" step="0.5" defaultValue={s.fastQuotaDefaultBytes / TIB} />
+            </div>
+            <div>
+              <Label>Default slow quota (TB)</Label>
+              <Input name="slowTb" type="number" step="0.5" defaultValue={s.slowQuotaDefaultBytes / TIB} />
+            </div>
+            <div>
+              <Label>SSH port range start</Label>
+              <Input name="sshPortStart" type="number" defaultValue={s.sshPortStart} />
+            </div>
+            <div>
+              <Label>SSH port range end</Label>
+              <Input name="sshPortEnd" type="number" defaultValue={s.sshPortEnd} />
+            </div>
+            <div>
+              <Label>Old-file threshold (days)</Label>
+              <Input name="oldFileThresholdDays" type="number" defaultValue={s.oldFileThresholdDays} />
+            </div>
+            <div>
+              <Label>Old-file scan interval (days)</Label>
+              <Input name="oldFileScanIntervalDays" type="number" defaultValue={s.oldFileScanIntervalDays} />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  name="oldFileScanEnabled"
+                  defaultChecked={s.oldFileScanEnabled}
+                  className="accent-primary"
+                />
+                Run nightly old-file scans automatically
+              </label>
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit">Save</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Email (external SMTP)</h3>
-        {smtp && <p style={{ color: "var(--accent)" }}>{smtp}</p>}
-        <form action={saveSmtpSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
-          <div>
-            <label>SMTP host</label>
-            <input name="smtpHost" defaultValue={s.smtpHost} placeholder="https://smtp.uga.edu:465" />
-            <small style={{ color: "var(--muted)" }}>
-              Use https:// (or port 465) for implicit TLS; http:// for STARTTLS.
-            </small>
-          </div>
-          <div>
-            <label>Port</label>
-            <input name="smtpPort" type="number" defaultValue={s.smtpPort} />
-          </div>
-          <div>
-            <label>Username</label>
-            <input name="smtpUser" defaultValue={s.smtpUser} />
-          </div>
-          <div>
-            <label>Password</label>
-            <input name="smtpPass" type="password" placeholder={s.smtpPass ? "•••••• (unchanged)" : ""} />
-          </div>
-          <div>
-            <label>From address</label>
-            <input name="smtpFrom" defaultValue={s.smtpFrom} placeholder="labs@uga.edu" />
-          </div>
-          <div>
-            <label>SSH host override (optional)</label>
-            <input name="sshHostOverride" defaultValue={s.sshHostOverride} placeholder="gpu.uga.edu" />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <button type="submit" style={{ width: 140 }}>
-              Save SMTP
-            </button>
-          </div>
-        </form>
-        <form action={testEmailAction} style={{ display: "flex", gap: 10, alignItems: "end", marginTop: 12 }}>
-          <div>
-            <label>Send test email to</label>
-            <input name="to" type="email" placeholder="you@uga.edu" />
-          </div>
-          <button type="submit" className="secondary" style={{ width: 140, marginTop: 0 }}>
-            Send test
-          </button>
-        </form>
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Email (external SMTP)</h3>
+          {smtp && <p className="text-sm text-primary">{smtp}</p>}
+          <form action={saveSmtpSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label>SMTP host</Label>
+              <Input name="smtpHost" defaultValue={s.smtpHost} placeholder="https://smtp.uga.edu:465" />
+              <small className="text-xs text-muted-foreground">
+                Use https:// (or port 465) for implicit TLS; http:// for STARTTLS.
+              </small>
+            </div>
+            <div>
+              <Label>Port</Label>
+              <Input name="smtpPort" type="number" defaultValue={s.smtpPort} />
+            </div>
+            <div>
+              <Label>Username</Label>
+              <Input name="smtpUser" defaultValue={s.smtpUser} />
+            </div>
+            <div>
+              <Label>Password</Label>
+              <Input name="smtpPass" type="password" placeholder={s.smtpPass ? "•••••• (unchanged)" : ""} />
+            </div>
+            <div>
+              <Label>From address</Label>
+              <Input name="smtpFrom" defaultValue={s.smtpFrom} placeholder="labs@uga.edu" />
+            </div>
+            <div>
+              <Label>SSH host override (optional)</Label>
+              <Input name="sshHostOverride" defaultValue={s.sshHostOverride} placeholder="gpu.uga.edu" />
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit">Save SMTP</Button>
+            </div>
+          </form>
+          <form action={testEmailAction} className="flex flex-wrap items-end gap-3">
+            <div>
+              <Label>Send test email to</Label>
+              <Input name="to" type="email" placeholder="you@uga.edu" />
+            </div>
+            <Button type="submit" variant="secondary">
+              Send test
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Welcome email template</h3>
-        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
-          Sent to a student (with an email on file) when they are added to a lab. Use{" "}
-          <code>{"{placeholder}"}</code> tokens below; unknown tokens are left as-is. Leave a field
-          blank to use the built-in default.
-        </p>
-        <form action={saveWelcomeEmailAction} style={{ display: "grid", gap: 12, maxWidth: 640 }}>
-          <div>
-            <label>Subject</label>
-            <input name="welcomeEmailSubject" defaultValue={s.welcomeEmailSubject} />
-          </div>
-          <div>
-            <label>Body</label>
-            <textarea
-              name="welcomeEmailBody"
-              rows={16}
-              defaultValue={s.welcomeEmailBody}
-              style={{ fontFamily: "var(--font-mono, monospace)", fontSize: 13, width: "100%" }}
-            />
-          </div>
-          <div>
-            <label style={{ marginBottom: 4 }}>Available variables</label>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: "var(--muted)" }}>
-              {WELCOME_EMAIL_VARS.map((v) => (
-                <li key={v.key}>
-                  <code>{`{${v.key}}`}</code> — {v.desc}
-                </li>
-              ))}
-            </ul>
-          </div>
-          <div>
-            <button type="submit" style={{ width: 180 }}>
-              Save template
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>GPU idle policy</h3>
-        <form action={saveGpuPolicyAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" name="gpuEnabled" defaultChecked={s.gpuEnabled} style={{ width: "auto" }} />
-            <label style={{ margin: 0 }}>Enable idle killer</label>
-          </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" name="gpuImmediate" defaultChecked={s.gpuImmediate} style={{ width: "auto" }} />
-            <label style={{ margin: 0 }}>Kill immediately (no grace)</label>
-          </div>
-          <div>
-            <label>Idle util threshold (%)</label>
-            <input name="gpuUtilThreshold" type="number" defaultValue={s.gpuUtilThreshold} />
-          </div>
-          <div>
-            <label>Idle minutes before warning</label>
-            <input name="gpuIdleMinutes" type="number" defaultValue={s.gpuIdleMinutes} />
-          </div>
-          <div>
-            <label>Grace minutes before kill</label>
-            <input name="gpuGraceMinutes" type="number" defaultValue={s.gpuGraceMinutes} />
-          </div>
-          <div></div>
-          <div>
-            <label>Whitelist users (comma-sep)</label>
-            <input name="gpuWhitelistUsers" defaultValue={s.gpuWhitelistUsers} placeholder="alice,bob" />
-          </div>
-          <div>
-            <label>Whitelist labs (comma-sep)</label>
-            <input name="gpuWhitelistLabs" defaultValue={s.gpuWhitelistLabs} placeholder="bio,chem" />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <button type="submit" style={{ width: 200 }}>
-              Save & push to nodes
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Alerts & logs</h3>
-        <form action={saveAlertSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" name="alertsEnabled" defaultChecked={s.alertsEnabled} style={{ width: "auto" }} />
-            <label style={{ margin: 0 }}>Email admins on alerts</label>
-          </div>
-          <div>
-            <label>Alert at log level</label>
-            <select name="alertLevel" defaultValue={s.alertLevel}>
-              <option value="WARN">WARN and above</option>
-              <option value="ERROR">ERROR only</option>
-            </select>
-          </div>
-          <div>
-            <label>Dedup window (minutes)</label>
-            <input name="alertDedupMinutes" type="number" defaultValue={s.alertDedupMinutes} />
-          </div>
-          <div>
-            <label>Quota alert at (%)</label>
-            <input name="quotaAlertPct" type="number" defaultValue={s.quotaAlertPct} />
-          </div>
-          <div>
-            <label>Node offline grace (seconds)</label>
-            <input name="nodeOfflineGraceSeconds" type="number" min={0} defaultValue={s.nodeOfflineGraceSeconds} />
-          </div>
-          <div>
-            <label>Log retention (days)</label>
-            <input name="logRetentionDays" type="number" defaultValue={s.logRetentionDays} />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <button type="submit" style={{ width: 140 }}>
-              Save alerts
-            </button>
-          </div>
-        </form>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>ZFS scrub</h3>
-        {scrub && <p style={{ color: "var(--accent)" }}>{scrub}</p>}
-        <p className="muted" style={{ fontSize: 12, marginTop: 0 }}>
-          Scrubs run on ZFS-capable nodes. Cold storage on an SMB mount is the share owner&apos;s
-          responsibility and is never scrubbed. Errors found during a scrub raise an admin alert.
-        </p>
-        <form action={saveScrubSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <input type="checkbox" name="scrubEnabled" defaultChecked={s.scrubEnabled} style={{ width: "auto" }} />
-            <label style={{ margin: 0 }}>Enable scheduled scrubs</label>
-          </div>
-          <div>
-            <label>Scrub every (days)</label>
-            <input name="scrubIntervalDays" type="number" defaultValue={s.scrubIntervalDays} />
-          </div>
-          <div>
-            <label>Start at hour (0–23)</label>
-            <input name="scrubHour" type="number" min={0} max={23} defaultValue={s.scrubHour} />
-          </div>
-          <div>
-            <label>Timezone</label>
-            <input name="scrubTimezone" defaultValue={s.scrubTimezone} list="scrub-tz-list" placeholder="UTC" />
-            <datalist id="scrub-tz-list">
-              {COMMON_TIMEZONES.map((tz) => (
-                <option key={tz} value={tz} />
-              ))}
-            </datalist>
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <button type="submit" style={{ width: 140 }}>
-              Save scrub
-            </button>
-          </div>
-        </form>
-        <form action={scrubNowAction} style={{ marginTop: 12 }}>
-          <button type="submit" className="secondary" style={{ width: 140, marginTop: 0 }}>
-            Scrub now
-          </button>
-        </form>
-      </div>
-
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>WebDAV backup</h3>
-        {backup && <p style={{ color: "var(--accent)" }}>{backup}</p>}
-        <form action={saveWebdavSettingsAction} style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 12, maxWidth: 520 }}>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <label>WebDAV base URL</label>
-            <input name="webdavUrl" defaultValue={s.webdavUrl} placeholder="https://dav.example.com/labmgr" />
-          </div>
-          <div>
-            <label>Username</label>
-            <input name="webdavUser" defaultValue={s.webdavUser} />
-          </div>
-          <div>
-            <label>Password</label>
-            <input name="webdavPass" type="password" placeholder={s.webdavPass ? "•••••• (unchanged)" : ""} />
-          </div>
-          <div>
-            <label>Keep last N backups</label>
-            <input name="webdavRetention" type="number" defaultValue={s.webdavRetention} />
-          </div>
-          <div>
-            <label>Backup every (hours, 0=off)</label>
-            <input name="backupIntervalHours" type="number" defaultValue={s.backupIntervalHours} />
-          </div>
-          <div style={{ gridColumn: "1 / -1" }}>
-            <button type="submit" style={{ width: 140 }}>
-              Save WebDAV
-            </button>
-          </div>
-        </form>
-        <form action={backupNowAction} style={{ marginTop: 12 }}>
-          <button type="submit" className="secondary" style={{ width: 140, marginTop: 0 }}>
-            Back up now
-          </button>
-        </form>
-        {backups.length > 0 && (
-          <div style={{ marginTop: 14 }}>
-            <h4 style={{ margin: "0 0 6px" }}>Restore</h4>
-            <table>
-              <thead>
-                <tr>
-                  <th>Backup</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                {backups.map((b) => (
-                  <tr key={b}>
-                    <td>{b}</td>
-                    <td style={{ textAlign: "right" }}>
-                      <form action={restoreAction}>
-                        <input type="hidden" name="name" value={b} />
-                        <button type="submit" className="secondary" style={{ width: "auto", marginTop: 0, padding: "6px 10px" }}>
-                          Stage restore
-                        </button>
-                      </form>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <p className="muted" style={{ fontSize: 12 }}>
-              Staging a restore takes effect after the controller restarts.
+      <Card>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <h3 className="text-base font-semibold">Welcome email template</h3>
+            <p className="text-xs text-muted-foreground">
+              Sent to a student (with an email on file) when they are added to a lab. Use{" "}
+              <code>{"{placeholder}"}</code> tokens below; unknown tokens are left as-is. Leave a field
+              blank to use the built-in default.
             </p>
           </div>
-        )}
-      </div>
-    </>
+          <form action={saveWelcomeEmailAction} className="grid max-w-2xl gap-3">
+            <div>
+              <Label>Subject</Label>
+              <Input name="welcomeEmailSubject" defaultValue={s.welcomeEmailSubject} />
+            </div>
+            <div>
+              <Label>Body</Label>
+              <Textarea name="welcomeEmailBody" rows={16} defaultValue={s.welcomeEmailBody} className="font-mono text-xs" />
+            </div>
+            <div>
+              <Label>Available variables</Label>
+              <ul className="m-0 list-disc pl-5 text-xs text-muted-foreground">
+                {WELCOME_EMAIL_VARS.map((v) => (
+                  <li key={v.key}>
+                    <code>{`{${v.key}}`}</code> — {v.desc}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div>
+              <Button type="submit">Save template</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">GPU idle policy</h3>
+          <form action={saveGpuPolicyAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="gpuEnabled" defaultChecked={s.gpuEnabled} className="accent-primary" />
+              Enable idle killer
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="gpuImmediate" defaultChecked={s.gpuImmediate} className="accent-primary" />
+              Kill immediately (no grace)
+            </label>
+            <div>
+              <Label>Idle util threshold (%)</Label>
+              <Input name="gpuUtilThreshold" type="number" defaultValue={s.gpuUtilThreshold} />
+            </div>
+            <div>
+              <Label>Idle minutes before warning</Label>
+              <Input name="gpuIdleMinutes" type="number" defaultValue={s.gpuIdleMinutes} />
+            </div>
+            <div>
+              <Label>Grace minutes before kill</Label>
+              <Input name="gpuGraceMinutes" type="number" defaultValue={s.gpuGraceMinutes} />
+            </div>
+            <div />
+            <div>
+              <Label>Whitelist users (comma-sep)</Label>
+              <Input name="gpuWhitelistUsers" defaultValue={s.gpuWhitelistUsers} placeholder="alice,bob" />
+            </div>
+            <div>
+              <Label>Whitelist labs (comma-sep)</Label>
+              <Input name="gpuWhitelistLabs" defaultValue={s.gpuWhitelistLabs} placeholder="bio,chem" />
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit">Save &amp; push to nodes</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Alerts &amp; logs</h3>
+          <form action={saveAlertSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="alertsEnabled" defaultChecked={s.alertsEnabled} className="accent-primary" />
+              Email admins on alerts
+            </label>
+            <div>
+              <Label>Alert at log level</Label>
+              <Select name="alertLevel" defaultValue={s.alertLevel}>
+                <option value="WARN">WARN and above</option>
+                <option value="ERROR">ERROR only</option>
+              </Select>
+            </div>
+            <div>
+              <Label>Dedup window (minutes)</Label>
+              <Input name="alertDedupMinutes" type="number" defaultValue={s.alertDedupMinutes} />
+            </div>
+            <div>
+              <Label>Quota alert at (%)</Label>
+              <Input name="quotaAlertPct" type="number" defaultValue={s.quotaAlertPct} />
+            </div>
+            <div>
+              <Label>Node offline grace (seconds)</Label>
+              <Input name="nodeOfflineGraceSeconds" type="number" min={0} defaultValue={s.nodeOfflineGraceSeconds} />
+            </div>
+            <div>
+              <Label>Log retention (days)</Label>
+              <Input name="logRetentionDays" type="number" defaultValue={s.logRetentionDays} />
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit">Save alerts</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">ZFS scrub</h3>
+          {scrub && <p className="text-sm text-primary">{scrub}</p>}
+          <p className="text-xs text-muted-foreground">
+            Scrubs run on ZFS-capable nodes. Cold storage on an SMB mount is the share owner&apos;s
+            responsibility and is never scrubbed. Errors found during a scrub raise an admin alert.
+          </p>
+          <form action={saveScrubSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="scrubEnabled" defaultChecked={s.scrubEnabled} className="accent-primary" />
+              Enable scheduled scrubs
+            </label>
+            <div>
+              <Label>Scrub every (days)</Label>
+              <Input name="scrubIntervalDays" type="number" defaultValue={s.scrubIntervalDays} />
+            </div>
+            <div>
+              <Label>Start at hour (0–23)</Label>
+              <Input name="scrubHour" type="number" min={0} max={23} defaultValue={s.scrubHour} />
+            </div>
+            <div>
+              <Label>Timezone</Label>
+              <Input name="scrubTimezone" defaultValue={s.scrubTimezone} list="scrub-tz-list" placeholder="UTC" />
+              <datalist id="scrub-tz-list">
+                {COMMON_TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz} />
+                ))}
+              </datalist>
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit">Save scrub</Button>
+            </div>
+          </form>
+          <form action={scrubNowAction}>
+            <Button type="submit" variant="secondary">
+              Scrub now
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">WebDAV backup</h3>
+          {backup && <p className="text-sm text-primary">{backup}</p>}
+          <form action={saveWebdavSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2">
+              <Label>WebDAV base URL</Label>
+              <Input name="webdavUrl" defaultValue={s.webdavUrl} placeholder="https://dav.example.com/labmgr" />
+            </div>
+            <div>
+              <Label>Username</Label>
+              <Input name="webdavUser" defaultValue={s.webdavUser} />
+            </div>
+            <div>
+              <Label>Password</Label>
+              <Input name="webdavPass" type="password" placeholder={s.webdavPass ? "•••••• (unchanged)" : ""} />
+            </div>
+            <div>
+              <Label>Keep last N backups</Label>
+              <Input name="webdavRetention" type="number" defaultValue={s.webdavRetention} />
+            </div>
+            <div>
+              <Label>Backup every (hours, 0=off)</Label>
+              <Input name="backupIntervalHours" type="number" defaultValue={s.backupIntervalHours} />
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit">Save WebDAV</Button>
+            </div>
+          </form>
+          <form action={backupNowAction}>
+            <Button type="submit" variant="secondary">
+              Back up now
+            </Button>
+          </form>
+          {backups.length > 0 && (
+            <div className="space-y-2 pt-2">
+              <h4 className="text-sm font-semibold">Restore</h4>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Backup</TableHead>
+                    <TableHead></TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {backups.map((b) => (
+                    <TableRow key={b}>
+                      <TableCell>{b}</TableCell>
+                      <TableCell className="text-right">
+                        <form action={restoreAction}>
+                          <input type="hidden" name="name" value={b} />
+                          <Button type="submit" variant="secondary" size="sm">
+                            Stage restore
+                          </Button>
+                        </form>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <p className="text-xs text-muted-foreground">
+                Staging a restore takes effect after the controller restarts.
+              </p>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

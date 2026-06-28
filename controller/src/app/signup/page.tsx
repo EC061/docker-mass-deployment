@@ -1,6 +1,10 @@
 import { redirect } from "next/navigation";
 import { createAdmin, setSessionCookie } from "@/lib/auth";
 import { AUTH_LIMIT, clientIp, consume } from "@/lib/ratelimit";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 
 export const dynamic = "force-dynamic";
 
@@ -28,26 +32,49 @@ async function signup(formData: FormData) {
 export default async function SignupPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
   const { error } = await searchParams;
   return (
-    <div className="auth-wrap">
-      <div className="card auth-card">
-        <h2>Register admin</h2>
-        <p className="muted">Requires the signup token configured on the controller.</p>
-        <form action={signup}>
-          <label htmlFor="name">Name</label>
-          <input id="name" name="name" required />
-          <label htmlFor="email">Email</label>
-          <input id="email" name="email" type="email" required />
-          <label htmlFor="password">Password</label>
-          <input id="password" name="password" type="password" required minLength={8} />
-          <label htmlFor="token">Signup token</label>
-          <input id="token" name="token" required />
-          <button type="submit">Create account</button>
-        </form>
-        {error && <p className="error">{error}</p>}
-        <p className="muted" style={{ marginTop: 16 }}>
-          <a href="/login">Back to sign in</a>
-        </p>
-      </div>
+    <div className="flex min-h-screen items-center justify-center px-4 py-8">
+      <Card className="w-full max-w-sm">
+        <CardContent className="space-y-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="flex h-7 w-7 items-center justify-center rounded-md bg-primary text-sm font-bold text-primary-foreground">
+                L
+              </span>
+              <h1 className="text-xl font-semibold tracking-tight">Register admin</h1>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Requires the signup token configured on the controller.
+            </p>
+          </div>
+          <form action={signup} className="space-y-4">
+            <div>
+              <Label htmlFor="name">Name</Label>
+              <Input id="name" name="name" required />
+            </div>
+            <div>
+              <Label htmlFor="email">Email</Label>
+              <Input id="email" name="email" type="email" required />
+            </div>
+            <div>
+              <Label htmlFor="password">Password</Label>
+              <Input id="password" name="password" type="password" required minLength={8} />
+            </div>
+            <div>
+              <Label htmlFor="token">Signup token</Label>
+              <Input id="token" name="token" required />
+            </div>
+            <Button type="submit" className="w-full">
+              Create account
+            </Button>
+          </form>
+          {error && <p className="text-sm text-err">{error}</p>}
+          <p className="text-sm text-muted-foreground">
+            <a href="/login" className="text-primary hover:underline">
+              Back to sign in
+            </a>
+          </p>
+        </CardContent>
+      </Card>
     </div>
   );
 }

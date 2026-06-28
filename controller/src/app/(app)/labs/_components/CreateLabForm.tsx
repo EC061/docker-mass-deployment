@@ -1,6 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 
 export interface NodeOpt {
   id: number;
@@ -59,12 +63,12 @@ export function CreateLabForm({ nodes, labs, defaultFastTb, defaultSlowTb, actio
   const set = (patch: Partial<typeof cfg>) => setCfg((c) => ({ ...c, ...patch }));
 
   return (
-    <form action={action} style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
+    <form action={action} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       {labs.length > 0 && (
-        <div style={{ gridColumn: "1 / -1", display: "flex", gap: 16, alignItems: "end", flexWrap: "wrap" }}>
-          <div style={{ flex: 1, minWidth: 220 }}>
-            <label>Copy configuration from</label>
-            <select
+        <div className="flex flex-wrap items-end gap-4 sm:col-span-2 lg:col-span-3">
+          <div className="min-w-[220px] flex-1">
+            <Label>Copy configuration from</Label>
+            <Select
               name="copyFromLabId"
               value={copyFrom}
               onChange={(e) => onCopyFromChange(Number(e.target.value))}
@@ -75,25 +79,24 @@ export function CreateLabForm({ nodes, labs, defaultFastTb, defaultSlowTb, actio
                   {l.name}
                 </option>
               ))}
-            </select>
+            </Select>
           </div>
           <label
-            className="muted"
-            style={{ margin: 0, display: "inline-flex", gap: 6, alignItems: "center", opacity: copyFrom ? 1 : 0.5 }}
+            className={`flex items-center gap-2 text-sm text-muted-foreground ${copyFrom ? "" : "opacity-50"}`}
           >
-            <input type="checkbox" name="copyStudents" disabled={!copyFrom} style={{ width: "auto" }} />
+            <input type="checkbox" name="copyStudents" disabled={!copyFrom} className="accent-primary" />
             Also enroll the same students
           </label>
         </div>
       )}
 
       <div>
-        <label>Name</label>
-        <input name="name" required placeholder="bio-x" />
+        <Label>Name</Label>
+        <Input name="name" required placeholder="bio-x" />
       </div>
       <div>
-        <label>Node</label>
-        <select name="nodeId" required defaultValue="">
+        <Label>Node</Label>
+        <Select name="nodeId" required defaultValue="">
           <option value="" disabled>
             Select node…
           </option>
@@ -102,19 +105,19 @@ export function CreateLabForm({ nodes, labs, defaultFastTb, defaultSlowTb, actio
               {n.name} {n.online ? "(online)" : "(offline)"}
             </option>
           ))}
-        </select>
+        </Select>
       </div>
       <div>
-        <label>PI email</label>
-        <input name="piEmail" type="email" placeholder="pi@uga.edu" />
+        <Label>PI email</Label>
+        <Input name="piEmail" type="email" placeholder="pi@uga.edu" />
       </div>
       <div>
-        <label>Base image</label>
-        <input name="image" value={cfg.image} onChange={(e) => set({ image: e.target.value })} />
+        <Label>Base image</Label>
+        <Input name="image" value={cfg.image} onChange={(e) => set({ image: e.target.value })} />
       </div>
       <div>
-        <label>Fast quota (TB)</label>
-        <input
+        <Label>Fast quota (TB)</Label>
+        <Input
           name="fastTb"
           type="number"
           step="0.5"
@@ -123,8 +126,8 @@ export function CreateLabForm({ nodes, labs, defaultFastTb, defaultSlowTb, actio
         />
       </div>
       <div>
-        <label>Slow quota (TB)</label>
-        <input
+        <Label>Slow quota (TB)</Label>
+        <Input
           name="slowTb"
           type="number"
           step="0.5"
@@ -132,36 +135,34 @@ export function CreateLabForm({ nodes, labs, defaultFastTb, defaultSlowTb, actio
           onChange={(e) => set({ slowTb: Number(e.target.value) })}
         />
       </div>
-      <div style={{ gridColumn: "1 / -1", marginTop: 4 }}>
-        <span className="muted" style={{ fontSize: 12 }}>
+      <div className="sm:col-span-2 lg:col-span-3">
+        <span className="text-xs text-muted-foreground">
           Container options below are set at creation; changing them later (from the lab page)
           recreates the container with data preserved. All GPUs are always attached.
         </span>
       </div>
       <div>
-        <label>CPUs</label>
-        <input name="cpus" value={cfg.cpus} onChange={(e) => set({ cpus: e.target.value })} />
+        <Label>CPUs</Label>
+        <Input name="cpus" value={cfg.cpus} onChange={(e) => set({ cpus: e.target.value })} />
       </div>
       <div>
-        <label>RAM</label>
-        <input name="memory" value={cfg.memory} onChange={(e) => set({ memory: e.target.value })} />
+        <Label>RAM</Label>
+        <Input name="memory" value={cfg.memory} onChange={(e) => set({ memory: e.target.value })} />
       </div>
       <div>
-        <label>Shared memory</label>
-        <input name="shmSize" value={cfg.shmSize} onChange={(e) => set({ shmSize: e.target.value })} />
+        <Label>Shared memory</Label>
+        <Input name="shmSize" value={cfg.shmSize} onChange={(e) => set({ shmSize: e.target.value })} />
       </div>
       <div>
-        <label>Image size quota</label>
-        <input name="imageQuota" value={cfg.imageQuota} onChange={(e) => set({ imageQuota: e.target.value })} />
+        <Label>Image size quota</Label>
+        <Input name="imageQuota" value={cfg.imageQuota} onChange={(e) => set({ imageQuota: e.target.value })} />
       </div>
       <div>
-        <label>Restart policy</label>
-        <input name="restart" value={cfg.restart} onChange={(e) => set({ restart: e.target.value })} />
+        <Label>Restart policy</Label>
+        <Input name="restart" value={cfg.restart} onChange={(e) => set({ restart: e.target.value })} />
       </div>
-      <div style={{ gridColumn: "1 / -1" }}>
-        <button type="submit" style={{ width: 160 }}>
-          Create lab
-        </button>
+      <div className="sm:col-span-2 lg:col-span-3">
+        <Button type="submit">Create lab</Button>
       </div>
     </form>
   );

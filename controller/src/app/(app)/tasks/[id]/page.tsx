@@ -1,6 +1,8 @@
 import { db } from "@/lib/db";
 import { ago } from "@/lib/format";
 import { getTask } from "@/lib/queue";
+import { Card, CardContent } from "@/components/ui/card";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const dynamic = "force-dynamic";
 
@@ -26,27 +28,18 @@ function prettyJson(raw: string | null): string | null {
 }
 
 const STATE_COLOR: Record<string, string> = {
-  ok: "var(--ok)",
-  failed: "var(--err)",
-  queued: "var(--muted)",
-  sent: "var(--warn)",
+  ok: "text-ok",
+  failed: "text-err",
+  queued: "text-muted-foreground",
+  sent: "text-warn",
 };
 
 function fullTime(ts: number): string {
   return new Date(ts).toISOString().replace("T", " ").replace(/\.\d+Z$/, " UTC");
 }
 
-const preStyle: React.CSSProperties = {
-  background: "var(--panel-2)",
-  border: "1px solid var(--border)",
-  borderRadius: 7,
-  padding: 12,
-  overflow: "auto",
-  fontSize: 13,
-  margin: 0,
-  whiteSpace: "pre-wrap",
-  wordBreak: "break-word",
-};
+const PRE_CLASS =
+  "m-0 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted p-3 text-[13px]";
 
 export default async function TaskDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -54,15 +47,19 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
   if (!task) {
     return (
-      <>
-        <h2>Task</h2>
-        <div className="card">
-          <p className="muted">No task found with id {id}.</p>
-          <p>
-            <a href="/logs">← Back to logs</a>
-          </p>
-        </div>
-      </>
+      <div className="space-y-4">
+        <h1 className="text-2xl font-semibold tracking-tight">Task</h1>
+        <Card>
+          <CardContent className="space-y-2">
+            <p className="text-sm text-muted-foreground">No task found with id {id}.</p>
+            <p>
+              <a href="/logs" className="text-primary hover:underline">
+                ← Back to logs
+              </a>
+            </p>
+          </CardContent>
+        </Card>
+      </div>
     );
   }
 
@@ -74,14 +71,19 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const result = prettyJson(task.result);
   const durationMs = task.updated_at - task.created_at;
   const color = (lvl: string) =>
-    lvl === "ERROR" ? "var(--err)" : lvl === "WARN" ? "var(--warn)" : "var(--muted)";
+    lvl === "ERROR" ? "text-err" : lvl === "WARN" ? "text-warn" : "text-muted-foreground";
 
   const meta: [string, React.ReactNode][] = [
     ["Action", <code key="a">{task.action}</code>],
-    ["State", <span key="s" style={{ color: STATE_COLOR[task.state] ?? "var(--text)", fontWeight: 600 }}>{task.state}</span>],
+    [
+      "State",
+      <span key="s" className={`font-semibold ${STATE_COLOR[task.state] ?? ""}`}>
+        {task.state}
+      </span>,
+    ],
     ["Node", task.node],
     ["Requested by", task.requested_by ?? "—"],
-    ["Task ID", <code key="id" style={{ fontSize: 12 }}>{task.task_uuid}</code>],
+    ["Task ID", <code key="id" className="text-xs">{task.task_uuid}</code>],
     ["Queue job", task.job_id ?? "—"],
     ["Created", `${fullTime(task.created_at)} (${ago(task.created_at)})`],
     ["Updated", `${fullTime(task.updated_at)} (${ago(task.updated_at)})`],
@@ -89,90 +91,105 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   ];
 
   return (
-    <>
-      <h2>
-        Task: <code>{task.action}</code>{" "}
-        <span style={{ color: STATE_COLOR[task.state] ?? "var(--text)", fontSize: 16 }}>{task.state}</span>
-      </h2>
-      <p>
-        <a href="/logs">← Back to logs</a> ·{" "}
-        <a href={`/logs?task=${encodeURIComponent(task.task_uuid)}`}>filter logs to this task</a>
+    <div className="space-y-4">
+      <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold tracking-tight">
+        Task: <code>{task.action}</code>
+        <span className={`text-base ${STATE_COLOR[task.state] ?? ""}`}>{task.state}</span>
+      </h1>
+      <p className="text-sm">
+        <a href="/logs" className="text-primary hover:underline">
+          ← Back to logs
+        </a>{" "}
+        ·{" "}
+        <a href={`/logs?task=${encodeURIComponent(task.task_uuid)}`} className="text-primary hover:underline">
+          filter logs to this task
+        </a>
       </p>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Overview</h3>
-        <table>
-          <tbody>
-            {meta.map(([k, v]) => (
-              <tr key={k}>
-                <td className="muted" style={{ width: 140, verticalAlign: "top" }}>{k}</td>
-                <td>{v}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Overview</h3>
+          <table className="text-sm">
+            <tbody>
+              {meta.map(([k, v]) => (
+                <tr key={k as string}>
+                  <td className="w-36 py-1 align-top text-muted-foreground">{k}</td>
+                  <td className="py-1">{v}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </CardContent>
+      </Card>
 
       {task.error && (
-        <div className="card">
-          <h3 style={{ marginTop: 0, color: "var(--err)" }}>Error</h3>
-          <pre style={{ ...preStyle, color: "var(--err)" }}>{task.error}</pre>
-        </div>
+        <Card>
+          <CardContent className="space-y-3">
+            <h3 className="text-base font-semibold text-err">Error</h3>
+            <pre className={`${PRE_CLASS} text-err`}>{task.error}</pre>
+          </CardContent>
+        </Card>
       )}
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Parameters</h3>
-        {params2 ? <pre style={preStyle}>{params2}</pre> : <p className="muted">No parameters.</p>}
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Parameters</h3>
+          {params2 ? <pre className={PRE_CLASS}>{params2}</pre> : <p className="text-sm text-muted-foreground">No parameters.</p>}
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Result</h3>
-        {result ? (
-          <pre style={preStyle}>{result}</pre>
-        ) : (
-          <p className="muted">
-            {task.state === "ok" ? "Completed with no result payload." : "No result yet."}
-          </p>
-        )}
-      </div>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Result</h3>
+          {result ? (
+            <pre className={PRE_CLASS}>{result}</pre>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              {task.state === "ok" ? "Completed with no result payload." : "No result yet."}
+            </p>
+          )}
+        </CardContent>
+      </Card>
 
-      <div className="card">
-        <h3 style={{ marginTop: 0 }}>Log entries ({logs.length})</h3>
-        {logs.length === 0 ? (
-          <p className="muted">No log entries reference this task.</p>
-        ) : (
-          <div className="table-wrap">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Level</th>
-                  <th>Source</th>
-                  <th>Message</th>
-                </tr>
-              </thead>
-              <tbody>
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Log entries ({logs.length})</h3>
+          {logs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No log entries reference this task.</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Time</TableHead>
+                  <TableHead>Level</TableHead>
+                  <TableHead>Source</TableHead>
+                  <TableHead>Message</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
                 {logs.map((l, i) => (
-                  <tr key={i}>
-                    <td className="muted" title={fullTime(l.ts)}>{ago(l.ts)}</td>
-                    <td style={{ color: color(l.level), fontWeight: 600 }}>{l.level}</td>
-                    <td>{l.source ?? "—"}</td>
-                    <td>
+                  <TableRow key={i}>
+                    <TableCell className="whitespace-nowrap text-muted-foreground" title={fullTime(l.ts)}>
+                      {ago(l.ts)}
+                    </TableCell>
+                    <TableCell className={`font-semibold ${color(l.level)}`}>{l.level}</TableCell>
+                    <TableCell>{l.source ?? "—"}</TableCell>
+                    <TableCell>
                       {l.msg}
                       {l.detail && (
-                        <details style={{ marginTop: 4 }}>
-                          <summary className="muted" style={{ cursor: "pointer", fontSize: 12 }}>detail</summary>
-                          <pre style={{ ...preStyle, marginTop: 4 }}>{l.detail}</pre>
+                        <details className="mt-1">
+                          <summary className="cursor-pointer text-xs text-muted-foreground">detail</summary>
+                          <pre className={`${PRE_CLASS} mt-1`}>{l.detail}</pre>
                         </details>
                       )}
-                    </td>
-                  </tr>
+                    </TableCell>
+                  </TableRow>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </>
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }

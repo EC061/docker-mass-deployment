@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { Card, CardContent } from "@/components/ui/card";
 
 export const dynamic = "force-dynamic";
 
@@ -13,29 +14,42 @@ export default function Dashboard() {
   const labs = count("SELECT COUNT(*) AS n FROM labs");
   const students = count("SELECT COUNT(*) AS n FROM students");
 
-  const stats = [
+  const stats: [string, string | number][] = [
     ["Nodes online", `${nodesOnline} / ${nodesTotal}`],
     ["Labs", labs],
     ["Students", students],
   ];
 
   return (
-    <>
-      <h2>Dashboard</h2>
-      <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
+    <div className="space-y-5">
+      <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         {stats.map(([label, value]) => (
-          <div className="card" key={label} style={{ minWidth: 160 }}>
-            <div className="muted" style={{ fontSize: 13 }}>{label}</div>
-            <div style={{ fontSize: 28, fontWeight: 700, marginTop: 6 }}>{value}</div>
-          </div>
+          <Card key={label}>
+            <CardContent>
+              <div className="text-sm text-muted-foreground">{label}</div>
+              <div className="mt-1.5 text-3xl font-bold tracking-tight">{value}</div>
+            </CardContent>
+          </Card>
         ))}
       </div>
-      <div className="card">
-        <p className="muted">
-          Connect an agent with <code>lab-agent install --controller … --token …</code>; it will
-          appear on the <a href="/nodes">Nodes</a> page once it dials in.
-        </p>
-      </div>
-    </>
+
+      <Card>
+        <CardContent>
+          <p className="text-sm text-muted-foreground">
+            Connect an agent with{" "}
+            <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">
+              lab-agent install --controller … --token …
+            </code>
+            ; it will appear on the{" "}
+            <a href="/nodes" className="text-primary hover:underline">
+              Nodes
+            </a>{" "}
+            page once it dials in.
+          </p>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
