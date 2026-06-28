@@ -111,3 +111,16 @@ describe("list", () => {
     expect(await webdav.list(cfg)).toEqual([]);
   });
 });
+
+describe("listStrict", () => {
+  it("throws on a non-ok status so failures aren't mistaken for an empty collection", async () => {
+    vi.stubGlobal("fetch", mockFetch(() => ({ ok: false, status: 401, statusText: "Unauthorized" })));
+    await expect(webdav.listStrict(cfg)).rejects.toThrow(/401/);
+  });
+
+  it("returns basenames on success", async () => {
+    const xml = `<d:multistatus xmlns:d="DAV:"><d:response><d:href>/labmgr/controller-1000.db</d:href></d:response></d:multistatus>`;
+    vi.stubGlobal("fetch", mockFetch(() => ({ ok: true, _text: xml })));
+    expect(await webdav.listStrict(cfg)).toEqual(["controller-1000.db"]);
+  });
+});

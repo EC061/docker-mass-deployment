@@ -57,14 +57,18 @@ export async function del(cfg: WebdavConfig, name: string): Promise<void> {
   await dav(`${cfg.url}/${name}`, { method: "DELETE", headers: authHeader(cfg) });
 }
 
-/** List entry hrefs in the collection (Depth: 1). Returns basenames, excluding the collection itself. */
-export async function list(cfg: WebdavConfig): Promise<string[]> {
+/**
+ * List entry basenames in the collection (Depth: 1), excluding the collection itself.
+ * Throws on a non-OK status or transport error so callers can surface a real "unreachable" state
+ * rather than confusing a failed listing with an empty collection.
+ */
+export async function listStrict(cfg: WebdavConfig): Promise<string[]> {
   const res = await dav(cfg.url, {
     method: "PROPFIND",
     headers: { ...authHeader(cfg), Depth: "1", "Content-Type": "application/xml" },
     body: '<?xml version="1.0"?><d:propfind xmlns:d="DAV:"><d:prop><d:displayname/></d:prop></d:propfind>',
   });
-  if (!res.ok) return [];
+  if (!res.ok) throw new Error(`WebDAV PROPFIND failed: ${res.status} ${res.statusText}`);
   const xml = await res.text();
   const hrefs = [...xml.matchAll(/<[a-z]*:?href>([^<]+)<\/[a-z]*:?href>/gi)].map((m) =>
     decodeURIComponent(m[1]),
@@ -72,4 +76,9 @@ export async function list(cfg: WebdavConfig): Promise<string[]> {
   return hrefs
     .map((h) => h.replace(/\/$/, "").split("/").pop() ?? "")
     .filter((b) => b && !cfg.url.endsWith(b));
+}
+
+/** Forgiving variant of {@link listStrict}: any failure (unreachable, auth, etc.) yields []. */
+export async function list(cfg: WebdavConfig): Promise<string[]> {
+  return listStrict(cfg).catch(() => []);
 }
