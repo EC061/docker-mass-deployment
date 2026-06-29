@@ -224,49 +224,53 @@ export function scheduleScrubs(now = Date.now()): string[] {
   return scheduled;
 }
 
+// Re-fire guard for the nightly usage scan: long enough not to fire twice in one night's hour
+// window, short enough that day-to-day drift in when the hourly ticker lands never skips a night.
+const USAGE_SCAN_MIN_GAP_MS = 20 * 3600 * 1000;
+
 /**
- * Enqueue an old-file scan to each online lab whose last scheduled scan is older than the configured
- * interval. The agent walks the lab's datasets and reports counts back (stored in oldfile_scans), so
- * we only need to kick the scans off here. Returns the lab names a scan was scheduled for.
+ * Enqueue a per-student usage (du) scan to each online lab once a night, during the configured hour
+ * (in usageScanTimezone) so it runs off-peak. The agent measures each student's home/scratch/cold
+ * usage and reports it back on its heartbeat; we only kick the scans off here. Returns the lab names
+ * a scan was scheduled for. Container-level usage is NOT scheduled here — it is measured live on
+ * every heartbeat. Since the maintenance ticker runs hourly, the configured hour is a one-hour
+ * window; last_usage_scan guards against enqueuing the same lab twice in a night.
  */
-export function scheduleOldFileScans(now = Date.now()): string[] {
-  if (!getSetting("oldFileScanEnabled")) return [];
-  const intervalMs = getSetting("oldFileScanIntervalDays") * 86400 * 1000;
-  const thresholdDays = getSetting("oldFileThresholdDays");
+export function scheduleUsageScans(now = Date.now()): string[] {
+  if (!getSetting("usageScanEnabled")) return [];
+  // Gate on time-of-day: only proceed when the current hour matches. An invalid timezone falls back
+  // to "no gate" so a misconfiguration never silently disables the scan (the gap guard still bounds it).
+  const hour = hourInTimezone(now, getSetting("usageScanTimezone"));
+  if (hour !== null && hour !== getSetting("usageScanHour")) return [];
   const labs = db()
     .prepare(
-      `SELECT labs.id AS id, labs.name AS name, nodes.name AS node, labs.last_oldfile_scan AS last
+      `SELECT labs.id AS id, labs.name AS name, nodes.name AS node, labs.last_usage_scan AS last
        FROM labs JOIN nodes ON nodes.id = labs.node_id WHERE nodes.online = 1`,
     )
     .all() as { id: number; name: string; node: string; last: number | null }[];
   const scheduled: string[] = [];
   for (const lab of labs) {
-    if (lab.last && now - lab.last < intervalMs) continue;
+    if (lab.last && now - lab.last < USAGE_SCAN_MIN_GAP_MS) continue;
     const users = (db()
       .prepare(
         `SELECT students.username AS username FROM lab_members
          JOIN students ON students.id = lab_members.student_id WHERE lab_members.lab_id = ?`,
       )
       .all(lab.id) as { username: string }[]).map((r) => r.username);
-    enqueueTask(
-      lab.node,
-      "oldfiles.scan",
-      { lab: lab.name, users, threshold_days: thresholdDays },
-      "oldfile-scheduler",
-    );
-    db().prepare("UPDATE labs SET last_oldfile_scan = ? WHERE id = ?").run(now, lab.id);
+    enqueueTask(lab.node, "usage.scan", { lab: lab.name, users }, "usage-scheduler");
+    db().prepare("UPDATE labs SET last_usage_scan = ? WHERE id = ?").run(now, lab.id);
     scheduled.push(lab.name);
   }
   return scheduled;
 }
 
-/** Start an hourly ticker: prune old data, run scheduled backups, and kick off due ZFS scrubs. */
+/** Start an hourly ticker: prune old data, run scheduled backups, and kick off due scrubs + scans. */
 export function startMaintenance(): NodeJS.Timeout {
   pruneOldData();
   const tick = () => {
     pruneOldData();
     scheduleScrubs();
-    scheduleOldFileScans();
+    scheduleUsageScans();
     // backupAll persists the last-run timestamp, so the schedule survives restarts and the next slot
     // is computed off durable state rather than an in-memory counter.
     if (backupDue()) void backupAll();

@@ -159,22 +159,12 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       lab_id INTEGER REFERENCES labs(id) ON DELETE CASCADE,
       student_id INTEGER REFERENCES students(id) ON DELETE SET NULL,
-      pool TEXT NOT NULL,         -- fast|slow
+      pool TEXT NOT NULL,         -- fast|slow|docker
       used_bytes INTEGER NOT NULL,
       quota_bytes INTEGER,
       ts INTEGER NOT NULL
     );
     CREATE INDEX idx_storage_ts ON storage_samples(ts);
-
-    CREATE TABLE oldfile_scans (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      lab_id INTEGER REFERENCES labs(id) ON DELETE CASCADE,
-      student_id INTEGER REFERENCES students(id) ON DELETE SET NULL,
-      atime_count INTEGER, atime_bytes INTEGER,
-      mtime_count INTEGER, mtime_bytes INTEGER,
-      oldest INTEGER,
-      scanned_at INTEGER NOT NULL
-    );
 
     CREATE TABLE quota_alerts (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -261,6 +251,16 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     -- Last time the agent ran a per-student usage (du) scan for this lab, reported by its heartbeat.
     -- Drives the Stats page freshness ("updated X ago") and the conditional "Scan now" button.
     ALTER TABLE labs ADD COLUMN usage_scanned_at INTEGER;
+    `,
+  },
+  {
+    id: "0008_drop_oldfiles",
+    sql: `
+    -- The old-file scanning feature was removed. Drop its results table and repurpose the per-lab
+    -- schedule bookkeeping column for the nightly per-student usage (du) scan that replaced it
+    -- (last_usage_scan = last time the controller enqueued a nightly usage.scan for this lab).
+    DROP TABLE IF EXISTS oldfile_scans;
+    ALTER TABLE labs RENAME COLUMN last_oldfile_scan TO last_usage_scan;
     `,
   },
 ];

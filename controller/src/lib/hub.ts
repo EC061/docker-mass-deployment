@@ -13,7 +13,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { alertNodeOffline, alertTaskFailed, maybeAlertOnLog } from "./alerts";
 import { db } from "./db";
-import { ingestTelemetry, storeOldfileScan } from "./ingest";
+import { ingestTelemetry } from "./ingest";
 import { markLabStatus } from "./labs";
 import { verifyNodeAuth } from "./nodes";
 import { ackTask, claimTask, markTaskState, retryTask } from "./queue";
@@ -206,10 +206,6 @@ function handleResult(node: string, frame: any): void {
       }
     }
     if (labName) markLabStatus(labName, frame.ok ? "active" : "failed");
-  }
-  // Persist scan results into the oldfile_scans table.
-  if (frame.ok && frame.result?.results && frame.result?.lab && t?.action === "oldfiles.scan") {
-    storeOldfileScan(frame.result);
   }
   if (frame.logs) {
     db()

@@ -7,8 +7,8 @@ import { enqueueTask } from "@/lib/queue";
 
 /**
  * Trigger an on-demand per-student storage (du) scan for one lab. The agent runs it on the same
- * single-flight path as its background scan and reports the fresh per-student fast/cold/image
- * numbers on its next heartbeat. Mirrors the old-files rescanAction.
+ * single-flight path as its nightly scan and reports the fresh per-student home/fast/cold numbers
+ * on its next heartbeat. (Container-level usage is measured live every heartbeat, independent of this.)
  */
 export async function usageScanAction(formData: FormData) {
   const who = (await requireAdmin()).email;

@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import { ConfirmButton } from "../../_components/ConfirmButton";
 import { db } from "@/lib/db";
 import { takeFlash } from "@/lib/flash";
-import { ago, fmtBytes, pct } from "@/lib/format";
+import { fmtBytes, pct } from "@/lib/format";
 import { containerOptionsOf, getLab } from "@/lib/labs";
 import { listMembers } from "@/lib/students";
 import { TIB } from "@/lib/settings";
@@ -17,7 +17,6 @@ import {
   destroyLabAction,
   recreateContainerAction,
   removeMemberAction,
-  rescanAction,
   setQuotaAction,
   updateLabSettingsAction,
 } from "../actions";
@@ -86,15 +85,6 @@ export default async function LabDetail({
   const slow = samples(labId, "slow");
   const fastNow = fast.at(-1);
   const slowNow = slow.at(-1);
-
-  const scans = db()
-    .prepare(
-      `SELECT oldfile_scans.*, students.username AS username FROM oldfile_scans
-       LEFT JOIN students ON students.id = oldfile_scans.student_id
-       WHERE oldfile_scans.lab_id = ? ORDER BY oldfile_scans.id`,
-    )
-    .all(labId) as any[];
-  const lastScan = scans[0]?.scanned_at;
 
   return (
     <div className="space-y-4">
@@ -272,45 +262,6 @@ export default async function LabDetail({
                           Remove
                         </ConfirmButton>
                       </form>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Old files</h3>
-          <form action={rescanAction} className="flex items-center gap-3">
-            <input type="hidden" name="labId" value={lab.id} />
-            <Button type="submit">Rescan now</Button>
-            <span className="text-sm text-muted-foreground">
-              {lastScan ? `scanned ${ago(lastScan)}` : "never scanned"}
-            </span>
-          </form>
-          {scans.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No scan results yet.</p>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Scope</TableHead>
-                  <TableHead>Old by atime</TableHead>
-                  <TableHead>Old by mtime</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {scans.map((s) => (
-                  <TableRow key={s.id}>
-                    <TableCell>{s.username ?? "lab"}</TableCell>
-                    <TableCell>
-                      {s.atime_count} files · {fmtBytes(s.atime_bytes)}
-                    </TableCell>
-                    <TableCell>
-                      {s.mtime_count} files · {fmtBytes(s.mtime_bytes)}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -130,7 +130,7 @@ describe("pruneLogs caps", () => {
   });
 });
 
-describe("scheduleOldFileScans", () => {
+describe("scheduleUsageScans", () => {
   let bioId: number;
 
   beforeAll(() => {
@@ -156,34 +156,45 @@ describe("scheduleOldFileScans", () => {
   });
 
   it("does nothing when disabled", () => {
-    settings.setSetting("oldFileScanEnabled", false);
-    expect(maintenance.scheduleOldFileScans()).toEqual([]);
+    settings.setSetting("usageScanEnabled", false);
+    expect(maintenance.scheduleUsageScans()).toEqual([]);
     expect(enqueueTask).not.toHaveBeenCalled();
   });
 
-  it("scans due labs on online nodes; skips offline nodes and recently-scanned labs", () => {
-    settings.setSetting("oldFileScanEnabled", true);
-    settings.setSetting("oldFileScanIntervalDays", 1);
-    settings.setSetting("oldFileThresholdDays", 30);
-    const now = 1_000_000_000_000;
+  it("only runs during the configured hour", () => {
+    settings.setSetting("usageScanEnabled", true);
+    settings.setSetting("usageScanTimezone", "UTC");
+    settings.setSetting("usageScanHour", 1);
+    // 05:00 UTC -> hour 5, which does not match the configured hour 1, so nothing is scheduled.
+    expect(maintenance.scheduleUsageScans(Date.UTC(2001, 8, 9, 5, 0, 0))).toEqual([]);
+    expect(enqueueTask).not.toHaveBeenCalled();
+  });
 
-    const scheduled = maintenance.scheduleOldFileScans(now);
+  it("scans online-node labs once a night; skips offline nodes and respects the re-fire gap", () => {
+    settings.setSetting("usageScanEnabled", true);
+    // An invalid timezone bypasses the hour gate (hourInTimezone -> null), so this exercises the
+    // gap guard purely via the timestamps rather than wall-clock hour math.
+    settings.setSetting("usageScanTimezone", "Not/AZone");
+    const t0 = 1_000_000_000_000;
+
+    const scheduled = maintenance.scheduleUsageScans(t0);
     expect(scheduled).toContain("bio");
     expect(scheduled).not.toContain("offline-lab");
     expect(enqueueTask).toHaveBeenCalledWith(
       "on-1",
-      "oldfiles.scan",
-      { lab: "bio", users: ["alice"], threshold_days: 30 },
-      "oldfile-scheduler",
+      "usage.scan",
+      { lab: "bio", users: ["alice"] },
+      "usage-scheduler",
     );
-    const row = dbmod.db().prepare("SELECT last_oldfile_scan FROM labs WHERE id = ?").get(bioId) as {
-      last_oldfile_scan: number;
+    const row = dbmod.db().prepare("SELECT last_usage_scan FROM labs WHERE id = ?").get(bioId) as {
+      last_usage_scan: number;
     };
-    expect(row.last_oldfile_scan).toBe(now);
+    expect(row.last_usage_scan).toBe(t0);
 
-    // An hour later is still within the 1-day interval -> not due.
-    enqueueTask.mockClear();
-    expect(maintenance.scheduleOldFileScans(now + 3600 * 1000)).not.toContain("bio");
-    expect(enqueueTask).not.toHaveBeenCalled();
+    // An hour later is well within the ~20h re-fire gap -> bio is not scanned again.
+    expect(maintenance.scheduleUsageScans(t0 + 3600 * 1000)).not.toContain("bio");
+
+    // The next night (past the gap) -> due again.
+    expect(maintenance.scheduleUsageScans(t0 + 21 * 3600 * 1000)).toContain("bio");
   });
 });

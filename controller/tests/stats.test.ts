@@ -80,9 +80,9 @@ describe("buildStats", () => {
     expect(lab.students[1].docker).toBe(80);
     // No per-student fast/slow rows -> null.
     expect(lab.students[0].fast).toBeNull();
-    expect(lab.aggregate.docker).toBe(300);
-    expect(lab.aggregate.fast).toEqual({ used: 500, quota: 2000 });
-    expect(lab.aggregate.slow).toEqual({ used: 200, quota: 3000 });
+    expect(lab.live.image).toBe(300);
+    expect(lab.live.fast).toEqual({ used: 500, quota: 2000 });
+    expect(lab.live.slow).toEqual({ used: 200, quota: 3000 });
   });
 });
 

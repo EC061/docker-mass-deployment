@@ -40,9 +40,9 @@ beforeAll(async () => {
 
 describe("settings", () => {
   it("roundtrips and falls back to defaults", () => {
-    expect(settings.getSetting("oldFileThresholdDays")).toBe(30);
-    settings.setSetting("oldFileThresholdDays", 14);
-    expect(settings.getSetting("oldFileThresholdDays")).toBe(14);
+    expect(settings.getSetting("usageScanHour")).toBe(3);
+    settings.setSetting("usageScanHour", 5);
+    expect(settings.getSetting("usageScanHour")).toBe(5);
   });
 
   it("nextSshPort skips ports already assigned to labs", () => {
@@ -90,20 +90,6 @@ describe("telemetry ingestion", () => {
     expect(gpu[0].pid).toBe(42);
   });
 
-  it("stores old-file scan results mapped to students", () => {
-    ingest.storeOldfileScan({
-      lab: "bio",
-      results: [
-        { scope: "lab_fast_shared", username: null, atime_count: 3, atime_bytes: 30, mtime_count: 1, mtime_bytes: 10, oldest: 1 },
-        { scope: "user_scratch", username: "alice", atime_count: 5, atime_bytes: 50, mtime_count: 2, mtime_bytes: 20, oldest: 2 },
-      ],
-    });
-    const rows = db.db().prepare("SELECT * FROM oldfile_scans WHERE lab_id=(SELECT id FROM labs WHERE name='bio')").all() as any[];
-    expect(rows.length).toBe(2);
-    const aliceRow = rows.find((r) => r.student_id !== null);
-    expect(aliceRow.atime_count).toBe(5);
-  });
-
   it("records per-lab usage-scan time and only moves it forward", () => {
     ingest.ingestTelemetry("gpu-1", {
       datasets: [],
@@ -140,5 +126,42 @@ describe("telemetry ingestion", () => {
     expect(dockerSamples.length).toBe(2);
     const alerts = db.db().prepare("SELECT * FROM quota_alerts WHERE pool='docker'").all() as any[];
     expect(alerts.length).toBe(0);
+  });
+
+  it("lets a changed scan-derived value bypass the 5-min throttle (so a fresh scan lands)", () => {
+    const dockerRows = () =>
+      (db.db().prepare(
+        "SELECT COUNT(*) AS n FROM storage_samples WHERE pool='docker' AND lab_id=(SELECT id FROM labs WHERE name='bio') AND student_id IS NULL",
+      ).get() as any).n as number;
+    const fastRows = () =>
+      (db.db().prepare(
+        "SELECT COUNT(*) AS n FROM storage_samples WHERE pool='fast' AND lab_id=(SELECT id FROM labs WHERE name='bio') AND student_id IS NULL",
+      ).get() as any).n as number;
+
+    const dockerBefore = dockerRows();
+    const fastBefore = fastRows();
+
+    // A changed docker (writable-layer) value reported moments later must store, even though the
+    // previous sample is well within the throttle window — this is the post-scan refresh.
+    ingest.ingestTelemetry("gpu-1", {
+      datasets: [{ pool: "docker", dataset: "docker/labs/bio", used_bytes: 12345, quota_bytes: null }],
+      gpu_processes: [],
+    });
+    expect(dockerRows()).toBe(dockerBefore + 1);
+
+    // Re-reporting the same value (the agent re-sends its cached number every heartbeat) must NOT
+    // create another row — store on change only, so the series doesn't bloat between scans.
+    ingest.ingestTelemetry("gpu-1", {
+      datasets: [{ pool: "docker", dataset: "docker/labs/bio", used_bytes: 12345, quota_bytes: null }],
+      gpu_processes: [],
+    });
+    expect(dockerRows()).toBe(dockerBefore + 1);
+
+    // A live lab-level fast value (ZFS metadata) that drifts within the window stays throttled.
+    ingest.ingestTelemetry("gpu-1", {
+      datasets: [{ pool: "fast", dataset: "fast/labs/bio", used_bytes: 4242, quota_bytes: 2199023255552 }],
+      gpu_processes: [],
+    });
+    expect(fastRows()).toBe(fastBefore);
   });
 });
