@@ -5,6 +5,8 @@ import { revalidatePath } from "next/cache";
 import { sendTestEmail } from "@/lib/mailer";
 import { broadcastGpuPolicy, setSetting, TIB } from "@/lib/settings";
 import { requireAdmin } from "@/lib/auth";
+import { db } from "@/lib/db";
+import { pruneLogs } from "@/lib/maintenance";
 
 export async function saveStorageSettingsAction(formData: FormData) {
   await requireAdmin();
@@ -90,8 +92,22 @@ export async function saveAlertSettingsAction(formData: FormData) {
   const grace = Number(formData.get("nodeOfflineGraceSeconds"));
   setSetting("nodeOfflineGraceSeconds", Number.isFinite(grace) && grace >= 0 ? Math.trunc(grace) : 60);
   setSetting("logRetentionDays", Number(formData.get("logRetentionDays")) || 30);
+  // Log rotation caps: 0 (or invalid) means "no cap". Apply them right away so the admin sees the
+  // effect immediately rather than waiting for the next hourly maintenance tick.
+  const maxEntries = Number(formData.get("logMaxEntries"));
+  setSetting("logMaxEntries", Number.isFinite(maxEntries) && maxEntries > 0 ? Math.trunc(maxEntries) : 0);
+  const maxSizeMb = Number(formData.get("logMaxSizeMb"));
+  setSetting("logMaxSizeMb", Number.isFinite(maxSizeMb) && maxSizeMb > 0 ? maxSizeMb : 0);
   setSetting("quotaAlertPct", Number(formData.get("quotaAlertPct")) || 90);
+  pruneLogs();
   revalidatePath("/settings");
+}
+
+/** Purge every row from the `logs` table (the "Delete all logs" button). */
+export async function clearLogsAction() {
+  await requireAdmin();
+  const n = db().prepare("DELETE FROM logs").run().changes;
+  redirect(`/settings?logs=${encodeURIComponent(`Deleted ${n.toLocaleString()} log ${n === 1 ? "entry" : "entries"}`)}`);
 }
 
 export async function saveGpuPolicyAction(formData: FormData) {

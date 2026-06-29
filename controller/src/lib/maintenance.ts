@@ -8,11 +8,82 @@ import { db } from "./db";
 import { enqueueTask } from "./queue";
 import { getSetting } from "./settings";
 
+// Approximate byte size of a single `logs` row's textual content. SQLite has no cheap per-table
+// size, so we sum the text-column lengths plus a fixed estimate for the int columns + row overhead.
+// Used for the size-based rotation cap and the "~X stored" readout in settings.
+const LOG_ROW_BYTES = `(
+  LENGTH(msg)
+  + LENGTH(COALESCE(detail, ''))
+  + LENGTH(COALESCE(source, ''))
+  + LENGTH(COALESCE(node, ''))
+  + LENGTH(COALESCE(lab, ''))
+  + LENGTH(COALESCE(user, ''))
+  + LENGTH(COALESCE(task_id, ''))
+  + 48
+)`;
+
+/** Approximate total textual size (bytes) of the `logs` table — for the size cap and the UI. */
+export function logsContentBytes(): number {
+  const row = db().prepare(`SELECT COALESCE(SUM(${LOG_ROW_BYTES}), 0) AS bytes FROM logs`).get() as {
+    bytes: number;
+  };
+  return row.bytes;
+}
+
+/**
+ * Enforce the three log-rotation caps on the `logs` table, newest-wins, and return the number of
+ * rows removed:
+ *   - age:   drop rows older than logRetentionDays
+ *   - count: keep only the newest logMaxEntries rows
+ *   - size:  keep only the newest rows whose cumulative content size fits logMaxSizeMb
+ * A cap of 0 disables that dimension. Row recency is taken from the autoincrement id (true arrival
+ * order, immune to per-node clock skew) for the count/size caps; the age cap uses the agent ts.
+ */
+export function pruneLogs(now = Date.now()): number {
+  let removed = 0;
+
+  const retentionDays = getSetting("logRetentionDays");
+  if (retentionDays > 0) {
+    const cutoff = now - retentionDays * 86400 * 1000;
+    removed += db().prepare("DELETE FROM logs WHERE ts < ?").run(cutoff).changes;
+  }
+
+  const maxEntries = getSetting("logMaxEntries");
+  if (maxEntries > 0) {
+    // OFFSET lands on the id of the (maxEntries+1)-th newest row; drop it and everything older.
+    // When there are fewer rows than the cap the subquery is NULL, so `id <= NULL` deletes nothing.
+    removed += db()
+      .prepare("DELETE FROM logs WHERE id <= (SELECT id FROM logs ORDER BY id DESC LIMIT 1 OFFSET ?)")
+      .run(maxEntries).changes;
+  }
+
+  const maxBytes = getSetting("logMaxSizeMb") * 1024 * 1024;
+  if (maxBytes > 0) {
+    // Walk newest -> oldest accumulating row size; once the running total passes the cap, every
+    // remaining (older) row is surplus.
+    removed += db()
+      .prepare(
+        `DELETE FROM logs WHERE id IN (
+           SELECT id FROM (
+             SELECT id, SUM(${LOG_ROW_BYTES}) OVER (ORDER BY id DESC) AS cum FROM logs
+           ) WHERE cum > ?
+         )`,
+      )
+      .run(maxBytes).changes;
+  }
+
+  return removed;
+}
+
 export function pruneOldData(): { logs: number; gpuEvents: number } {
-  const retentionMs = getSetting("logRetentionDays") * 86400 * 1000;
-  const cutoff = Date.now() - retentionMs;
-  const logs = db().prepare("DELETE FROM logs WHERE ts < ?").run(cutoff).changes;
-  const gpuEvents = db().prepare("DELETE FROM gpu_events WHERE ts < ?").run(cutoff).changes;
+  const now = Date.now();
+  const logs = pruneLogs(now);
+  const retentionDays = getSetting("logRetentionDays");
+  const gpuEvents =
+    retentionDays > 0
+      ? db().prepare("DELETE FROM gpu_events WHERE ts < ?").run(now - retentionDays * 86400 * 1000)
+          .changes
+      : 0;
   return { logs, gpuEvents };
 }
 

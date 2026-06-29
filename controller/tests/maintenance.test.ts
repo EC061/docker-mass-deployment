@@ -72,6 +72,64 @@ describe("pruneOldData", () => {
   });
 });
 
+describe("pruneLogs caps", () => {
+  const insLog = (msg: string, ts: number) =>
+    dbmod
+      .db()
+      .prepare("INSERT INTO logs (node, level, source, msg, ts) VALUES ('n','INFO','s',?,?)")
+      .run(msg, ts);
+
+  beforeEach(() => {
+    dbmod.db().prepare("DELETE FROM logs").run();
+    settings.setSetting("logRetentionDays", 0); // isolate count/size caps from the age cap
+    settings.setSetting("logMaxEntries", 0);
+    settings.setSetting("logMaxSizeMb", 0);
+  });
+
+  it("keeps only the newest logMaxEntries rows", () => {
+    settings.setSetting("logMaxEntries", 3);
+    for (let i = 0; i < 10; i++) insLog(`m${i}`, 1000 + i);
+    const removed = maintenance.pruneLogs();
+    expect(removed).toBe(7);
+    const rows = dbmod.db().prepare("SELECT msg FROM logs ORDER BY id").all() as { msg: string }[];
+    expect(rows.map((r) => r.msg)).toEqual(["m7", "m8", "m9"]);
+  });
+
+  it("does nothing when row count is within the entry cap", () => {
+    settings.setSetting("logMaxEntries", 5);
+    for (let i = 0; i < 3; i++) insLog(`m${i}`, 1000 + i);
+    expect(maintenance.pruneLogs()).toBe(0);
+    const n = (dbmod.db().prepare("SELECT COUNT(*) AS n FROM logs").get() as { n: number }).n;
+    expect(n).toBe(3);
+  });
+
+  it("keeps the newest rows within the size cap and drops the rest", () => {
+    const big = "x".repeat(1000); // ~1 KB per row
+    for (let i = 0; i < 20; i++) insLog(`${i}-${big}`, 1000 + i);
+    settings.setSetting("logMaxSizeMb", 5 / 1024); // ~5 KB cap
+    const removed = maintenance.pruneLogs();
+    expect(removed).toBeGreaterThan(0);
+    expect(maintenance.logsContentBytes()).toBeLessThanOrEqual(5 * 1024);
+    // The most recent row always survives.
+    const newest = dbmod.db().prepare("SELECT msg FROM logs ORDER BY id DESC LIMIT 1").get() as {
+      msg: string;
+    };
+    expect(newest.msg.startsWith("19-")).toBe(true);
+  });
+
+  it("applies all three caps together, removing the union of surplus rows", () => {
+    settings.setSetting("logRetentionDays", 30);
+    settings.setSetting("logMaxEntries", 5);
+    const now = Date.now();
+    insLog("ancient", now - 40 * 86400 * 1000); // dropped by age
+    for (let i = 0; i < 8; i++) insLog(`r${i}`, now - i * 1000); // newest 5 kept by count
+    maintenance.pruneLogs(now);
+    const rows = dbmod.db().prepare("SELECT msg FROM logs").all() as { msg: string }[];
+    expect(rows).toHaveLength(5);
+    expect(rows.some((r) => r.msg === "ancient")).toBe(false);
+  });
+});
+
 describe("scheduleOldFileScans", () => {
   let bioId: number;
 
