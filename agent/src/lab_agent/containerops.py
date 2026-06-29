@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import coldstore, maintenance_state
+from . import coldstore, maintenance_state, usagereport
 from .config import AgentConfig
 from .executors import docker, zfs
 from .executors.docker import ContainerOptions, Mounts
@@ -17,11 +17,14 @@ from .system import detect_capabilities
 
 
 def _mounts(cfg: AgentConfig, lab: str) -> Mounts:
+    # ensure_labquota_dirs creates the root-owned status dir on the host before container start,
+    # so the read-only /run/labquota bind has a source.
     return Mounts(
         fast_shared=zfs.get_mountpoint(lab_fast_shared(cfg, lab)),
         slow_shared=coldstore.shared_mount(cfg, lab),
         fast_users=zfs.get_mountpoint(lab_fast_users(cfg, lab)),
         slow_users=coldstore.users_mount(cfg, lab),
+        labquota=usagereport.ensure_labquota_dirs(cfg, lab),
     )
 
 

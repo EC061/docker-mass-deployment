@@ -21,12 +21,13 @@ import os
 import sys
 import time
 
-LABQUOTA_DIR = os.environ.get("LABQUOTA_DIR", "/labusers/fast/.labquota")
+# The agent publishes usage.json/status.json into a root-owned host dir bind-mounted READ-ONLY here.
+LABQUOTA_DIR = os.environ.get("LABQUOTA_DIR", "/run/labquota")
 USAGE_FILE = os.path.join(LABQUOTA_DIR, "usage.json")
 STATUS_FILE = os.path.join(LABQUOTA_DIR, "status.json")
-# The fast `users` mount (parent of the read-only .labquota dir). Each student's refresh marker lives
-# in their OWN scratch dir under here — never in a shared writable directory.
-USERS_DIR = os.path.dirname(LABQUOTA_DIR)
+# The fast `users` mount: each student's refresh marker lives in their OWN scratch dir under here
+# (/labusers/fast/<user>/.labquota-refresh) — never in a shared writable directory.
+USERS_DIR = os.environ.get("LABQUOTA_USERS_DIR", "/labusers/fast")
 REFRESH_MARKER = ".labquota-refresh"
 
 FRESH_MS = 60 * 60 * 1000  # a docker scan younger than this is "fresh"

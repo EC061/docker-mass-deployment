@@ -1,18 +1,19 @@
 """Publish a per-lab storage-usage snapshot into each lab container, for the `labquota` command.
 
-The agent (root, on the host) writes a small JSON snapshot into a directory bind-mounted into the
-lab container, so an unprivileged student can read their lab's whole usage breakdown without any
-network channel:
+The agent (root, on the host) writes a small JSON snapshot into a ROOT-OWNED directory OUTSIDE any
+student-writable space (under the agent state dir), bind-mounted READ-ONLY into the lab container at
+/run/labquota, so an unprivileged student can read their lab's whole usage breakdown without any
+network channel and without the agent ever writing into a student-writable mount:
 
-    <fast_users_mp>/.labquota/usage.json   (0644, root)  -> /labusers/fast/.labquota/usage.json
-    <fast_users_mp>/.labquota/status.json  (0644, root)  -> live scan progress
+    <state_dir>/labquota/<lab>/usage.json   (0644, root)  -> /run/labquota/usage.json  (ro)
+    <state_dir>/labquota/<lab>/status.json  (0644, root)  -> /run/labquota/status.json (ro)
 
-Both files live in a root-owned directory inside a root-owned dataset, so students can read them but
-cannot modify, delete, or replace them with symlinks. There is **no** shared writable directory: a
-student requests a fresh docker scan by touching ``.labquota-refresh`` in their *own* scratch
-dataset (see ``marker_path``), which the agent stats with lstat and only honors if it is a regular
-file. This keeps every student-writable surface inside that student's own quota and out of anything
-the agent parses.
+Because the directory is root-only and the bind is read-only, students can read these files but
+cannot modify, delete, or replace them with symlinks, and root never follows a student-planted link.
+There is **no** shared writable directory: a student requests a fresh docker scan by touching
+``.labquota-refresh`` in their *own* scratch dataset (see ``marker_path``), which the agent stats
+with lstat and only honors if it is a regular file. Every student-writable surface stays inside that
+student's own quota and out of anything the agent parses.
 
 The snapshot has two kinds of numbers:
 
@@ -40,7 +41,6 @@ from .executors import docker, users, zfs
 from .paths import lab_fast_users
 from .protocol import now_ms
 
-LABQUOTA_DIRNAME = ".labquota"
 USAGE_FILE = "usage.json"
 STATUS_FILE = "status.json"
 # A student asks for a fresh docker scan by touching this file in their OWN scratch dataset
@@ -402,9 +402,16 @@ def _fast_users_mp(cfg: AgentConfig, lab: str) -> str:
     return zfs.get_mountpoint(lab_fast_users(cfg, lab))
 
 
+# Container path the labquota status dir is bind-mounted read-only at (see docker.build_run_args).
+CONTAINER_LABQUOTA_DIR = "/run/labquota"
+
+
 def labquota_dir(cfg: AgentConfig, lab: str) -> str:
-    """Host path of the lab's .labquota directory (root-owned; students can read, not write)."""
-    return os.path.join(_fast_users_mp(cfg, lab), LABQUOTA_DIRNAME)
+    """Host path of the lab's labquota status directory. This is a ROOT-OWNED directory OUTSIDE any
+    student-writable space (under the agent state dir, /var/lib/lab-agent/labquota/<lab>), bind-
+    mounted read-only into the container at /run/labquota. The agent never writes into the student-
+    writable ZFS mount, so a student can't plant a symlink to redirect a root write."""
+    return os.path.join(os.path.dirname(cfg.state_db) or "/var/lib/lab-agent", "labquota", lab)
 
 
 def marker_path(cfg: AgentConfig, lab: str, user: str) -> str:
@@ -413,11 +420,9 @@ def marker_path(cfg: AgentConfig, lab: str, user: str) -> str:
 
 
 def ensure_labquota_dirs(cfg: AgentConfig, lab: str) -> str:
-    """Create the root-owned .labquota/ directory (0755). Returns the base path.
-
-    There is intentionally no world-writable directory here: students signal a refresh from their
-    own dataset (see ``marker_path``), so nothing the agent reads is student-writable.
-    """
+    """Create the root-owned status directory (0755 so the container can read it). Returns the base
+    path. Nothing the agent reads is student-writable: students signal a refresh from their own
+    dataset (see ``marker_path``), and the status dir is bind-mounted read-only."""
     base = labquota_dir(cfg, lab)
     os.makedirs(base, exist_ok=True)
     os.chmod(base, 0o755)
@@ -425,15 +430,18 @@ def ensure_labquota_dirs(cfg: AgentConfig, lab: str) -> str:
 
 
 def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
-    """Write JSON atomically; on failure (e.g. lab quota full) leave the previous file intact."""
+    """Write JSON atomically and WITHOUT following symlinks (O_NOFOLLOW), leaving the previous file
+    intact on failure. The dir is root-only, but O_NOFOLLOW is defence-in-depth so a symlink at
+    the tmp/target path can never redirect the write."""
     tmp = f"{path}.tmp"
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(payload, fh)
         os.chmod(tmp, 0o644)
         os.replace(tmp, path)
     except OSError:
-        # A student filling the lab quota can fail the write; keep the last good file, drop the tmp.
+        # A failed write (symlink planted, disk full) keeps the last good file; drop the tmp.
         try:
             os.unlink(tmp)
         except OSError:

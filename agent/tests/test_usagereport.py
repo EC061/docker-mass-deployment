@@ -125,7 +125,7 @@ def test_list_lab_students_from_fast_users_mount(tmp_path, monkeypatch):
     monkeypatch.setattr(usagereport.zfs, "get_mountpoint", lambda ds: str(tmp_path))
     (tmp_path / "alice").mkdir()
     (tmp_path / "bob").mkdir()
-    (tmp_path / usagereport.LABQUOTA_DIRNAME).mkdir()  # root-owned, must be skipped
+    (tmp_path / ".hidden").mkdir()  # dotfile, not a valid username, skipped
     (tmp_path / "not a user").mkdir()  # invalid username, skipped
     assert usagereport.list_lab_students(cfg(), "bio") == ["alice", "bob"]
 
@@ -263,8 +263,8 @@ def test_marker_ignores_symlink_and_directory(tmp_path, monkeypatch):
 
 
 def test_atomic_write_keeps_old_file_on_failure(tmp_path, monkeypatch):
-    monkeypatch.setattr(usagereport.zfs, "get_mountpoint", lambda ds: str(tmp_path))
-    c = cfg()
+    # The labquota status dir lives under the agent state dir, NOT a student-writable mount.
+    c = cfg(state_db=str(tmp_path / "state.db"))
     usagereport.ensure_labquota_dirs(c, "bio")
     usagereport.publish_snapshot(c, "bio", {"lab": "bio", "v": 1})
     # Simulate the write failing (e.g. lab quota full) mid-serialization.
@@ -274,7 +274,7 @@ def test_atomic_write_keeps_old_file_on_failure(tmp_path, monkeypatch):
     monkeypatch.setattr(usagereport.json, "dump", boom)
     with pytest.raises(OSError):
         usagereport.publish_snapshot(c, "bio", {"lab": "bio", "v": 2})
-    base = tmp_path / usagereport.LABQUOTA_DIRNAME
+    base = tmp_path / "labquota" / "bio"
     # The previous good snapshot survives and no stray .tmp is left behind.
     import json as _json
     assert _json.loads((base / usagereport.USAGE_FILE).read_text())["v"] == 1
@@ -282,12 +282,11 @@ def test_atomic_write_keeps_old_file_on_failure(tmp_path, monkeypatch):
 
 
 def test_publish_and_status_write(tmp_path, monkeypatch):
-    monkeypatch.setattr(usagereport.zfs, "get_mountpoint", lambda ds: str(tmp_path))
-    c = cfg()
+    c = cfg(state_db=str(tmp_path / "state.db"))
     usagereport.ensure_labquota_dirs(c, "bio")
     usagereport.publish_snapshot(c, "bio", {"lab": "bio", "hello": 1})
     usagereport.write_status(c, "bio", {"status": "running", "done": 1, "total": 3})
-    base = tmp_path / usagereport.LABQUOTA_DIRNAME
+    base = tmp_path / "labquota" / "bio"
     assert (base / usagereport.USAGE_FILE).exists()
     assert (base / usagereport.STATUS_FILE).exists()
 
