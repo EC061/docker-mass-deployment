@@ -11,13 +11,25 @@ import { usageScanAction } from "./actions";
 export const dynamic = "force-dynamic";
 
 /**
- * Per-lab scan control. The admin always has a "Scan now" button to force a fresh per-student usage
- * (du) scan, and whenever one is in flight a "scanning…" indicator is shown alongside it (the
- * page-level <ScanAutoRefresh> polls so that indicator clears on its own when the agent reports the
- * scan done). The freshness ("updated Xm ago") is always shown, tinted when the data is stale.
- * The button enqueues a usage.scan task on the lab's node.
+ * Per-lab scan control. While a per-student usage (du) scan is in flight the "Scan now" button is
+ * replaced by a live progress indicator; it reappears only once the scan is genuinely done — i.e.
+ * the agent has finished *and* the fresh numbers have landed (see `scanPending` in lib/stats). The
+ * page-level <ScanAutoRefresh> polls while any scan is pending, so the swap back to the button (and
+ * the updated table) happens on its own. When idle, the freshness ("updated Xm ago") is shown,
+ * tinted when stale. The button enqueues a usage.scan task on the lab's node.
  */
 function ScanControl({ lab }: { lab: LabStats }) {
+  if (lab.scanPending) {
+    return (
+      <div className="flex items-center gap-2 text-xs text-muted-foreground" aria-live="polite">
+        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+        <span>Scanning…</span>
+        <span className="relative h-1 w-24 overflow-hidden rounded-full bg-muted" role="progressbar">
+          <span className="absolute inset-y-0 left-0 w-1/3 rounded-full bg-primary animate-indeterminate" />
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <form action={usageScanAction}>
@@ -26,12 +38,7 @@ function ScanControl({ lab }: { lab: LabStats }) {
           Scan now
         </SubmitButton>
       </form>
-      {lab.scanPending && (
-        <span className="inline-flex items-center gap-1.5 text-muted-foreground" aria-live="polite">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" /> scanning…
-        </span>
-      )}
-      <span className={lab.scanStale && !lab.scanPending ? "text-amber-500" : "text-muted-foreground"}>
+      <span className={lab.scanStale ? "text-amber-500" : "text-muted-foreground"}>
         {lab.usageScannedAt ? `updated ${ago(lab.usageScannedAt)}` : "never scanned"}
       </span>
     </div>
