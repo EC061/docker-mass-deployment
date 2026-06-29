@@ -15,7 +15,11 @@ import { alertNodeOffline, alertTaskFailed, maybeAlertOnLog } from "./alerts";
 import { db } from "./db";
 import { env } from "./env";
 import { ingestTelemetry } from "./ingest";
-import { markLabStatus } from "./labs";
+import {
+  confirmPlacementDestroyed,
+  markPlacementMemberState,
+  markPlacementStateByLabNode,
+} from "./placements";
 import { verifyNodeAuth } from "./nodes";
 import { ackTask, claimTask, markTaskState, retryTask } from "./queue";
 import { getSetting } from "./settings";
@@ -157,6 +161,16 @@ function drainNode(node: string, ws: WebSocket): void {
 
 // ----------------------------------------------------------------- ingestion
 
+/** Parse a task_log params JSON blob into the few fields the result handler needs. */
+function safeParams(params: string | null): { lab?: string; username?: string } {
+  if (!params) return {};
+  try {
+    return JSON.parse(params) as { lab?: string; username?: string };
+  } catch {
+    return {};
+  }
+}
+
 function ingestFrame(node: string, frame: any): void {
   switch (frame.type) {
     case "result":
@@ -193,20 +207,30 @@ function handleResult(node: string, frame: any): void {
   if (!frame.ok && t) {
     alertTaskFailed(t.node, t.action, frame.error ?? "unknown error");
   }
-  // Lab provisioning lifecycle: a lab is created in 'provisioning' and stays there until its
-  // lab.create task reports back. Flip it to 'active' on success or 'failed' on error so it no
-  // longer reads as permanently "provisioning". The lab name comes from the task params (the result
-  // payload also carries it, but params is always present even on failure).
-  if (t?.action === "lab.create") {
-    let labName: string | undefined = frame.result?.lab;
-    if (!labName && t.params) {
-      try {
-        labName = (JSON.parse(t.params) as { lab?: string }).lab;
-      } catch {
-        labName = undefined;
-      }
+  // Placement/member lifecycle. A task's lab/user come from its params (always present, even on
+  // failure); `node` is the authenticated connection the result arrived on (== the task's node).
+  if (t) {
+    const params = safeParams(t.params);
+    const labName = (frame.result?.lab as string | undefined) ?? params.lab;
+    if (labName && t.action === "lab.create") {
+      markPlacementStateByLabNode(
+        labName,
+        node,
+        frame.ok ? "active" : "failed",
+        frame.ok ? undefined : (frame.error ?? "lab.create failed"),
+      );
+    } else if (labName && t.action === "lab.destroy") {
+      if (frame.ok) confirmPlacementDestroyed(labName, node);
+      else markPlacementStateByLabNode(labName, node, "deleting", frame.error ?? "lab.destroy failed");
+    } else if (labName && params.username && t.action === "student.add") {
+      markPlacementMemberState(
+        labName,
+        node,
+        params.username,
+        frame.ok ? "active" : "failed",
+        frame.ok ? undefined : (frame.error ?? "student.add failed"),
+      );
     }
-    if (labName) markLabStatus(labName, frame.ok ? "active" : "failed");
   }
   if (frame.logs) {
     db()
@@ -292,12 +316,13 @@ async function emailGpuEvent(
 ): Promise<void> {
   if (!p.user || (p.state !== "warned" && p.state !== "killed")) return;
   // Only email a student the sending node actually hosts — a node can't target arbitrary students.
+  // "Hosts" = the student is a roster member of a lab that has a placement on this node.
   const owns = db()
     .prepare(
       `SELECT 1 FROM students
          JOIN lab_members ON lab_members.student_id = students.id
-         JOIN labs ON labs.id = lab_members.lab_id
-         JOIN nodes ON nodes.id = labs.node_id
+         JOIN lab_placements ON lab_placements.lab_id = lab_members.lab_id
+         JOIN nodes ON nodes.id = lab_placements.node_id
         WHERE students.username = ? AND nodes.name = ? LIMIT 1`,
     )
     .get(p.user, node);

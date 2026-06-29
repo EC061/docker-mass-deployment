@@ -26,12 +26,14 @@ describe("Server Actions reject unauthenticated callers", () => {
   let students: typeof import("../src/app/(app)/students/actions.js");
   let settings: typeof import("../src/app/(app)/settings/actions.js");
   let backups: typeof import("../src/app/(app)/backups/actions.js");
+  let stats: typeof import("../src/app/(app)/stats/actions.js");
 
   beforeAll(async () => {
     labs = await import("../src/app/(app)/labs/actions.js");
     students = await import("../src/app/(app)/students/actions.js");
     settings = await import("../src/app/(app)/settings/actions.js");
     backups = await import("../src/app/(app)/backups/actions.js");
+    stats = await import("../src/app/(app)/stats/actions.js");
   });
 
   const fd = () => new FormData();
@@ -39,11 +41,15 @@ describe("Server Actions reject unauthenticated callers", () => {
   it("every gated action redirects to /login with no session", async () => {
     const calls: Array<Promise<unknown>> = [
       labs.createLabAction(fd()),
-      labs.setQuotaAction(fd()),
+      labs.updateLabMetaAction(fd()),
       labs.destroyLabAction(fd()),
-      labs.recreateContainerAction(fd()),
+      labs.grantNodeAccessAction(fd()),
+      labs.setPlacementQuotaAction(fd()),
+      labs.recreatePlacementAction(fd()),
+      labs.removePlacementAction(fd()),
       labs.addMemberAction(fd()),
       labs.removeMemberAction(fd()),
+      stats.usageScanAction(fd()),
       students.importStudentsAction({ labId: 1, rows: [] }),
       settings.saveStorageSettingsAction(fd()),
       settings.saveUsageScanSettingsAction(fd()),

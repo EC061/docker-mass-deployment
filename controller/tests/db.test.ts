@@ -53,12 +53,13 @@ describe("migrations", () => {
     expect(cols).toContain("scrub_status");
   });
 
-  it("enforces foreign keys (orphan lab insert rejected)", () => {
+  it("enforces foreign keys (orphan placement insert rejected)", () => {
     expect(() =>
       dbmod
         .db()
         .prepare(
-          "INSERT INTO labs (name, node_id, fast_quota_bytes, slow_quota_bytes, image, created_at) VALUES ('orphan', 999999, 1, 1, 'i', 0)",
+          `INSERT INTO lab_placements (lab_id, node_id, fast_quota_bytes, ssh_port, image, created_at, updated_at)
+           VALUES (999999, 999999, 1, 1, 'i', 0, 0)`,
         )
         .run(),
     ).toThrow();

@@ -304,16 +304,4 @@ export function setSetting<K extends keyof Settings>(key: K, value: Settings[K])
     .run(key, JSON.stringify(toStore));
 }
 
-/** Pick the lowest SSH port in range not already assigned to a lab. */
-export function nextSshPort(): number {
-  const s = getSettings();
-  const used = new Set(
-    (db().prepare("SELECT ssh_port FROM labs WHERE ssh_port IS NOT NULL").all() as {
-      ssh_port: number;
-    }[]).map((r) => r.ssh_port),
-  );
-  for (let p = s.sshPortStart; p <= s.sshPortEnd; p++) {
-    if (!used.has(p)) return p;
-  }
-  throw new Error("No free SSH port in the configured range");
-}
+// SSH-port allocation is per node (placements own the port) — see nextSshPortForNode in placements.ts.

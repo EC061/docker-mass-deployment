@@ -21,17 +21,13 @@ beforeAll(async () => {
   settings = await import("../src/lib/settings");
   ann = await import("../src/lib/announcements");
   const d = dbmod.db();
-  d.prepare("INSERT INTO nodes (name, online, created_at) VALUES ('n1', 1, 0)").run();
-  const nodeId = (d.prepare("SELECT id FROM nodes WHERE name='n1'").get() as { id: number }).id;
   // Two students with email, one without; one duplicate email shared with a PI.
   d.prepare("INSERT INTO students (username, email, created_at) VALUES ('alice','alice@uga.edu',0)").run();
   d.prepare("INSERT INTO students (username, email, created_at) VALUES ('bob','shared@uga.edu',0)").run();
   d.prepare("INSERT INTO students (username, email, created_at) VALUES ('carol',NULL,0)").run();
   // Two labs, distinct PIs (one PI email duplicated across labs, one shared with student bob).
   const lab = (name: string, pi: string | null) =>
-    d.prepare(
-      "INSERT INTO labs (name, node_id, pi_email, fast_quota_bytes, slow_quota_bytes, image, status, created_at) VALUES (?,?,?,0,0,'img','active',0)",
-    ).run(name, nodeId, pi);
+    d.prepare("INSERT INTO labs (name, pi_email, created_at, updated_at) VALUES (?,?,0,0)").run(name, pi);
   lab("labA", "pi1@uga.edu");
   lab("labB", "pi1@uga.edu"); // duplicate PI
   lab("labC", "shared@uga.edu"); // also a student email

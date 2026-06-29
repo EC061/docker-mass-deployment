@@ -12,13 +12,23 @@ process.env.SESSION_SECRET = "test-session-secret-test-session";
 let dbmod: typeof import("../src/lib/db");
 let stats: typeof import("../src/lib/stats");
 
-function sample(labId: number, studentId: number | null, pool: string, used: number, ts: number, quota: number | null = null) {
+/** Create a logical lab + a single placement on node 1 (a lab "block" on the Stats page). */
+function mkLabPlacement(labId: number, name: string, placementId: number, sshPort: number) {
+  const d = dbmod.db();
+  d.prepare("INSERT INTO labs (id, name, created_at, updated_at) VALUES (?, ?, 0, 0)").run(labId, name);
+  d.prepare(
+    `INSERT INTO lab_placements (id, lab_id, node_id, fast_quota_bytes, cold_quota_bytes, ssh_port, image, state, created_at, updated_at)
+     VALUES (?, ?, 1, 2000, 3000, ?, 'img-x', 'active', 0, 0)`,
+  ).run(placementId, labId, sshPort);
+}
+
+function sample(placementId: number, studentId: number | null, pool: string, used: number, ts: number, quota: number | null = null) {
   dbmod
     .db()
     .prepare(
-      "INSERT INTO storage_samples (lab_id, student_id, pool, used_bytes, quota_bytes, ts) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT INTO storage_samples (placement_id, student_id, pool, used_bytes, quota_bytes, ts) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(labId, studentId, pool, used, quota, ts);
+    .run(placementId, studentId, pool, used, quota, ts);
 }
 
 beforeAll(async () => {
@@ -26,12 +36,9 @@ beforeAll(async () => {
   stats = await import("../src/lib/stats");
   const d = dbmod.db();
   d.prepare("INSERT INTO nodes (id, name, online, created_at) VALUES (1, 'node-a', 1, 0)").run();
-  d.prepare(
-    `INSERT INTO labs (id, name, node_id, fast_quota_bytes, slow_quota_bytes, image, status, created_at)
-     VALUES (1, 'bio', 1, 2000, 3000, 'img-x', 'active', 0)`,
-  ).run();
-  d.prepare("INSERT INTO students (id, username, name, created_at) VALUES (1, 'alice', 'Alice A.', 0)").run();
-  d.prepare("INSERT INTO students (id, username, name, created_at) VALUES (2, 'bob', 'Bob B.', 0)").run();
+  mkLabPlacement(1, "bio", 1, 50001);
+  d.prepare("INSERT INTO students (id, username, name, created_at, updated_at) VALUES (1, 'alice', 'Alice A.', 0, 0)").run();
+  d.prepare("INSERT INTO students (id, username, name, created_at, updated_at) VALUES (2, 'bob', 'Bob B.', 0, 0)").run();
   d.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (1, 1, 0)").run();
   d.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (1, 2, 0)").run();
 });
@@ -47,20 +54,19 @@ function scanTask(node: string, lab: string, state: string, createdAt: number) {
     .run(`scan-${uuidSeq++}`, node, JSON.stringify({ lab }), state, createdAt, createdAt);
 }
 
+function setScanned(name: string, at: number) {
+  dbmod.db().prepare("UPDATE lab_placements SET usage_scanned_at = ? WHERE lab_id = (SELECT id FROM labs WHERE name = ?)").run(at, name);
+}
+
 function findLab(name: string) {
-  return stats
-    .buildStats()
-    .find((n) => n.node === "node-a")!
-    .labs.find((l) => l.labName === name)!;
+  return stats.buildStats().find((n) => n.node === "node-a")!.labs.find((l) => l.labName === name)!;
 }
 
 describe("buildStats", () => {
-  it("groups latest per-student and lab-level usage by node and lab", () => {
-    // Two docker samples for alice; the newer (ts=200) wins.
+  it("groups latest per-student and placement-level usage by node and lab", () => {
     sample(1, 1, "docker", 100, 100);
     sample(1, 1, "docker", 150, 200);
     sample(1, 2, "docker", 80, 200);
-    // Lab-level (whole image) + fast/slow quota rows.
     sample(1, null, "docker", 300, 200);
     sample(1, null, "fast", 500, 200, 2000);
     sample(1, null, "slow", 200, 200, 3000);
@@ -71,34 +77,25 @@ describe("buildStats", () => {
     expect(node.node).toBe("node-a");
     expect(node.totalImageBytes).toBe(300);
 
-    const lab = node.labs[0];
-    expect(lab.labName).toBe("bio");
+    const lab = node.labs.find((l) => l.labName === "bio")!;
     expect(lab.image).toBe("img-x");
-    // Sorted by docker desc: alice (150) before bob (80).
+    expect(lab.placementId).toBe(1);
     expect(lab.students.map((s) => s.username)).toEqual(["alice", "bob"]);
-    expect(lab.students[0].docker).toBe(150); // latest, not 100
+    expect(lab.students[0].docker).toBe(150);
     expect(lab.students[1].docker).toBe(80);
-    // No per-student fast/slow rows -> null.
     expect(lab.students[0].fast).toBeNull();
     expect(lab.live.image).toBe(300);
     expect(lab.live.fast).toEqual({ used: 500, quota: 2000 });
     expect(lab.live.slow).toEqual({ used: 200, quota: 3000 });
-    // Freshness of the lab-level row is the newest ts among its docker/fast/slow samples.
     expect(lab.liveUpdatedAt).toBe(200);
-    expect(lab.liveStale).toBe(true); // ts=200 (epoch) is far older than LIVE_STALE_MS
+    expect(lab.liveStale).toBe(true);
   });
 });
 
 describe("scanPending", () => {
-  // Each scenario gets its own lab on node-a so their scan tasks don't collide.
   beforeAll(() => {
-    const d = dbmod.db();
-    for (const [id, name] of [[10, "queued"], [11, "sent"], [12, "fresh-ingest"], [13, "landed"], [14, "expired"], [15, "failed"], [16, "noscan"]] as const) {
-      d.prepare(
-        `INSERT INTO labs (id, name, node_id, fast_quota_bytes, slow_quota_bytes, image, status, created_at)
-         VALUES (?, ?, 1, 2000, 3000, 'img-x', 'active', 0)`,
-      ).run(id, name);
-    }
+    const cases = [[10, "queued"], [11, "sent"], [12, "fresh-ingest"], [13, "landed"], [14, "expired"], [15, "failed"], [16, "noscan"]] as const;
+    cases.forEach(([id, name]) => mkLabPlacement(id, name, id, 50000 + id));
   });
 
   it("is true while a scan task is queued or sent", () => {
@@ -111,20 +108,18 @@ describe("scanPending", () => {
   it("stays true after the task is ok until the fresh numbers land (ingest gap)", () => {
     const created = Date.now();
     scanTask("node-a", "fresh-ingest", "ok", created);
-    // usage_scanned_at still predates the request -> data not ingested yet.
-    dbmod.db().prepare("UPDATE labs SET usage_scanned_at = ? WHERE name = 'fresh-ingest'").run(created - 1000);
+    setScanned("fresh-ingest", created - 1000);
     expect(findLab("fresh-ingest").scanPending).toBe(true);
   });
 
   it("flips false once usage_scanned_at advances past the request (data landed)", () => {
     const created = Date.now();
     scanTask("node-a", "landed", "ok", created);
-    dbmod.db().prepare("UPDATE labs SET usage_scanned_at = ? WHERE name = 'landed'").run(created + 1000);
+    setScanned("landed", created + 1000);
     expect(findLab("landed").scanPending).toBe(false);
   });
 
   it("does not keep an ok task pending forever if the heartbeat never lands", () => {
-    // Requested 20 min ago, still no fresh scan -> grace window expired, show the button again.
     scanTask("node-a", "expired", "ok", Date.now() - 20 * 60 * 1000);
     expect(findLab("expired").scanPending).toBe(false);
   });
@@ -136,9 +131,8 @@ describe("scanPending", () => {
   });
 
   it("tracks only the latest task per lab", () => {
-    // An old ok (data landed) followed by a brand-new queued -> pending again.
     scanTask("node-a", "noscan", "ok", Date.now() - 5000);
-    dbmod.db().prepare("UPDATE labs SET usage_scanned_at = ? WHERE name = 'noscan'").run(Date.now() - 4000);
+    setScanned("noscan", Date.now() - 4000);
     scanTask("node-a", "noscan", "queued", Date.now());
     expect(findLab("noscan").scanPending).toBe(true);
   });

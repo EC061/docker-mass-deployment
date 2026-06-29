@@ -1,15 +1,22 @@
 /**
- * Student data access + lab-membership operations. Adding a student to a lab creates the student
- * record if needed, records membership, enqueues a student.add task to the lab's node, and emails
- * the credentials (best-effort).
+ * Students + logical lab membership. A student is global (reusable across labs). Adding a student to
+ * a lab records the membership and provisions them on EVERY placement of that lab (one account per
+ * node, each with its own emailed credential); removing them reverses it across all placements.
  */
 
-import { randomBytes } from "node:crypto";
+import { audit } from "./audit";
 import { db } from "./db";
-import { audit, getLab } from "./labs";
-import { sendCredentialEmail, sendRemovalEmail } from "./mailer";
-import { enqueueTask } from "./queue";
-import { getSetting } from "./settings";
+import { getLab } from "./labs";
+import { sendRemovalEmail } from "./mailer";
+import { generatePassword } from "./passwords";
+import {
+  type MemberProvision,
+  listPlacements,
+  provisionMemberOnPlacement,
+  removeMemberFromPlacement,
+} from "./placements";
+
+export { generatePassword };
 
 export interface Student {
   id: number;
@@ -19,18 +26,9 @@ export interface Student {
   name: string | null;
 }
 
+/** A roster member of a logical lab (no per-student quotas in the redesign — they share lab quota). */
 export interface Member extends Student {
   member_id: number;
-  scratch_quota_bytes: number | null;
-  cold_quota_bytes: number | null;
-}
-
-export function generatePassword(length = 12): string {
-  const chars = "abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-  const bytes = randomBytes(length);
-  let out = "";
-  for (let i = 0; i < length; i++) out += chars[bytes[i] % chars.length];
-  return out;
 }
 
 export function listStudents(): Student[] {
@@ -40,39 +38,56 @@ export function listStudents(): Student[] {
 export function listMembers(labId: number): Member[] {
   return db()
     .prepare(
-      `SELECT students.*, lab_members.id AS member_id,
-              lab_members.scratch_quota_bytes, lab_members.cold_quota_bytes
+      `SELECT students.id, students.student_id, students.username, students.email, students.name,
+              lab_members.id AS member_id
        FROM lab_members JOIN students ON students.id = lab_members.student_id
        WHERE lab_members.lab_id = ? ORDER BY students.username`,
     )
     .all(labId) as Member[];
 }
 
-export function findOrCreateStudent(input: {
+export interface StudentInput {
   username: string;
   email?: string;
   name?: string;
   studentId?: string;
-}): Student {
-  const existing = db()
-    .prepare("SELECT * FROM students WHERE username = ?")
-    .get(input.username) as Student | undefined;
-  if (existing) return existing;
+}
+
+/** Find a student by student_id (preferred) then username, creating the record if neither matches. */
+export function findOrCreateStudent(input: StudentInput): Student {
+  const username = input.username.trim().toLowerCase();
+  if (input.studentId) {
+    const byId = db().prepare("SELECT * FROM students WHERE student_id = ?").get(input.studentId) as
+      | Student
+      | undefined;
+    if (byId) return byId;
+  }
+  const byName = db().prepare("SELECT * FROM students WHERE username = ?").get(username) as
+    | Student
+    | undefined;
+  if (byName) return byName;
+
+  const now = Date.now();
   const info = db()
-    .prepare("INSERT INTO students (student_id, username, email, name, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(input.studentId ?? null, input.username, input.email ?? null, input.name ?? null, Date.now());
+    .prepare(
+      "INSERT INTO students (student_id, username, email, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .run(input.studentId ?? null, username, input.email ?? null, input.name ?? null, now, now);
   return db().prepare("SELECT * FROM students WHERE id = ?").get(Number(info.lastInsertRowid)) as Student;
 }
 
 export interface AddMemberResult {
   student: Student;
-  password: string;
-  emailed: boolean;
+  provisioned: MemberProvision[]; // one entry per placement the student was provisioned on
 }
 
+/**
+ * Add a student to a lab's roster and provision them on every placement. With no placements yet, the
+ * student simply joins the roster (and is provisioned automatically when a placement is later added).
+ */
 export async function addStudentToLab(
   labId: number,
-  student: { username: string; email?: string; name?: string; studentId?: string },
+  student: StudentInput,
   actor?: string,
 ): Promise<AddMemberResult> {
   const lab = getLab(labId);
@@ -87,54 +102,29 @@ export async function addStudentToLab(
   db()
     .prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, ?)")
     .run(labId, record.id, Date.now());
+  audit(actor, "member.add", `${lab.name}/${record.username}`);
 
-  const password = generatePassword();
-  enqueueTask(
-    lab.node_name,
-    "student.add",
-    { lab: lab.name, username: record.username, password },
-    actor,
-  );
-  audit(actor, "student.add", `${lab.name}/${record.username}`);
-
-  let emailed = false;
-  if (record.email) {
-    const host = getSetting("sshHostOverride").trim() || lab.node_name;
-    const res = await sendCredentialEmail({
-      to: record.email,
-      name: record.name ?? undefined,
-      username: record.username,
-      password,
-      host,
-      port: lab.ssh_port ?? 22,
-      lab: lab.name,
-      node: lab.node_name,
-      studentId: record.student_id,
-    });
-    emailed = res.sent;
+  const provisioned: MemberProvision[] = [];
+  for (const p of listPlacements(labId)) {
+    const res = await provisionMemberOnPlacement(p, record, actor);
+    if (res) provisioned.push(res);
   }
-  return { student: record, password, emailed };
+  return { student: record, provisioned };
 }
 
 export interface CopyMembersResult {
   added: number;
-  emailed: number;
-  skipped: number; // already members of the destination lab
+  skipped: number;
 }
 
-/**
- * Enroll every student of `fromLabId` into `toLabId`. Each gets a fresh account/password on the
- * destination node (same path as a manual add), so credentials are emailed where an address exists.
- * Students already in the destination lab are skipped. Used by "create lab → import students".
- */
+/** Enroll every member of `fromLabId` into `toLabId` (used by create-lab "copy roster" templates). */
 export async function copyMembers(
   fromLabId: number,
   toLabId: number,
   actor?: string,
 ): Promise<CopyMembersResult> {
-  const source = listMembers(fromLabId);
-  const result: CopyMembersResult = { added: 0, emailed: 0, skipped: 0 };
-  for (const m of source) {
+  const result: CopyMembersResult = { added: 0, skipped: 0 };
+  for (const m of listMembers(fromLabId)) {
     const already = db()
       .prepare("SELECT id FROM lab_members WHERE lab_id = ? AND student_id = ?")
       .get(toLabId, m.id);
@@ -142,17 +132,20 @@ export async function copyMembers(
       result.skipped += 1;
       continue;
     }
-    const res = await addStudentToLab(
+    await addStudentToLab(
       toLabId,
       { username: m.username, email: m.email ?? undefined, name: m.name ?? undefined, studentId: m.student_id ?? undefined },
       actor,
     );
     result.added += 1;
-    if (res.emailed) result.emailed += 1;
   }
   return result;
 }
 
+/**
+ * Remove a student from a lab: deprovision them on every placement (optionally deleting their data),
+ * drop the membership, and email a notification once. Verifies the student really is a member first.
+ */
 export function removeStudentFromLab(
   labId: number,
   studentId: number,
@@ -161,17 +154,19 @@ export function removeStudentFromLab(
 ): void {
   const lab = getLab(labId);
   if (!lab) throw new Error("Unknown lab");
-  const student = db().prepare("SELECT username, email FROM students WHERE id = ?").get(studentId) as
-    | { username: string; email: string | null }
-    | undefined;
-  if (!student) return;
-  enqueueTask(
-    lab.node_name,
-    "student.remove",
-    { lab: lab.name, username: student.username, delete_data: deleteData },
-    actor,
-  );
+  const member = db()
+    .prepare(
+      `SELECT students.username AS username, students.email AS email
+       FROM lab_members JOIN students ON students.id = lab_members.student_id
+       WHERE lab_members.lab_id = ? AND lab_members.student_id = ?`,
+    )
+    .get(labId, studentId) as { username: string; email: string | null } | undefined;
+  if (!member) throw new Error("Student is not a member of this lab");
+
+  for (const p of listPlacements(labId)) {
+    removeMemberFromPlacement(p, { id: studentId, username: member.username }, deleteData, actor);
+  }
   db().prepare("DELETE FROM lab_members WHERE lab_id = ? AND student_id = ?").run(labId, studentId);
-  audit(actor, "student.remove", `${lab.name}/${student.username}`, deleteData ? "data deleted" : undefined);
-  if (student.email) void sendRemovalEmail(student.email, lab.name, deleteData);
+  audit(actor, "member.remove", `${lab.name}/${member.username}`, deleteData ? "data deleted" : undefined);
+  if (member.email) void sendRemovalEmail(member.email, lab.name, deleteData);
 }

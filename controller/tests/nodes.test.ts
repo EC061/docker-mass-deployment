@@ -88,19 +88,22 @@ describe("deleteNode", () => {
     expect(() => nodes.deleteNode("does-not-exist", "admin@uga.edu")).toThrow(/unknown node/);
   });
 
-  it("refuses to delete a node that still has labs pinned to it", () => {
+  it("refuses to delete a node that still hosts a lab placement", () => {
     nodes.provisionNode("gpu-haslabs", "admin@uga.edu");
     const id = (
       dbmod.db().prepare("SELECT id FROM nodes WHERE name = ?").get("gpu-haslabs") as { id: number }
     ).id;
+    const now = Date.now();
+    dbmod.db().prepare("INSERT INTO labs (name, created_at, updated_at) VALUES ('lab-x', ?, ?)").run(now, now);
+    const labId = (dbmod.db().prepare("SELECT id FROM labs WHERE name='lab-x'").get() as { id: number }).id;
     dbmod
       .db()
       .prepare(
-        `INSERT INTO labs (name, node_id, fast_quota_bytes, slow_quota_bytes, image, created_at)
-         VALUES (?, ?, 0, 0, 'custom-ssh', ?)`,
+        `INSERT INTO lab_placements (lab_id, node_id, fast_quota_bytes, cold_quota_bytes, ssh_port, image, state, created_at, updated_at)
+         VALUES (?, ?, 0, 0, 40000, 'custom-ssh', 'active', ?, ?)`,
       )
-      .run("lab-x", id, Date.now());
-    expect(() => nodes.deleteNode("gpu-haslabs", "admin@uga.edu")).toThrow(/still has 1 lab/);
+      .run(labId, id, now, now);
+    expect(() => nodes.deleteNode("gpu-haslabs", "admin@uga.edu")).toThrow(/still hosts 1 lab placement/);
     // The node row is left intact when deletion is refused.
     expect(dbmod.db().prepare("SELECT 1 FROM nodes WHERE name = ?").get("gpu-haslabs")).toBeDefined();
   });

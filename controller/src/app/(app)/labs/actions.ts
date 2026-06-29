@@ -3,11 +3,18 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
-import { db } from "@/lib/db";
 import { putFlash } from "@/lib/flash";
-import { createLab, destroyLab, getLab, updateLabSettings, updateQuota } from "@/lib/labs";
-import { enqueueTask } from "@/lib/queue";
-import { nextSshPort, TIB } from "@/lib/settings";
+import { createLab, destroyLab, getLab, updateLabMeta } from "@/lib/labs";
+import {
+  type ContainerOptions,
+  createPlacement,
+  destroyPlacement,
+  getPlacement,
+  nextSshPortForNode,
+  recreatePlacement,
+  updatePlacementQuota,
+} from "@/lib/placements";
+import { TIB } from "@/lib/settings";
 import { addStudentToLab, copyMembers, removeStudentFromLab } from "@/lib/students";
 
 // Enforcing auth gate: throws/redirects when the caller is not a live admin, and returns the
@@ -18,126 +25,135 @@ async function actor(): Promise<string> {
 
 const tbToBytes = (tb: number) => Math.round(tb * TIB);
 
+function containerOptionsFromForm(formData: FormData): ContainerOptions {
+  return {
+    cpus: String(formData.get("cpus") ?? "4"),
+    memory: String(formData.get("memory") ?? "8g"),
+    shm_size: String(formData.get("shmSize") ?? "1g"),
+    image_quota: String(formData.get("imageQuota") ?? "300g"),
+    restart: String(formData.get("restart") ?? "unless-stopped"),
+  };
+}
+
+/** Create a node-independent logical lab (name + PI). Node access is granted separately. */
 export async function createLabAction(formData: FormData) {
   const who = await actor();
   const name = String(formData.get("name") ?? "").trim();
-  const nodeId = Number(formData.get("nodeId"));
+  const piName = String(formData.get("piName") ?? "").trim() || undefined;
   const piEmail = String(formData.get("piEmail") ?? "").trim() || undefined;
-  if (!name || !nodeId) throw new Error("Name and node are required");
+  if (!name) throw new Error("Lab name is required");
 
-  // Optionally seed configuration (image, quotas, container options) from an existing lab. The
-  // explicit form fields still win, so the source lab acts as a starting template, not a lock.
+  const lab = createLab({ name, piName, piEmail, actor: who });
+
+  // Optionally seed the roster from an existing lab (membership only; each placement later created
+  // for this lab provisions these students).
   const copyFromLabId = Number(formData.get("copyFromLabId")) || 0;
-  const source = copyFromLabId ? getLab(copyFromLabId) : undefined;
-
-  const image = String(formData.get("image") ?? "").trim() || source?.image || "custom-ssh";
-  const fastTb = Number(formData.get("fastTb"));
-  const slowTb = Number(formData.get("slowTb"));
-
-  const containerOptions = {
-    cpus: String(formData.get("cpus") ?? "4"),
-    memory: String(formData.get("memory") ?? "8g"),
-    shm_size: String(formData.get("shmSize") ?? "1g"),
-    image_quota: String(formData.get("imageQuota") ?? "300g"),
-    restart: String(formData.get("restart") ?? "unless-stopped"),
-  };
-
-  const lab = createLab({
-    name,
-    nodeId,
-    piEmail,
-    image,
-    fastQuotaBytes: tbToBytes(fastTb),
-    slowQuotaBytes: tbToBytes(slowTb),
-    sshPort: nextSshPort(),
-    containerOptions,
-    actor: who,
-  });
-
-  // Optionally enroll the source lab's students into the new lab (fresh accounts + emailed creds).
-  if (source && formData.get("copyStudents") === "on") {
-    const res = await copyMembers(source.id, lab.id, who);
-    const msg = `Imported ${res.added} student${res.added === 1 ? "" : "s"} from ${source.name}` +
-      (res.emailed ? `; ${res.emailed} emailed credentials` : "") +
-      (res.skipped ? `; ${res.skipped} already members` : "");
-    const fid = putFlash(msg);
+  if (copyFromLabId && formData.get("copyStudents") === "on") {
+    const res = await copyMembers(copyFromLabId, lab.id, who);
+    const fid = putFlash(
+      `Created ${lab.name}. Copied ${res.added} student${res.added === 1 ? "" : "s"} to the roster` +
+        (res.skipped ? `; ${res.skipped} already members` : "") +
+        ". Grant the lab access to a node to provision them.",
+    );
     revalidatePath("/labs");
-    redirect(`/labs?imported=${fid}`);
+    redirect(`/labs/${lab.id}?saved=${fid}`);
   }
 
   revalidatePath("/labs");
+  redirect(`/labs/${lab.id}`);
 }
 
-export async function updateLabSettingsAction(formData: FormData) {
+export async function updateLabMetaAction(formData: FormData) {
   const who = await actor();
   const labId = Number(formData.get("labId"));
+  const piName = String(formData.get("piName") ?? "").trim();
   const piEmail = String(formData.get("piEmail") ?? "").trim();
-  const image = String(formData.get("image") ?? "").trim() || "custom-ssh";
-  const containerOptions = {
-    cpus: String(formData.get("cpus") ?? "4"),
-    memory: String(formData.get("memory") ?? "8g"),
-    shm_size: String(formData.get("shmSize") ?? "1g"),
-    image_quota: String(formData.get("imageQuota") ?? "300g"),
-    restart: String(formData.get("restart") ?? "unless-stopped"),
-  };
-  const recreated = updateLabSettings(labId, { piEmail, image, containerOptions }, who);
+  updateLabMeta(labId, { piName, piEmail }, who);
   revalidatePath(`/labs/${labId}`);
-  revalidatePath("/labs");
-  const fid = putFlash(
-    recreated
-      ? "Settings saved — container is being recreated (data preserved)."
-      : "Settings saved.",
-  );
+  const fid = putFlash("Lab metadata saved.");
   redirect(`/labs/${labId}?saved=${fid}`);
-}
-
-export async function setQuotaAction(formData: FormData) {
-  const who = await actor();
-  const labId = Number(formData.get("labId"));
-  const fastTb = formData.get("fastTb");
-  const slowTb = formData.get("slowTb");
-  updateQuota(
-    labId,
-    fastTb !== null && fastTb !== "" ? tbToBytes(Number(fastTb)) : undefined,
-    slowTb !== null && slowTb !== "" ? tbToBytes(Number(slowTb)) : undefined,
-    who,
-  );
-  revalidatePath("/labs");
-  revalidatePath(`/labs/${labId}`);
 }
 
 export async function destroyLabAction(formData: FormData) {
   const who = await actor();
   const labId = Number(formData.get("labId"));
-  destroyLab(labId, who);
+  const res = destroyLab(labId, who);
   revalidatePath("/labs");
   revalidatePath("/students");
-  // The lab detail page (/labs/[id]) no longer exists after destroy, so send the admin to the labs
-  // list rather than leaving them on a 404.
-  redirect("/labs");
+  if (res.deleted) redirect("/labs");
+  // Placements are tearing down; the lab is kept until each node confirms. Stay on the detail page.
+  const fid = putFlash(
+    `Tearing down ${res.teardownStarted} placement(s). The lab is removed once every node confirms; delete again then.`,
+  );
+  redirect(`/labs/${labId}?saved=${fid}`);
 }
 
-export async function recreateContainerAction(formData: FormData) {
+/** Grant a lab access to a node: create a placement and provision the current roster. */
+export async function grantNodeAccessAction(formData: FormData) {
   const who = await actor();
   const labId = Number(formData.get("labId"));
-  const lab = db()
-    .prepare(
-      "SELECT labs.name AS name, labs.image AS image, labs.ssh_port AS ssh_port, labs.container_options AS opts, nodes.name AS node FROM labs JOIN nodes ON nodes.id = labs.node_id WHERE labs.id = ?",
-    )
-    .get(labId) as { name: string; image: string; ssh_port: number | null; opts: string | null; node: string } | undefined;
-  if (!lab) return;
-  enqueueTask(
-    lab.node,
-    "container.recreate",
+  const nodeId = Number(formData.get("nodeId"));
+  if (!labId || !nodeId) throw new Error("Lab and node are required");
+  const fastTb = Number(formData.get("fastTb"));
+  const coldTb = Number(formData.get("coldTb"));
+  const image = String(formData.get("image") ?? "").trim() || "custom-ssh";
+
+  await createPlacement({
+    labId,
+    nodeId,
+    fastQuotaBytes: tbToBytes(fastTb),
+    coldQuotaBytes: tbToBytes(coldTb),
+    sshPort: nextSshPortForNode(nodeId),
+    image,
+    containerOptions: containerOptionsFromForm(formData),
+    actor: who,
+  });
+  revalidatePath(`/labs/${labId}`);
+  const fid = putFlash("Node access granted — provisioning the lab and roster on that node.");
+  redirect(`/labs/${labId}?saved=${fid}`);
+}
+
+export async function setPlacementQuotaAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const placement = getPlacement(placementId);
+  if (!placement) return;
+  const fastTb = formData.get("fastTb");
+  const coldTb = formData.get("coldTb");
+  updatePlacementQuota(
+    placementId,
     {
-      lab: lab.name,
-      image: lab.image,
-      ssh_port: lab.ssh_port,
-      container_options: lab.opts ? JSON.parse(lab.opts) : {},
+      fastQuotaBytes: fastTb !== null && fastTb !== "" ? tbToBytes(Number(fastTb)) : undefined,
+      // Cold quota is editable live only for local-ZFS placements; SMB clients (cold_quota_bytes
+      // NULL) route cold changes to the owner (added in a later phase) and ignore it here.
+      coldQuotaBytes:
+        placement.cold_quota_bytes !== null && coldTb !== null && coldTb !== ""
+          ? tbToBytes(Number(coldTb))
+          : undefined,
     },
     who,
   );
-  revalidatePath(`/labs/${labId}`);
+  revalidatePath(`/labs/${placement.lab_id}`);
+}
+
+export async function recreatePlacementAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const placement = getPlacement(placementId);
+  if (!placement) return;
+  // Phase 1: recreate with the current (unchanged) settings; the dedicated recreation page (Phase 5)
+  // takes the proposed image/resources and does the candidate-then-promote flow.
+  recreatePlacement(placementId, {}, who);
+  revalidatePath(`/labs/${placement.lab_id}`);
+}
+
+export async function removePlacementAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const placement = getPlacement(placementId);
+  if (!placement) return;
+  destroyPlacement(placementId, who);
+  revalidatePath(`/labs/${placement.lab_id}`);
 }
 
 export async function addMemberAction(formData: FormData) {
@@ -146,14 +162,24 @@ export async function addMemberAction(formData: FormData) {
   const username = String(formData.get("username") ?? "").trim().toLowerCase();
   const email = String(formData.get("email") ?? "").trim() || undefined;
   const name = String(formData.get("name") ?? "").trim() || undefined;
+  const studentId = String(formData.get("studentId") ?? "").trim() || undefined;
   if (!username) throw new Error("Username required");
-  const result = await addStudentToLab(labId, { username, email, name }, who);
+  const result = await addStudentToLab(labId, { username, email, name, studentId }, who);
   revalidatePath(`/labs/${labId}`);
-  // Show the generated password once via a one-time server-side flash — never put the cleartext
-  // credential in the redirect URL / history / access logs (M-07).
-  const pwid = putFlash(result.password);
-  const emailed = result.emailed ? "&emailed=1" : "";
-  redirect(`/labs/${labId}?newuser=${encodeURIComponent(username)}&pwid=${pwid}${emailed}`);
+
+  const n = result.provisioned.length;
+  if (n === 1) {
+    // Show the single generated password once via a one-time server-side flash — never in the URL (M-07).
+    const pwid = putFlash(result.provisioned[0].password);
+    const emailed = result.provisioned[0].emailed ? "&emailed=1" : "";
+    redirect(`/labs/${labId}?newuser=${encodeURIComponent(username)}&pwid=${pwid}${emailed}`);
+  }
+  const msg =
+    n === 0
+      ? `Added ${username} to the roster. They are provisioned automatically when the lab is granted node access.`
+      : `Added ${username} and provisioned on ${n} node(s); credentials emailed where an address exists.`;
+  const fid = putFlash(msg);
+  redirect(`/labs/${labId}?saved=${fid}`);
 }
 
 export async function removeMemberAction(formData: FormData) {
