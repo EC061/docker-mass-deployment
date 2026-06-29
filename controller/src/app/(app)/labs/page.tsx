@@ -1,5 +1,6 @@
 import { takeFlash } from "@/lib/flash";
-import { listLabs } from "@/lib/labs";
+import { listLabPlacementSummaries, listLabs } from "@/lib/labs";
+import Link from "next/link";
 import { applyLabImportAction, createLabAction, previewLabImportAction } from "./actions";
 import { CreateLabForm, type LabTemplate } from "./_components/CreateLabForm";
 import { LabImportForm } from "./_components/LabImportForm";
@@ -17,6 +18,12 @@ export default async function LabsPage({
   const { imported } = await searchParams;
   const importedMsg = imported ? takeFlash(imported) : null;
   const labs = listLabs();
+  const placementsByLab = new Map<number, ReturnType<typeof listLabPlacementSummaries>>();
+  for (const placement of listLabPlacementSummaries()) {
+    const placements = placementsByLab.get(placement.lab_id) ?? [];
+    placements.push(placement);
+    placementsByLab.set(placement.lab_id, placements);
+  }
   const templates: LabTemplate[] = labs.map((l) => ({ id: l.id, name: l.name }));
 
   return (
@@ -69,9 +76,9 @@ export default async function LabsPage({
                 {labs.map((lab) => (
                   <TableRow key={lab.id}>
                     <TableCell>
-                      <a href={`/labs/${lab.id}`} className="font-medium text-primary hover:underline">
+                      <Link href={`/labs/${lab.id}`} className="font-medium text-primary hover:underline">
                         {lab.name}
-                      </a>
+                      </Link>
                     </TableCell>
                     <TableCell className="whitespace-nowrap">
                       {lab.pi_name ?? "—"}
@@ -82,9 +89,18 @@ export default async function LabsPage({
                       {lab.placement_count === 0 ? (
                         <span className="text-muted-foreground">none</span>
                       ) : (
-                        <Badge variant={lab.active_placements === lab.placement_count ? "ok" : "warn"}>
-                          {lab.active_placements}/{lab.placement_count} active
-                        </Badge>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(placementsByLab.get(lab.id) ?? []).map((placement) => (
+                            <Link
+                              key={placement.id}
+                              href={`/labs/${lab.id}/placements/${placement.id}`}
+                            >
+                              <Badge variant={placement.state === "active" ? "ok" : placement.state === "failed" ? "err" : "warn"}>
+                                {placement.node_name}: {placement.state}
+                              </Badge>
+                            </Link>
+                          ))}
+                        </div>
                       )}
                     </TableCell>
                   </TableRow>

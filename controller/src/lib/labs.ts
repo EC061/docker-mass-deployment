@@ -33,6 +33,13 @@ export interface LabSummary extends Lab {
   active_placements: number;
 }
 
+export interface LabPlacementSummary {
+  lab_id: number;
+  id: number;
+  node_name: string;
+  state: string;
+}
+
 export function listLabs(): LabSummary[] {
   return db()
     .prepare(
@@ -43,6 +50,17 @@ export function listLabs(): LabSummary[] {
        FROM labs ORDER BY labs.name`,
     )
     .all() as LabSummary[];
+}
+
+/** Placement labels for the Labs index, fetched in one query to avoid a per-lab waterfall. */
+export function listLabPlacementSummaries(): LabPlacementSummary[] {
+  return db()
+    .prepare(
+      `SELECT p.lab_id, p.id, nodes.name AS node_name, p.state
+       FROM lab_placements p JOIN nodes ON nodes.id = p.node_id
+       ORDER BY p.lab_id, nodes.name`,
+    )
+    .all() as LabPlacementSummary[];
 }
 
 export function getLab(id: number): Lab | undefined {
