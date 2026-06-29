@@ -48,7 +48,7 @@ export default async function SettingsPage({
   const logCount = (db().prepare("SELECT COUNT(*) AS n FROM logs").get() as { n: number }).n;
   const logBytes = logsContentBytes();
   return (
-    <div className="space-y-4">
+    <div className="max-w-3xl space-y-4">
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
 
       <Card>
