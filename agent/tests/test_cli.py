@@ -34,7 +34,7 @@ def test_install_builds_config_from_flags_and_calls_installer(monkeypatch, capsy
 
     captured = {}
 
-    def fake_install(cfg, config_path, *, enable):
+    def fake_install(cfg, config_path, *, enable, ref=None):
         captured["cfg"] = cfg
         captured["enable"] = enable
         return {"config": str(config_path), "status": "written (not enabled)"}
@@ -69,7 +69,7 @@ def test_install_enables_by_default(monkeypatch):
 
     captured = {}
 
-    def fake_install(cfg, path, *, enable):
+    def fake_install(cfg, path, *, enable, ref=None):
         captured["enable"] = enable
         return {}
 
@@ -78,21 +78,81 @@ def test_install_enables_by_default(monkeypatch):
     assert captured["enable"] is True
 
 
-def test_install_allows_no_token(monkeypatch, capsys):
-    """Token may be supplied later via set-token; install must not require it."""
+def test_install_allows_no_controller_or_token(monkeypatch, capsys):
+    """The bootstrap command takes no flags: controller_url/token are edited in the config after."""
     import lab_agent.installer as installer
 
     captured = {}
 
-    def fake_install(cfg, path, *, enable):
+    def fake_install(cfg, path, *, enable, ref=None):
         captured["cfg"] = cfg
-        return {"status": "written (not enabled)"}
+        return {"status": "installed; enabled on boot but NOT started"}
 
     monkeypatch.setattr(installer, "install", fake_install)
-    rc = cli.main(["install", "--controller", "wss://ctl:8443", "--no-enable"])
+    rc = cli.main(["install"])
     assert rc == 0
+    assert captured["cfg"].controller_url == ""
     assert captured["cfg"].token == ""
-    assert "set-token" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "Next steps" in out and "lab-agent start" in out
+
+
+def test_install_failure_returns_one(monkeypatch, capsys):
+    import lab_agent.installer as installer
+
+    def boom(cfg, path, *, enable, ref=None):
+        raise PermissionError("must run as root")
+
+    monkeypatch.setattr(installer, "install", boom)
+    assert cli.main(["install"]) == 1
+    assert "install failed" in capsys.readouterr().err
+
+
+def test_start_stop_upgrade_dispatch(monkeypatch, capsys):
+    import lab_agent.installer as installer
+
+    events = []
+    monkeypatch.setattr(installer, "start_service", lambda: events.append("start"))
+    monkeypatch.setattr(installer, "stop_service", lambda: events.append("stop"))
+    monkeypatch.setattr(installer, "upgrade", lambda ref=None: {"version": "lab-agent 0.1.0"})
+    assert cli.main(["start"]) == 0
+    assert cli.main(["stop"]) == 0
+    assert cli.main(["upgrade"]) == 0
+    assert events == ["start", "stop"]
+    assert "lab-agent 0.1.0" in capsys.readouterr().out
+
+
+def test_start_reports_failure(monkeypatch, capsys):
+    import lab_agent.installer as installer
+
+    def boom():
+        raise RuntimeError("failed to start")
+
+    monkeypatch.setattr(installer, "start_service", boom)
+    assert cli.main(["start"]) == 1
+    assert "start failed" in capsys.readouterr().err
+
+
+def test_edit_config_opens_editor(monkeypatch, tmp_path):
+    config_path = tmp_path / "config.toml"
+    config_path.write_text("[agent]\n")
+    monkeypatch.setenv("EDITOR", "true")  # a no-op "editor"
+    called = {}
+
+    def fake_call(argv):
+        called["argv"] = argv
+        return 0
+
+    monkeypatch.setattr(cli.subprocess, "call", fake_call)
+    rc = cli.main(["--config", str(config_path), "edit-config"])
+    assert rc == 0
+    assert called["argv"] == ["true", str(config_path)]
+
+
+def test_edit_config_missing_file(monkeypatch, tmp_path, capsys):
+    rc = cli.main(["--config", str(tmp_path / "nope.toml"), "edit-config"])
+    assert rc == 1
+    assert "run `lab-agent install`" in capsys.readouterr().err
 
 
 def test_set_token_writes_config_and_restarts(monkeypatch, tmp_path):
@@ -132,7 +192,15 @@ def _caps(issues):
     return SimpleNamespace(issues=issues, to_dict=lambda: fields)
 
 
+def _stub_status(monkeypatch):
+    import lab_agent.installer as installer
+
+    monkeypatch.setattr(installer, "service_status",
+                        lambda: {"active": "inactive", "enabled": "enabled"})
+
+
 def test_doctor_returns_zero_when_healthy(monkeypatch, capsys):
+    _stub_status(monkeypatch)
     monkeypatch.setattr(cli, "load_config", lambda path: AgentConfig(controller_url="w", token="t",
                                                                      node_name="n1"))
     monkeypatch.setattr(cli, "detect_capabilities", lambda cfg: _caps([]))
@@ -140,11 +208,13 @@ def test_doctor_returns_zero_when_healthy(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert rc == 0
     assert "node: n1" in out
+    assert "service: inactive (enabled)" in out
     assert "all checks passed" in out
     assert "issues:" not in out
 
 
 def test_doctor_returns_one_when_issues(monkeypatch, capsys):
+    _stub_status(monkeypatch)
     monkeypatch.setattr(cli, "load_config", lambda path: AgentConfig(controller_url="w", token="t"))
     monkeypatch.setattr(cli, "detect_capabilities", lambda cfg: _caps(["zfs command not found"]))
     rc = cli.main(["doctor"])
@@ -155,6 +225,7 @@ def test_doctor_returns_one_when_issues(monkeypatch, capsys):
 
 
 def test_doctor_synthesizes_config_when_missing(monkeypatch):
+    _stub_status(monkeypatch)
     def raise_missing(path):
         raise FileNotFoundError("nope")
 

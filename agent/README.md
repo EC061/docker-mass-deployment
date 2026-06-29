@@ -8,19 +8,30 @@ the controller over an outbound WebSocket and executes all local `zfs` / `docker
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh   # if uv is not already present
-uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent \
-    lab-agent install --controller wss://CONTROLLER_IP:PORT --token AGENT_TOKEN
+sudo uvx --from git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent \
+    lab-agent install
+sudo lab-agent edit-config    # set controller_url, token, node_name, slow_* (cold storage)
+sudo lab-agent start
+sudo lab-agent doctor
 ```
 
-`lab-agent install` writes `/etc/lab-agent/config.toml` and a systemd unit (`lab-agent.service`)
-so the agent starts on boot and reconnects automatically.
+`lab-agent install` cleans any previous install, installs lab-agent persistently with `uv tool
+install` (so systemd runs a stable binary, not the `uvx` cache), writes a config template if none
+exists, and enables — but does **not** start — `lab-agent.service`. You edit the config, then start.
 
 ## Commands
 
+- `lab-agent install [--ref TAG] [--controller URL --token TOKEN --node-name NAME --slow-* ...]` —
+  clean + (re)install the service and write a config template (existing config is preserved). Flags
+  only seed a freshly-written template; `--ref` pins to a git tag/commit.
+- `lab-agent edit-config` — open `/etc/lab-agent/config.toml` in `$EDITOR`.
+- `lab-agent set-token <TOKEN>` — write just the controller-issued token and restart.
+- `lab-agent start` / `lab-agent stop` — enable+start / stop the service.
+- `lab-agent upgrade [--ref TAG]` — reinstall the newest (or pinned) agent and restart; config preserved.
 - `lab-agent run` — run the agent in the foreground (used by the systemd unit).
-- `lab-agent install --controller URL --token TOKEN [--node-name NAME]` — write config + systemd unit.
-- `lab-agent doctor` — check that zfs, docker, the `fast`/`slow` pools, nvidia-smi, the
-  `sysbox-runc` runtime, and the NVIDIA CDI spec are present (and show each lab's last apt-patch time).
+- `lab-agent doctor` — show service status and check that zfs, docker, the `fast`/`slow` pools,
+  nvidia-smi, the `sysbox-runc` runtime, and the NVIDIA CDI spec are present (and each lab's last
+  apt-patch time).
 
 ## Cold storage backend
 
