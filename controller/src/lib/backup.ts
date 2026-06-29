@@ -64,20 +64,14 @@ function recordRun(stamp: number, r: BackupResult): void {
   if (r.ok && r.name) setSetting("backupLastName", r.name);
 }
 
-/** Back up the controller DB and ask every node to back up its local state DB to the same WebDAV. */
+/**
+ * Back up the authoritative controller DB. (Agent state DBs are NOT backed up: they are a transient
+ * cache and their local queue holds student passwords in flight, so shipping them to WebDAV would
+ * leak credentials. The agent now encrypts that queue at rest and never uploads it — see Phase 8.)
+ */
 export async function backupAll(stamp = Date.now()): Promise<BackupResult> {
   const result = await backupNow(stamp);
   recordRun(stamp, result);
-  if (isWebdavConfigured()) {
-    const cfg = webdavConfig();
-    const nodes = db().prepare("SELECT name FROM nodes").all() as { name: string }[];
-    const { enqueueTask } = await import("./queue");
-    for (const n of nodes) {
-      enqueueTask(n.name, "node.backup", {
-        webdav: { url: `${cfg.url}/nodes/${n.name}`, user: cfg.user, pass: cfg.pass },
-      });
-    }
-  }
   return result;
 }
 

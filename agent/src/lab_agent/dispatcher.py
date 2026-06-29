@@ -31,11 +31,10 @@ class Dispatcher:
         self._handlers[action] = handler
 
     def _register_builtin(self) -> None:
-        from . import backup, containerops, labops, maintenance, studentops
+        from . import containerops, labops, maintenance, studentops
         from .gpu import policy as gpu_policy
 
         self.register(P.A_NODE_REPORT_STATE, self._report_state)
-        self.register(P.A_NODE_BACKUP, backup.backup_state)
         self.register(P.A_NODE_SCRUB, maintenance.run_scrub)
         self.register(P.A_LAB_CREATE, labops.create_lab)
         self.register(P.A_LAB_SET_QUOTA, labops.set_lab_quota)

@@ -1,6 +1,6 @@
 import { db } from "@/lib/db";
 import { ago } from "@/lib/format";
-import { getTask } from "@/lib/queue";
+import { getTask, redactSecrets } from "@/lib/queue";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -17,11 +17,15 @@ interface LogRow {
   detail: string | null;
 }
 
-/** Pretty-print a JSON string column; fall back to the raw text if it isn't valid JSON. */
+/**
+ * Pretty-print a JSON string column with credentials masked; fall back to raw text if not JSON.
+ * Params are already redacted at store time (Phase 8); this also covers pre-Phase-8 rows and any
+ * secret a result payload might echo, so no password is ever rendered.
+ */
 function prettyJson(raw: string | null): string | null {
   if (raw === null || raw === undefined) return null;
   try {
-    return JSON.stringify(JSON.parse(raw), null, 2);
+    return JSON.stringify(redactSecrets(JSON.parse(raw)), null, 2);
   } catch {
     return raw;
   }

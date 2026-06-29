@@ -146,21 +146,49 @@ class Agent:
             except json.JSONDecodeError:
                 self.log.warn("client", "received non-JSON frame")
                 continue
+            if not isinstance(frame, dict):
+                self.log.warn("client", "received non-object frame")
+                continue
             if frame.get("type") == P.T_TASK:
-                # Persist before executing -> at-least-once.
+                # A task frame must carry a string id + action; reject malformed pushes outright.
+                if not isinstance(frame.get("id"), str) or not isinstance(frame.get("action"), str):
+                    self.log.warn("client", "ignoring malformed task frame")
+                    continue
+                # Persist before executing -> at-least-once, then send a durable receipt so the
+                # controller knows we hold it (the receipt rides the reliable outbox).
                 self.localq.enqueue_task(frame)
+                self.localq.enqueue_outbound(P.receipt_frame(frame["id"]))
             # Other inbound types (ack) are currently informational.
 
     async def _task_worker(self) -> None:
-        """Claim tasks from the durable local queue and execute them off the event loop."""
+        """Claim tasks from the durable local queue and execute them off the event loop.
+
+        Idempotent + dedup'd: a task whose id is already in the result journal (a redelivery after
+        an ack loss or restart) is replayed from cache instead of re-executed.
+        """
         while True:
             job = await asyncio.to_thread(self.localq.claim_task)
             if job is None:
                 await asyncio.sleep(0.5)
                 continue
             try:
-                task = P.Task.from_frame(job.payload)
+                frame = self.localq.payload_of(job)  # decrypt the at-rest payload
+                task = P.Task.from_frame(frame)
+            except Exception as exc:
+                # Undecodable/poison payload: drop it (acking) rather than loop on it forever.
+                self.log.error("client", f"dropping undecodable task: {exc}")
+                await asyncio.to_thread(job.ack)
+                continue
+            try:
+                cached = await asyncio.to_thread(self.localq.cached_result, task.id)
+                if cached is not None:
+                    # Already executed this exact task — replay the cached result, do NOT re-run.
+                    replay = {**cached, "cached": True}
+                    self.localq.enqueue_outbound(replay)
+                    await asyncio.to_thread(job.ack)
+                    continue
                 result = await asyncio.to_thread(self.dispatcher.handle, task)
+                await asyncio.to_thread(self.localq.record_result, task.id, result)
                 self.localq.enqueue_outbound(result)
                 await asyncio.to_thread(job.ack)
             except Exception as exc:  # never let the worker die
@@ -175,7 +203,8 @@ class Agent:
                 await asyncio.sleep(0.25)
                 continue
             try:
-                await ws.send(json.dumps(job.payload))
+                frame = self.localq.payload_of(job)  # decrypt the at-rest payload before sending
+                await ws.send(json.dumps(frame))
                 await asyncio.to_thread(job.ack)
             except Exception:
                 # Send failed (likely disconnect) -> return to queue, stop draining.

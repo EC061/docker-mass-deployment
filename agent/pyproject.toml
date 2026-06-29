@@ -8,6 +8,8 @@ license = { text = "MIT" }
 dependencies = [
     "websockets>=12.0",
     "honker>=0.2.6",
+    # AES-GCM for at-rest encryption of the local queue (task payloads carry student passwords).
+    "cryptography>=43.0",
 ]
 
 [project.optional-dependencies]
