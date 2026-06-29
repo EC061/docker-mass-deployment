@@ -9,6 +9,7 @@ import { SignJWT, jwtVerify } from "jose";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { db } from "./db";
+import { normalizeEmail } from "./email";
 import { env } from "./env";
 
 const COOKIE = "lab_session";
@@ -63,17 +64,19 @@ export async function createAdmin(name: string, email: string, password: string,
   if (password.length < MIN_PASSWORD_LEN) {
     throw new Error(`Password must be at least ${MIN_PASSWORD_LEN} characters`);
   }
-  const existing = db().prepare("SELECT id FROM admins WHERE email = ?").get(email);
+  const normEmail = normalizeEmail(email);
+  if (!normEmail) throw new Error("A valid email is required");
+  const existing = db().prepare("SELECT id FROM admins WHERE email = ?").get(normEmail);
   if (existing) throw new Error("An admin with that email already exists");
   const hash = await bcrypt.hash(password, BCRYPT_COST);
   const info = db()
     .prepare("INSERT INTO admins (name, email, password_hash, created_at) VALUES (?, ?, ?, ?)")
-    .run(name, email, hash, Date.now());
-  return { id: Number(info.lastInsertRowid), name, email };
+    .run(name, normEmail, hash, Date.now());
+  return { id: Number(info.lastInsertRowid), name, email: normEmail };
 }
 
 export async function verifyLogin(email: string, password: string): Promise<Admin | null> {
-  const row = db().prepare("SELECT * FROM admins WHERE email = ?").get(email) as any;
+  const row = db().prepare("SELECT * FROM admins WHERE email = ?").get(normalizeEmail(email)) as any;
   // Always run a bcrypt comparison (against a dummy hash when the email is unknown) so response
   // timing doesn't reveal whether an admin exists (L-03).
   const ok = await bcrypt.compare(password, row?.password_hash ?? DUMMY_HASH);
@@ -152,6 +155,24 @@ export async function requireAdmin(): Promise<Admin> {
     await clearSessionCookie();
     redirect("/login");
   }
+  return { id: row.id, name: row.name, email: row.email };
+}
+
+/**
+ * Page-render authorization gate. Like requireAdmin() it re-validates the JWT subject against the
+ * admins table (so a disabled or token-rotated admin can't keep viewing pages on an old cookie), but
+ * it must NOT mutate cookies — clearing a cookie is illegal during a Server Component render — so it
+ * only redirects. Call it at the top of the authed layout; mutations still go through requireAdmin().
+ */
+export async function requireAdminPage(): Promise<Admin> {
+  const claims = await currentAdmin();
+  if (!claims) redirect("/login");
+  const row = db()
+    .prepare("SELECT id, name, email, is_active, token_version FROM admins WHERE id = ?")
+    .get(Number(claims.sub)) as
+    | { id: number; name: string; email: string; is_active: number; token_version: number }
+    | undefined;
+  if (!row || row.is_active !== 1 || row.token_version !== claims.ver) redirect("/login");
   return { id: row.id, name: row.name, email: row.email };
 }
 
