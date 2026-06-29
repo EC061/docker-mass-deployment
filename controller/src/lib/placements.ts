@@ -89,16 +89,18 @@ export interface Placement {
   // Joined from the node (cold-storage backend matters for quota + safe student-data deletion).
   node_cold_backend: "local_zfs" | "smb";
   node_cold_owner_node_id: number | null;
+  cold_owner_name: string | null;
   node_cold_ready: number;
 }
 
 const PLACEMENT_SELECT = `
   SELECT p.*, labs.name AS lab_name, nodes.name AS node_name, nodes.online AS online,
          nodes.cold_backend AS node_cold_backend, nodes.cold_owner_node_id AS node_cold_owner_node_id,
-         nodes.cold_ready AS node_cold_ready
+         owner.name AS cold_owner_name, nodes.cold_ready AS node_cold_ready
   FROM lab_placements p
   JOIN labs ON labs.id = p.lab_id
-  JOIN nodes ON nodes.id = p.node_id`;
+  JOIN nodes ON nodes.id = p.node_id
+  LEFT JOIN nodes owner ON owner.id = nodes.cold_owner_node_id`;
 
 export function listPlacements(labId: number): Placement[] {
   return db().prepare(`${PLACEMENT_SELECT} WHERE p.lab_id = ? ORDER BY nodes.name`).all(labId) as Placement[];
@@ -150,6 +152,22 @@ function touch(placementId: number): void {
 /** Build the lab.create / container.recreate container_options payload from a placement. */
 function taskContainerOptions(p: Placement): Record<string, unknown> {
   return { ...containerOptionsOf(p), image: p.image, ssh_port: p.ssh_port };
+}
+
+function enqueuePlacementCreate(p: Placement, actor?: string): void {
+  enqueueTask(
+    p.node_name,
+    "lab.create",
+    {
+      lab: p.lab_name,
+      fast_quota_bytes: p.fast_quota_bytes,
+      slow_quota_bytes: p.cold_quota_bytes ?? 0,
+      image: p.image,
+      ssh_port: p.ssh_port,
+      container_options: taskContainerOptions(p),
+    },
+    actor,
+  );
 }
 
 export interface CreatePlacementInput {
@@ -223,19 +241,7 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
     );
   const placement = getPlacement(Number(info.lastInsertRowid))!;
 
-  enqueueTask(
-    placement.node_name,
-    "lab.create",
-    {
-      lab: placement.lab_name,
-      fast_quota_bytes: placement.fast_quota_bytes,
-      slow_quota_bytes: placement.cold_quota_bytes ?? 0,
-      image: placement.image,
-      ssh_port: placement.ssh_port,
-      container_options: taskContainerOptions(placement),
-    },
-    input.actor,
-  );
+  enqueuePlacementCreate(placement, input.actor);
   audit(input.actor, "placement.create", `${placement.lab_name}@${placement.node_name}`);
 
   // Provision the lab's current roster on the new placement.
@@ -264,6 +270,28 @@ export interface MemberProvision {
   node: string;
   password: string;
   emailed: boolean;
+}
+
+export interface PlacementMember {
+  id: number;
+  username: string;
+  email: string | null;
+  name: string | null;
+  student_id: string | null;
+  state: MemberState;
+  last_error: string | null;
+  updated_at: number;
+}
+
+export function listPlacementMembers(placementId: number): PlacementMember[] {
+  return db()
+    .prepare(
+      `SELECT students.id, students.username, students.email, students.name, students.student_id,
+              pm.state, pm.last_error, pm.updated_at
+       FROM placement_members pm JOIN students ON students.id = pm.student_id
+       WHERE pm.placement_id = ? ORDER BY students.username`,
+    )
+    .all(placementId) as PlacementMember[];
 }
 
 /**
@@ -397,6 +425,19 @@ export function recreatePlacement(
     actor,
   );
   audit(actor, "placement.recreate", `${fresh.lab_name}@${fresh.node_name}`);
+}
+
+/** Retry a failed lab.create with the placement's authoritative settings. Agent handlers are
+ * idempotent, so this safely converges a partially-created placement without allocating a new one. */
+export function retryPlacement(placementId: number, actor?: string): void {
+  const p = getPlacement(placementId);
+  if (!p) throw new Error("Unknown placement");
+  if (p.state !== "failed") throw new Error("Only a failed placement can be retried");
+  db()
+    .prepare("UPDATE lab_placements SET state = 'provisioning', last_error = NULL, updated_at = ? WHERE id = ?")
+    .run(Date.now(), placementId);
+  enqueuePlacementCreate(p, actor);
+  audit(actor, "placement.retry", `${p.lab_name}@${p.node_name}`);
 }
 
 /**

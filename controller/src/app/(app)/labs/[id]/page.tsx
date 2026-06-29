@@ -1,12 +1,12 @@
 import { notFound } from "next/navigation";
+import Link from "next/link";
 import { ConfirmButton } from "../../_components/ConfirmButton";
 import { db } from "@/lib/db";
 import { takeFlash } from "@/lib/flash";
-import { fmtBytes, pct } from "@/lib/format";
 import { getLab } from "@/lib/labs";
-import { containerOptionsOf, listPlacements, type Placement } from "@/lib/placements";
+import { listPlacements, type Placement } from "@/lib/placements";
 import { listMembers } from "@/lib/students";
-import { getSetting, getSettings, TIB } from "@/lib/settings";
+import { getSettings, TIB } from "@/lib/settings";
 import { PlacementForm, type NodeOpt } from "../_components/PlacementForm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -19,23 +19,10 @@ import {
   destroyLabAction,
   grantNodeAccessAction,
   removeMemberAction,
-  removePlacementAction,
-  setPlacementQuotaAction,
   updateLabMetaAction,
 } from "../actions";
 
 export const dynamic = "force-dynamic";
-
-/** Latest lab-level (student_id NULL) usage for a placement+pool. */
-function placementUsage(placementId: number, pool: string): { used: number; quota: number | null } | null {
-  const row = db()
-    .prepare(
-      `SELECT used_bytes, quota_bytes FROM storage_samples
-       WHERE placement_id = ? AND student_id IS NULL AND pool = ? ORDER BY ts DESC LIMIT 1`,
-    )
-    .get(placementId, pool) as { used_bytes: number; quota_bytes: number | null } | undefined;
-  return row ? { used: row.used_bytes, quota: row.quota_bytes } : null;
-}
 
 const STATE_VARIANT: Record<string, "ok" | "warn" | "err"> = {
   active: "ok",
@@ -45,13 +32,7 @@ const STATE_VARIANT: Record<string, "ok" | "warn" | "err"> = {
   failed: "err",
 };
 
-function PlacementCard({ p }: { p: Placement }) {
-  const opts = containerOptionsOf(p);
-  const host = getSetting("sshHostOverride").trim() || p.node_name;
-  const fast = placementUsage(p.id, "fast");
-  const slow = placementUsage(p.id, "slow");
-  const isSmbClient = p.cold_quota_bytes === null;
-
+function PlacementCard({ p, clients }: { p: Placement; clients: string[] }) {
   return (
     <Card>
       <CardContent className="space-y-3">
@@ -64,60 +45,18 @@ function PlacementCard({ p }: { p: Placement }) {
           <p className="text-xs text-destructive">{p.last_error}</p>
         )}
         <p className="text-sm text-muted-foreground">
-          SSH <code className="font-mono">ssh -p {p.ssh_port} &lt;user&gt;@{host}</code> · image {p.image} ·
-          {" "}{opts.cpus} CPU · {opts.memory} RAM · img-quota {opts.image_quota}
+          SSH port {p.ssh_port} · image {p.image}
         </p>
-
-        <form action={setPlacementQuotaAction} className="flex flex-wrap items-end gap-3">
-          <input type="hidden" name="placementId" value={p.id} />
-          <div>
-            <Label>Fast (TB)</Label>
-            <Input
-              name="fastTb"
-              type="number"
-              step="0.5"
-              defaultValue={p.fast_quota_bytes / TIB}
-              className="w-28"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              used {fmtBytes(fast?.used ?? 0)}
-              {fast && pct(fast.used, p.fast_quota_bytes) !== null ? ` (${pct(fast.used, p.fast_quota_bytes)}%)` : ""}
-            </p>
-          </div>
-          <div>
-            <Label>Cold (TB)</Label>
-            <Input
-              name="coldTb"
-              type="number"
-              step="0.5"
-              defaultValue={p.cold_quota_bytes !== null ? p.cold_quota_bytes / TIB : ""}
-              disabled={isSmbClient}
-              className="w-28"
-            />
-            <p className="mt-1 text-xs text-muted-foreground">
-              {isSmbClient ? "managed by owner node" : `used ${fmtBytes(slow?.used ?? 0)}`}
-            </p>
-          </div>
-          <Button type="submit">Apply (live)</Button>
-        </form>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <a href={`/labs/${p.lab_id}/placements/${p.id}/recreate`}>
-            <Button type="button" variant="secondary" size="sm">
-              Recreate container…
-            </Button>
-          </a>
-          <form action={removePlacementAction}>
-            <input type="hidden" name="placementId" value={p.id} />
-            <ConfirmButton
-              variant="destructive"
-              size="sm"
-              confirm={`Remove ${p.lab_name} from ${p.node_name}? The container and all of this node's data (shared + every student) are destroyed. Shared cold data on an owner node is removed once, after dependent SMB clients are gone.`}
-            >
-              Remove access
-            </ConfirmButton>
-          </form>
-        </div>
+        {p.node_cold_backend === "smb" ? (
+          <p className="text-sm">Cold storage managed by <b>{p.cold_owner_name ?? "unconfigured owner"}</b>.</p>
+        ) : clients.length > 0 ? (
+          <p className="text-sm">Cold-storage owner for {clients.join(", ")}.</p>
+        ) : (
+          <p className="text-sm">Local ZFS cold storage.</p>
+        )}
+        <Button asChild variant="secondary" size="sm">
+          <Link href={`/labs/${p.lab_id}/placements/${p.id}`}>Manage placement</Link>
+        </Button>
       </CardContent>
     </Card>
   );
@@ -128,11 +67,12 @@ export default async function LabDetail({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ newuser?: string; pwid?: string; emailed?: string; saved?: string }>;
+  searchParams: Promise<{ newuser?: string; pwid?: string; emailed?: string; saved?: string; error?: string }>;
 }) {
   const { id } = await params;
-  const { newuser, pwid, emailed, saved } = await searchParams;
+  const { newuser, pwid, emailed, saved, error } = await searchParams;
   const savedMsg = saved ? takeFlash(saved) : null;
+  const errorMsg = error ? takeFlash(error) : null;
   const pw = pwid ? takeFlash(pwid) : null;
   const labId = Number(id);
   const lab = getLab(labId);
@@ -191,6 +131,14 @@ export default async function LabDetail({
         </Card>
       )}
 
+      {errorMsg && (
+        <Card className="border-destructive/50">
+          <CardContent>
+            <p className="text-sm text-destructive">{errorMsg}</p>
+          </CardContent>
+        </Card>
+      )}
+
       <Card>
         <CardContent className="space-y-3">
           <h3 className="text-base font-semibold">PI / metadata</h3>
@@ -221,7 +169,13 @@ export default async function LabDetail({
           ) : (
             <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
               {placements.map((p) => (
-                <PlacementCard key={p.id} p={p} />
+                <PlacementCard
+                  key={p.id}
+                  p={p}
+                  clients={placements
+                    .filter((candidate) => candidate.node_cold_owner_node_id === p.node_id)
+                    .map((candidate) => candidate.node_name)}
+                />
               ))}
             </div>
           )}

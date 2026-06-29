@@ -13,6 +13,7 @@ import {
   getPlacement,
   nextSshPortForNode,
   recreatePlacement,
+  retryPlacement,
   updatePlacementQuota,
 } from "@/lib/placements";
 import { TIB } from "@/lib/settings";
@@ -24,7 +25,13 @@ async function actor(): Promise<string> {
   return (await requireAdmin()).email;
 }
 
-const tbToBytes = (tb: number) => Math.round(tb * TIB);
+function tbToBytes(value: FormDataEntryValue | null, label: string): number {
+  const tb = Number(value);
+  if (!Number.isFinite(tb) || tb <= 0 || tb > 100_000) {
+    throw new Error(`${label} quota must be a positive number no greater than 100,000 TB`);
+  }
+  return Math.round(tb * TIB);
+}
 
 function containerOptionsFromForm(formData: FormData): ContainerOptions {
   return {
@@ -95,20 +102,23 @@ export async function grantNodeAccessAction(formData: FormData) {
   const labId = Number(formData.get("labId"));
   const nodeId = Number(formData.get("nodeId"));
   if (!labId || !nodeId) throw new Error("Lab and node are required");
-  const fastTb = Number(formData.get("fastTb"));
-  const coldTb = Number(formData.get("coldTb"));
   const image = String(formData.get("image") ?? "").trim() || "custom-ssh";
-
-  await createPlacement({
-    labId,
-    nodeId,
-    fastQuotaBytes: tbToBytes(fastTb),
-    coldQuotaBytes: tbToBytes(coldTb),
-    sshPort: nextSshPortForNode(nodeId),
-    image,
-    containerOptions: containerOptionsFromForm(formData),
-    actor: who,
-  });
+  const coldTb = formData.get("coldTb");
+  try {
+    await createPlacement({
+      labId,
+      nodeId,
+      fastQuotaBytes: tbToBytes(formData.get("fastTb"), "Fast"),
+      coldQuotaBytes: coldTb === null || coldTb === "" ? null : tbToBytes(coldTb, "Cold"),
+      sshPort: nextSshPortForNode(nodeId),
+      image,
+      containerOptions: containerOptionsFromForm(formData),
+      actor: who,
+    });
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not grant node access");
+    redirect(`/labs/${labId}?error=${fid}`);
+  }
   revalidatePath(`/labs/${labId}`);
   const fid = putFlash("Node access granted — provisioning the lab and roster on that node.");
   redirect(`/labs/${labId}?saved=${fid}`);
@@ -121,20 +131,27 @@ export async function setPlacementQuotaAction(formData: FormData) {
   if (!placement) return;
   const fastTb = formData.get("fastTb");
   const coldTb = formData.get("coldTb");
-  updatePlacementQuota(
-    placementId,
-    {
-      fastQuotaBytes: fastTb !== null && fastTb !== "" ? tbToBytes(Number(fastTb)) : undefined,
-      // Cold quota is editable live only for local-ZFS placements; SMB clients (cold_quota_bytes
-      // NULL) route cold changes to the owner (added in a later phase) and ignore it here.
-      coldQuotaBytes:
-        placement.cold_quota_bytes !== null && coldTb !== null && coldTb !== ""
-          ? tbToBytes(Number(coldTb))
-          : undefined,
-    },
-    who,
-  );
+  try {
+    updatePlacementQuota(
+      placementId,
+      {
+        fastQuotaBytes: fastTb !== null && fastTb !== "" ? tbToBytes(fastTb, "Fast") : undefined,
+        // SMB clients have no local cold quota; their owner placement is linked from the page.
+        coldQuotaBytes:
+          placement.cold_quota_bytes !== null && coldTb !== null && coldTb !== ""
+            ? tbToBytes(coldTb, "Cold")
+            : undefined,
+      },
+      who,
+    );
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not update quota");
+    redirect(`/labs/${placement.lab_id}/placements/${placement.id}?error=${fid}`);
+  }
   revalidatePath(`/labs/${placement.lab_id}`);
+  revalidatePath(`/labs/${placement.lab_id}/placements/${placement.id}`);
+  const fid = putFlash("Quota update queued. Desired and agent-reported values are shown separately until it applies.");
+  redirect(`/labs/${placement.lab_id}/placements/${placement.id}?saved=${fid}`);
 }
 
 export async function recreatePlacementAction(formData: FormData) {
@@ -166,8 +183,26 @@ export async function recreatePlacementSettingsAction(formData: FormData) {
     redirect(`/labs/${placement!.lab_id}/placements/${placementId}/recreate?error=${fid}`);
   }
   revalidatePath(`/labs/${placement!.lab_id}`);
+  revalidatePath(`/labs/${placement!.lab_id}/placements/${placementId}`);
   const fid = putFlash("Container recreate queued — the node validates the image, brings up a candidate, verifies readiness, then promotes it (data preserved).");
-  redirect(`/labs/${placement!.lab_id}?saved=${fid}`);
+  redirect(`/labs/${placement!.lab_id}/placements/${placementId}?saved=${fid}`);
+}
+
+export async function retryPlacementAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const placement = getPlacement(placementId);
+  if (!placement) redirect("/labs");
+  try {
+    retryPlacement(placementId, who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not retry placement");
+    redirect(`/labs/${placement!.lab_id}/placements/${placementId}?error=${fid}`);
+  }
+  revalidatePath(`/labs/${placement!.lab_id}`);
+  revalidatePath(`/labs/${placement!.lab_id}/placements/${placementId}`);
+  const fid = putFlash("Placement retry queued with its existing storage and container settings.");
+  redirect(`/labs/${placement!.lab_id}/placements/${placementId}?saved=${fid}`);
 }
 
 export async function removePlacementAction(formData: FormData) {
@@ -175,8 +210,16 @@ export async function removePlacementAction(formData: FormData) {
   const placementId = Number(formData.get("placementId"));
   const placement = getPlacement(placementId);
   if (!placement) return;
-  destroyPlacement(placementId, who);
+  try {
+    destroyPlacement(placementId, who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not remove placement");
+    redirect(`/labs/${placement!.lab_id}/placements/${placementId}?error=${fid}`);
+  }
   revalidatePath(`/labs/${placement.lab_id}`);
+  revalidatePath(`/labs/${placement.lab_id}/placements/${placement.id}`);
+  const fid = putFlash("Removal queued. The placement remains visible until the node confirms destruction.");
+  redirect(`/labs/${placement.lab_id}/placements/${placement.id}?saved=${fid}`);
 }
 
 export async function addMemberAction(formData: FormData) {

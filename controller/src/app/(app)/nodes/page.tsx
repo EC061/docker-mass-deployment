@@ -34,6 +34,8 @@ interface NodeRow {
   cold_mount_path: string | null;
   cold_ready: number;
   placements: number;
+  hosted_labs: string | null;
+  client_nodes: string | null;
 }
 
 interface ScrubEntry {
@@ -98,13 +100,19 @@ export default async function NodesPage({
   const token = typeof sp.token_flash === "string" ? takeFlash(sp.token_flash) : null;
   const error = typeof sp.error === "string" ? sp.error : undefined;
   const deleted = typeof sp.deleted === "string" ? sp.deleted : undefined;
+  const revoked = typeof sp.revoked === "string" ? sp.revoked : undefined;
 
   const nodes = db()
     .prepare(
       `SELECT n.name, n.alias, n.online, n.last_seen, n.capabilities, n.pools, n.scrub_status,
               n.allowed, n.cold_backend, n.cold_mount_path, n.cold_ready,
               owner.name AS owner_name,
-              (SELECT COUNT(*) FROM lab_placements WHERE node_id = n.id) AS placements
+              (SELECT COUNT(*) FROM lab_placements WHERE node_id = n.id) AS placements,
+              (SELECT group_concat(labs.name || ' (' || lp.state || ')', ', ')
+                 FROM lab_placements lp JOIN labs ON labs.id = lp.lab_id
+                WHERE lp.node_id = n.id) AS hosted_labs,
+              (SELECT group_concat(client.name, ', ') FROM nodes client
+                WHERE client.cold_owner_node_id = n.id) AS client_nodes
        FROM nodes n LEFT JOIN nodes owner ON owner.id = n.cold_owner_node_id ORDER BY n.name`,
     )
     .all() as NodeRow[];
@@ -126,6 +134,14 @@ export default async function NodesPage({
         <Card>
           <CardContent>
             <p className="text-sm text-muted-foreground">Node “{deleted}” was deleted.</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {revoked && (
+        <Card className="border-warn/50">
+          <CardContent>
+            <p className="text-sm text-warn">Node “{revoked}” was revoked and its live connection is being closed.</p>
           </CardContent>
         </Card>
       )}
@@ -182,6 +198,7 @@ export default async function NodesPage({
                   <TableHead>GPUs</TableHead>
                   <TableHead>Pools</TableHead>
                   <TableHead>Cold storage</TableHead>
+                  <TableHead>Dependencies</TableHead>
                   <TableHead>Scrub</TableHead>
                   <TableHead>Issues</TableHead>
                   <TableHead>Last seen</TableHead>
@@ -238,13 +255,11 @@ export default async function NodesPage({
                         ) : (
                           <span>local ZFS</span>
                         )}
-                        {n.cold_mount_path && (
-                          <div className="text-xs text-muted-foreground">
-                            {n.cold_mount_path}{" "}
-                            <Badge variant={n.cold_ready ? "ok" : "warn"}>{n.cold_ready ? "mounted" : "not mounted"}</Badge>
-                          </div>
-                        )}
-                        {n.placements === 0 ? (
+                        <div className="text-xs text-muted-foreground">
+                          {n.cold_mount_path ?? "path not reported"}{" "}
+                          <Badge variant={n.cold_ready ? "ok" : "warn"}>{n.cold_ready ? "ready" : "not ready"}</Badge>
+                        </div>
+                        {n.placements === 0 && !n.client_nodes ? (
                           <ColdStorageForm
                             name={n.name}
                             backend={n.cold_backend}
@@ -253,8 +268,15 @@ export default async function NodesPage({
                             action={setNodeColdStorageAction}
                           />
                         ) : (
-                          <div className="mt-1 text-xs text-muted-foreground">{n.placements} placement(s) — fixed</div>
+                          <div className="mt-1 text-xs text-muted-foreground">
+                            Configuration locked while {n.placements > 0 ? `${n.placements} placement(s) are hosted` : `SMB clients depend on this node`}.
+                          </div>
                         )}
+                      </TableCell>
+                      <TableCell className="min-w-40 text-xs">
+                        {n.hosted_labs ? <div><span className="text-muted-foreground">Labs:</span> {n.hosted_labs}</div> : null}
+                        {n.client_nodes ? <div><span className="text-muted-foreground">SMB clients:</span> {n.client_nodes}</div> : null}
+                        {!n.hosted_labs && !n.client_nodes ? "—" : null}
                       </TableCell>
                       <TableCell className={scrub.bad ? "text-warn" : undefined}>{scrub.text}</TableCell>
                       <TableCell>
