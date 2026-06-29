@@ -1,5 +1,7 @@
 import { db } from "@/lib/db";
+import { listLocalZfsNodes } from "@/lib/nodes";
 import { ConfirmButton } from "../_components/ConfirmButton";
+import { ColdStorageForm } from "./_components/ColdStorageForm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -12,6 +14,7 @@ import {
   revokeNodeAction,
   rotateNodeTokenAction,
   setNodeAliasAction,
+  setNodeColdStorageAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -27,6 +30,11 @@ interface NodeRow {
   allowed: number;
   auth_mode: string;
   token_pinned_at: number | null;
+  cold_backend: "local_zfs" | "smb";
+  owner_name: string | null;
+  cold_mount_path: string | null;
+  cold_ready: number;
+  placements: number;
 }
 
 interface ScrubEntry {
@@ -95,9 +103,14 @@ export default async function NodesPage({
 
   const nodes = db()
     .prepare(
-      "SELECT name, alias, online, last_seen, capabilities, pools, scrub_status, allowed, auth_mode, token_pinned_at FROM nodes ORDER BY name",
+      `SELECT n.name, n.alias, n.online, n.last_seen, n.capabilities, n.pools, n.scrub_status,
+              n.allowed, n.auth_mode, n.token_pinned_at, n.cold_backend, n.cold_mount_path, n.cold_ready,
+              owner.name AS owner_name,
+              (SELECT COUNT(*) FROM lab_placements WHERE node_id = n.id) AS placements
+       FROM nodes n LEFT JOIN nodes owner ON owner.id = n.cold_owner_node_id ORDER BY n.name`,
     )
     .all() as NodeRow[];
+  const localZfsNodes = listLocalZfsNodes().map((n) => n.name);
 
   return (
     <div className="space-y-4">
@@ -182,10 +195,6 @@ export default async function NodesPage({
                   const caps = n.capabilities ? JSON.parse(n.capabilities) : {};
                   const pools = n.pools ? JSON.parse(n.pools) : [];
                   const scrub = scrubSummary(n.scrub_status);
-                  const coldText =
-                    caps.slow_backend === "smb"
-                      ? `SMB${caps.slow_shared ? " (shared)" : ""}`
-                      : "ZFS";
                   return (
                     <TableRow key={n.name}>
                       <TableCell>
@@ -225,7 +234,30 @@ export default async function NodesPage({
                           ? "—"
                           : pools.map((p: any) => `${p.name}: ${fmtBytes(p.free)} free`).join(", ")}
                       </TableCell>
-                      <TableCell>{coldText}</TableCell>
+                      <TableCell>
+                        {n.cold_backend === "smb" ? (
+                          <span>Managed by {n.owner_name ?? <span className="text-warn">no owner</span>}</span>
+                        ) : (
+                          <span>local ZFS</span>
+                        )}
+                        {n.cold_mount_path && (
+                          <div className="text-xs text-muted-foreground">
+                            {n.cold_mount_path}{" "}
+                            <Badge variant={n.cold_ready ? "ok" : "warn"}>{n.cold_ready ? "mounted" : "not mounted"}</Badge>
+                          </div>
+                        )}
+                        {n.placements === 0 ? (
+                          <ColdStorageForm
+                            name={n.name}
+                            backend={n.cold_backend}
+                            ownerName={n.owner_name}
+                            localZfsNodes={localZfsNodes}
+                            action={setNodeColdStorageAction}
+                          />
+                        ) : (
+                          <div className="mt-1 text-xs text-muted-foreground">{n.placements} placement(s) — fixed</div>
+                        )}
+                      </TableCell>
                       <TableCell className={scrub.bad ? "text-warn" : undefined}>{scrub.text}</TableCell>
                       <TableCell>
                         {caps.issues && caps.issues.length > 0 ? (

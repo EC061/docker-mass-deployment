@@ -382,6 +382,20 @@ const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => 
       `);
     },
   },
+  {
+    // Phase 3: per-node cold-storage configuration. cold_backend is admin-set (local_zfs node owns
+    // real ZFS cold; smb node replaces cold with a mount of an owner's shared dataset). cold_owner_
+    // node_id points an SMB client at its local-ZFS owner. cold_mount_path / cold_ready are reported
+    // by the agent (the live mount path and whether it is an active mount). nodes is empty after the
+    // 0009 guard, so the NOT NULL defaults apply to future rows.
+    id: "0010_node_cold_storage",
+    sql: `
+    ALTER TABLE nodes ADD COLUMN cold_backend TEXT NOT NULL DEFAULT 'local_zfs';
+    ALTER TABLE nodes ADD COLUMN cold_owner_node_id INTEGER REFERENCES nodes(id);
+    ALTER TABLE nodes ADD COLUMN cold_mount_path TEXT;
+    ALTER TABLE nodes ADD COLUMN cold_ready INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

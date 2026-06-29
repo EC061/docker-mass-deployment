@@ -47,6 +47,22 @@ def test_smb_create_lab_makes_directories(monkeypatch):
     assert "/mnt/cold/labs/bio/users" in dirs
 
 
+# --- cold_status reporting (Phase 3) --------------------------------------------------------
+
+
+def test_cold_status_zfs_is_local_and_ready(monkeypatch):
+    monkeypatch.setattr(coldstore.zfs, "get_mountpoint", lambda ds: "/slow")
+    assert coldstore.cold_status(_zfs_cfg()) == {"backend": "zfs", "mount_path": "/slow", "ready": True}
+
+
+def test_cold_status_smb_reports_active_mount(monkeypatch):
+    monkeypatch.setattr(coldstore.os.path, "ismount", lambda p: p == "/mnt/cold")
+    st = coldstore.cold_status(_smb_cfg())
+    assert st["backend"] == "smb" and st["mount_path"] == "/mnt/cold" and st["ready"] is True
+    monkeypatch.setattr(coldstore.os.path, "ismount", lambda p: False)
+    assert coldstore.cold_status(_smb_cfg())["ready"] is False
+
+
 def test_smb_set_quota_is_noop():
     note = coldstore.set_lab_quota(_smb_cfg(), "bio", 5000)
     # The owner ZFS node enforces the quota; the SMB client does not.

@@ -2,7 +2,16 @@
 
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
-import { deleteNode, isValidNodeName, provisionNode, revokeNode, rotateNodeToken, setNodeAlias } from "@/lib/nodes";
+import {
+  type ColdBackend,
+  deleteNode,
+  isValidNodeName,
+  provisionNode,
+  revokeNode,
+  rotateNodeToken,
+  setNodeAlias,
+  setNodeColdStorage,
+} from "@/lib/nodes";
 
 // The freshly issued token is shown once on the Nodes page so the admin can paste the printed
 // `lab-agent set-token` command onto the node. It is never stored in plaintext.
@@ -43,6 +52,21 @@ export async function setNodeAliasAction(formData: FormData) {
     setNodeAlias(name, alias, admin.email);
   } catch (e) {
     error = e instanceof Error ? e.message : "could not set alias";
+  }
+  if (error) redirect("/nodes?error=" + encodeURIComponent(error));
+  redirect("/nodes");
+}
+
+export async function setNodeColdStorageAction(formData: FormData) {
+  const admin = await requireAdmin();
+  const name = String(formData.get("name") ?? "").trim().toLowerCase();
+  const backend = String(formData.get("backend") ?? "local_zfs") as ColdBackend;
+  const ownerName = String(formData.get("ownerName") ?? "").trim().toLowerCase() || null;
+  let error: string | null = null;
+  try {
+    setNodeColdStorage(name, backend, backend === "smb" ? ownerName : null, admin.email);
+  } catch (e) {
+    error = e instanceof Error ? e.message : "could not update cold storage";
   }
   if (error) redirect("/nodes?error=" + encodeURIComponent(error));
   redirect("/nodes");
