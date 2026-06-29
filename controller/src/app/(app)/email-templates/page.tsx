@@ -70,7 +70,7 @@ function EditableTemplate({ name, trigger, action, subject, body, vars, bodyRows
           <h3 className="text-base font-semibold">{name}</h3>
           <p className="text-sm text-muted-foreground">{trigger}</p>
         </div>
-        <form action={action} className="grid max-w-2xl gap-3">
+        <form action={action} className="grid gap-3">
           <div>
             <Label>Subject</Label>
             <Input name="subject" defaultValue={subject} />
@@ -147,7 +147,7 @@ export default async function EmailTemplatesPage({
   const announcementTemplates = listAnnouncementTemplates();
 
   return (
-    <div className="space-y-4">
+    <div className="max-w-3xl space-y-4">
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">Email templates</h1>
         <p className="text-sm text-muted-foreground">

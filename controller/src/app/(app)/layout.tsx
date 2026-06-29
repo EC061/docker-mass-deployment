@@ -30,7 +30,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
           <SidebarContent email={admin.email} logout={logout} />
         </MobileNav>
 
-        <main className="mx-auto w-full min-w-0 max-w-[100rem] flex-1 px-4 py-6 sm:px-6 lg:px-8">
+        <main className="w-full min-w-0 max-w-7xl flex-1 px-4 py-6 sm:px-6 lg:px-8">
           {children}
         </main>
       </div>
