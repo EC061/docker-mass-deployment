@@ -14,6 +14,7 @@
 
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { basename } from "node:path";
+import { backupEncryptionEnabled, decryptBackup, maybeEncryptBackup } from "./backupcrypto";
 import { db } from "./db";
 import { env } from "./env";
 import {
@@ -75,12 +76,24 @@ export async function backupAll(stamp = Date.now()): Promise<BackupResult> {
   return result;
 }
 
+// Warn once per process if backups are going out unencrypted, so the omission is visible in logs
+// without spamming every scheduled run.
+let warnedPlaintext = false;
+
 export async function backupNow(stamp = Date.now()): Promise<BackupResult> {
   if (!isWebdavConfigured()) return { ok: false, error: "WebDAV not configured" };
   try {
     const cfg = webdavConfig();
     await webdav.ensureCollection(cfg);
-    const data = snapshot();
+    // Encrypt at rest with the separate BACKUP_KEY (with integrity) when configured.
+    if (!backupEncryptionEnabled() && !warnedPlaintext) {
+      warnedPlaintext = true;
+      console.warn(
+        "[backup] BACKUP_KEY is not set — controller DB backups are uploaded UNENCRYPTED. " +
+          "Set BACKUP_KEY to encrypt them at rest on the WebDAV target.",
+      );
+    }
+    const data = maybeEncryptBackup(snapshot());
     const name = `${PREFIX}${stamp}.db`;
     await webdav.put(cfg, name, data);
     await webdav.put(cfg, LATEST, data);
@@ -208,7 +221,10 @@ export async function stageRestore(name: string): Promise<{ ok: boolean; error?:
   if (!known.some((e) => e.name === safe)) return { ok: false, error: "Unknown backup name" };
   try {
     const data = await webdav.get(webdavConfig(), safe);
-    writeFileSync(`${env.dbPath}.restore`, data);
+    // Decrypt + integrity-check (GCM tag) if it's an encrypted envelope; a tampered/corrupt or
+    // wrong-key backup throws here and is never staged as the next-boot DB.
+    const plain = decryptBackup(data);
+    writeFileSync(`${env.dbPath}.restore`, plain);
     return { ok: true };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };

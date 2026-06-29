@@ -6,6 +6,7 @@
 
 import { audit } from "./audit";
 import { db } from "./db";
+import { normalizeEmail } from "./email";
 import { getLab } from "./labs";
 import { sendRemovalEmail } from "./mailer";
 import { generatePassword } from "./passwords";
@@ -72,7 +73,7 @@ export function findOrCreateStudent(input: StudentInput): Student {
     .prepare(
       "INSERT INTO students (student_id, username, email, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
     )
-    .run(input.studentId ?? null, username, input.email ?? null, input.name ?? null, now, now);
+    .run(input.studentId ?? null, username, normalizeEmail(input.email), input.name ?? null, now, now);
   return db().prepare("SELECT * FROM students WHERE id = ?").get(Number(info.lastInsertRowid)) as Student;
 }
 

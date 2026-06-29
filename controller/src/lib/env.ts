@@ -118,6 +118,25 @@ export const env = {
   get isProd(): boolean {
     return process.env.NODE_ENV === "production";
   },
+  /**
+   * Whether to trust X-Forwarded-* headers for the client IP. True behind the configured reverse
+   * proxy (CONTROLLER_DOMAIN set) or when TRUST_PROXY=1 is set explicitly. When false, forwarded
+   * headers are client-controlled and must NOT be trusted for rate-limit keying.
+   */
+  get trustProxy(): boolean {
+    return validateControllerDomain(process.env.CONTROLLER_DOMAIN ?? "") !== "" ||
+      process.env.TRUST_PROXY === "1";
+  },
+  /**
+   * Optional key for encrypting controller DB backups at rest on the WebDAV target, SEPARATE from
+   * SESSION_SECRET so a leaked session secret can't decrypt backups (and rotating it doesn't break
+   * them). Unset => backups are uploaded unencrypted (logged on each run). Set => AES-256-GCM with
+   * a key derived from this value; the GCM tag also gives integrity (tamper/corruption is detected).
+   */
+  get backupKey(): string {
+    const v = process.env.BACKUP_KEY ?? "";
+    return v === "" ? "" : rejectWeak("BACKUP_KEY", v, 16);
+  },
 };
 
 /**

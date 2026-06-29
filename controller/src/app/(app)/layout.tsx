@@ -1,6 +1,6 @@
 import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
-import { clearSessionCookie, currentAdmin } from "@/lib/auth";
+import { clearSessionCookie, requireAdminPage } from "@/lib/auth";
 import { MobileNav } from "./_components/MobileNav";
 import { SidebarContent } from "./_components/SidebarContent";
 
@@ -14,8 +14,9 @@ async function logout() {
 }
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
-  const admin = await currentAdmin();
-  if (!admin) redirect("/login");
+  // Re-validate against the DB on every page render (not just the JWT): a disabled or token-rotated
+  // admin is bounced even if their cookie is still cryptographically valid.
+  const admin = await requireAdminPage();
   return (
     <div className="min-h-screen">
       {/* Fixed sidebar on desktop */}

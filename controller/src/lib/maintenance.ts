@@ -75,16 +75,33 @@ export function pruneLogs(now = Date.now()): number {
   return removed;
 }
 
-export function pruneOldData(): { logs: number; gpuEvents: number } {
+// Storage time-series powers the growth charts, so it is kept longer than logs/events — but still
+// bounded so the table can't grow forever. ~6 months of history.
+const STORAGE_SAMPLE_RETENTION_DAYS = 180;
+
+export function pruneOldData(): {
+  logs: number;
+  gpuEvents: number;
+  storageSamples: number;
+  quotaAlerts: number;
+} {
   const now = Date.now();
   const logs = pruneLogs(now);
+  // gpu_events + quota_alerts are alert-style event rows; retain them on the log retention window.
   const retentionDays = getSetting("logRetentionDays");
+  const eventCutoff = now - retentionDays * 86400 * 1000;
   const gpuEvents =
     retentionDays > 0
-      ? db().prepare("DELETE FROM gpu_events WHERE ts < ?").run(now - retentionDays * 86400 * 1000)
-          .changes
+      ? db().prepare("DELETE FROM gpu_events WHERE ts < ?").run(eventCutoff).changes
       : 0;
-  return { logs, gpuEvents };
+  const quotaAlerts =
+    retentionDays > 0
+      ? db().prepare("DELETE FROM quota_alerts WHERE ts < ?").run(eventCutoff).changes
+      : 0;
+  const storageSamples = db()
+    .prepare("DELETE FROM storage_samples WHERE ts < ?")
+    .run(now - STORAGE_SAMPLE_RETENTION_DAYS * 86400 * 1000).changes;
+  return { logs, gpuEvents, storageSamples, quotaAlerts };
 }
 
 /** Current hour-of-day (0-23) in an IANA timezone, or null if the tz name is invalid. */

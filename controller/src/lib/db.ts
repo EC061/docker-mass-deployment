@@ -433,6 +433,18 @@ const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => 
     ALTER TABLE gpu_events ADD COLUMN placement_id INTEGER REFERENCES lab_placements(id) ON DELETE SET NULL;
     `,
   },
+  {
+    // Phase 10: emails are now treated case-insensitively (normalized to lower+trim on write and
+    // lookup). Normalize any pre-existing rows so an account created with mixed case still matches at
+    // login. admins.email is UNIQUE — a genuine case-only duplicate would (correctly) fail here.
+    id: "0014_normalize_emails",
+    sql: `
+    UPDATE admins SET email = lower(trim(email))
+      WHERE email IS NOT NULL AND email <> lower(trim(email));
+    UPDATE students SET email = lower(trim(email))
+      WHERE email IS NOT NULL AND email <> lower(trim(email));
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {
