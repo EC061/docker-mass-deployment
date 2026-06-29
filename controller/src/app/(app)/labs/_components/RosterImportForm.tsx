@@ -1,31 +1,40 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import type { ImportPlan, ImportResult } from "@/lib/labimport";
+import type { RosterImportPlan, RosterImportResult } from "@/lib/labimport";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
-const SAMPLE = `lab_name,pi_name,pi_email,student_id,username,student_name,student_email
-smith-lab,Dr. Jane Smith,jane.smith@example.edu,100001,jdoe,John Doe,jdoe@example.edu
-smith-lab,Dr. Jane Smith,jane.smith@example.edu,100002,asmith,Alice Smith,asmith@example.edu
-empty-lab,Dr. Mary Lee,mary.lee@example.edu,,,,`;
+const SAMPLE = `role,username,email,name,student_id
+pi,,jane.smith@example.edu,Dr. Jane Smith,
+student,jdoe,jdoe@example.edu,John Doe,100001
+student,asmith,asmith@example.edu,Alice Smith,100002`;
 
 interface Props {
-  preview: (text: string) => Promise<ImportPlan>;
-  apply: (text: string) => Promise<{ result?: ImportResult; error?: string }>;
+  labId: number;
+  preview: (labId: number, text: string) => Promise<RosterImportPlan>;
+  apply: (labId: number, text: string) => Promise<{ result?: RosterImportResult; error?: string }>;
 }
 
-function Summary({ plan }: { plan: ImportPlan }) {
-  const rows: [string, number][] = [
-    ["Labs to create", plan.labsToCreate.length],
-    ["Labs to update", plan.labsToUpdate.length],
+function planChangeCount(plan: RosterImportPlan): number {
+  return (
+    (plan.piUpdate ? 1 : 0) +
+    plan.studentsToCreate.length +
+    plan.studentsToUpdate.length +
+    plan.membershipsToAdd.length
+  );
+}
+
+function Summary({ plan }: { plan: RosterImportPlan }) {
+  const rows: [string, string | number][] = [
+    ["PI metadata", plan.piUpdate ? "changes" : "unchanged"],
     ["Students to create", plan.studentsToCreate.length],
     ["Students to update", plan.studentsToUpdate.length],
-    ["Memberships to add", plan.membershipsToAdd.length],
+    ["Members to add", plan.membershipsToAdd.length],
   ];
   return (
     <div className="space-y-3 text-sm">
-      <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-4">
         {rows.map(([label, n]) => (
           <div key={label} className="flex justify-between gap-2">
             <span className="text-muted-foreground">{label}</span>
@@ -57,9 +66,9 @@ function Summary({ plan }: { plan: ImportPlan }) {
   );
 }
 
-export function LabImportForm({ preview, apply }: Props) {
+export function RosterImportForm({ labId, preview, apply }: Props) {
   const [text, setText] = useState("");
-  const [plan, setPlan] = useState<ImportPlan | null>(null);
+  const [plan, setPlan] = useState<RosterImportPlan | null>(null);
   const [done, setDone] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -70,7 +79,7 @@ export function LabImportForm({ preview, apply }: Props) {
     setDone(null);
     start(async () => {
       try {
-        setPlan(await preview(text));
+        setPlan(await preview(labId, text));
       } catch (e) {
         setErr(e instanceof Error ? e.message : "preview failed");
       }
@@ -80,14 +89,15 @@ export function LabImportForm({ preview, apply }: Props) {
   function onApply() {
     setErr(null);
     start(async () => {
-      const res = await apply(text);
+      const res = await apply(labId, text);
       if (res.error) {
         setErr(res.error);
       } else if (res.result) {
         const r = res.result;
         setDone(
-          `Imported: ${r.labsCreated} labs created, ${r.labsUpdated} updated; ${r.studentsCreated} students created, ${r.studentsUpdated} updated; ${r.membershipsAdded} memberships added` +
-            (r.provisioned ? `; ${r.provisioned} queued on existing placements (credentials follow agent confirmation)` : ""),
+          `Imported: ${r.studentsCreated} students created, ${r.studentsUpdated} updated; ${r.membershipsAdded} added to the roster` +
+            (r.piUpdated ? "; PI metadata updated" : "") +
+            (r.provisioned ? `; ${r.provisioned} queued on existing nodes (credentials follow agent confirmation)` : ""),
         );
         setPlan(null);
         setText("");
@@ -103,9 +113,10 @@ export function LabImportForm({ preview, apply }: Props) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Columns: <code>lab_name,pi_name,pi_email,student_id,username,student_name,student_email</code>.
-        One row per membership; leave the student columns blank to create an empty lab. The whole file
-        is validated before anything is written, and re-importing is idempotent.
+        Columns: <code>role,username,email,name,student_id</code>. <code>role</code> is{" "}
+        <code>student</code> (the default) or <code>pi</code>; a single <code>pi</code> row sets this
+        lab&apos;s PI (no need to repeat it on every student row). The whole file is validated before
+        anything is written, and re-importing is idempotent.
       </p>
       <Textarea
         value={text}
@@ -122,7 +133,7 @@ export function LabImportForm({ preview, apply }: Props) {
         <Button type="button" onClick={onPreview} disabled={pending || !text.trim()}>
           {pending ? "Working…" : "Preview"}
         </Button>
-        {plan && plan.ok && plan.membershipsToAdd.length + plan.labsToCreate.length + plan.labsToUpdate.length + plan.studentsToCreate.length + plan.studentsToUpdate.length > 0 && (
+        {plan && plan.ok && planChangeCount(plan) > 0 && (
           <Button type="button" onClick={onApply} disabled={pending}>
             Apply import
           </Button>
@@ -137,7 +148,7 @@ export function LabImportForm({ preview, apply }: Props) {
               Not committable — fix the issues below and preview again.
             </p>
           )}
-          {plan.ok && plan.labsToCreate.length + plan.labsToUpdate.length + plan.studentsToCreate.length + plan.studentsToUpdate.length + plan.membershipsToAdd.length === 0 && (
+          {plan.ok && planChangeCount(plan) === 0 && (
             <p className="mb-2 text-sm text-muted-foreground">Nothing to change — already up to date.</p>
           )}
           <Summary plan={plan} />

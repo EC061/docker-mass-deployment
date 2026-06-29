@@ -136,4 +136,9 @@
     font-family: var(--font-sans);
     -webkit-font-smoothing: antialiased;
   }
+  /* Long command/CSV signatures must wrap inside cards on narrow screens. Code blocks retain their
+     own preformatted, horizontally scrollable behavior. */
+  :where(:not(pre)) > code {
+    overflow-wrap: anywhere;
+  }
 }

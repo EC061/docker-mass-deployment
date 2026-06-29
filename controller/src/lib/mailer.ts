@@ -5,6 +5,7 @@
  */
 
 import nodemailer from "nodemailer";
+import { renderTemplate } from "./template";
 import {
   DEFAULT_GPU_KILL_BODY,
   DEFAULT_GPU_KILL_SUBJECT,
@@ -16,16 +17,8 @@ import {
   isSmtpConfigured,
 } from "./settings";
 
-/**
- * Substitute {placeholder} tokens in a template. Unknown tokens are left untouched so a typo in the
- * admin's template is visible rather than silently dropped. Values are coerced to strings; a
- * null/undefined value renders as an empty string.
- */
-export function renderTemplate(template: string, vars: Record<string, string | number | null | undefined>): string {
-  return template.replace(/\{(\w+)\}/g, (whole, key: string) =>
-    Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key] ?? "") : whole,
-  );
-}
+// Re-exported for back-compat: callers (and tests) still import renderTemplate from the mailer.
+export { renderTemplate };
 
 export interface SendResult {
   sent: boolean;

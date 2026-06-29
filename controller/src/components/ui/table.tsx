@@ -1,11 +1,15 @@
 import * as React from "react";
 import { cn } from "@/lib/utils";
 
-/** Table wrapped in a horizontal-scroll container so wide tables never break the mobile layout. */
+/**
+ * Table wrapped in its own horizontal-scroll region. The table keeps at least the width of its
+ * container while page-specific minimum widths can preserve dense columns without squeezing words
+ * into vertical stacks.
+ */
 function Table({ className, ...props }: React.HTMLAttributes<HTMLTableElement>) {
   return (
-    <div className="relative w-full overflow-x-auto">
-      <table className={cn("w-full caption-bottom text-sm", className)} {...props} />
+    <div className="relative w-full max-w-full overflow-x-auto overscroll-x-contain [scrollbar-gutter:stable]">
+      <table className={cn("min-w-full caption-bottom text-sm", className)} {...props} />
     </div>
   );
 }
@@ -40,7 +44,7 @@ function TableHead({ className, ...props }: React.ThHTMLAttributes<HTMLTableCell
 }
 
 function TableCell({ className, ...props }: React.TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className={cn("px-3 py-2.5 align-middle", className)} {...props} />;
+  return <td className={cn("break-normal px-3 py-2.5 align-middle", className)} {...props} />;
 }
 
 export { Table, TableHeader, TableBody, TableRow, TableHead, TableCell };

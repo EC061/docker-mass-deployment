@@ -16,145 +16,163 @@ vi.mock("../src/lib/mailer", () => ({
 
 let dbmod: typeof import("../src/lib/db");
 let imp: typeof import("../src/lib/labimport");
+let labsmod: typeof import("../src/lib/labs");
 
-const HEADER = "lab_name,pi_name,pi_email,student_id,username,student_name,student_email";
+const HEADER = "role,username,email,name,student_id";
 
 beforeAll(async () => {
   dbmod = await import("../src/lib/db");
   imp = await import("../src/lib/labimport");
+  labsmod = await import("../src/lib/labs");
 });
+
+let labId = 0;
 
 beforeEach(() => {
   const d = dbmod.db();
   for (const t of ["placement_members", "lab_members", "lab_placements", "storage_samples", "quota_alerts", "students", "labs"]) {
     d.prepare(`DELETE FROM ${t}`).run();
   }
+  labId = labsmod.createLab({ name: "smith-lab" }).id;
 });
 
 const count = (sql: string) => (dbmod.db().prepare(sql).get() as { n: number }).n;
 
-describe("planLabImport / applyLabImport", () => {
-  it("creates multiple students in one lab plus an empty lab", async () => {
+describe("planRosterImport / applyRosterImport", () => {
+  it("creates students and adds them to the target lab's roster", async () => {
     const csv = [
       HEADER,
-      "smith-lab,Dr. Jane Smith,jane@x.edu,100001,jdoe,John Doe,jdoe@x.edu",
-      "smith-lab,Dr. Jane Smith,jane@x.edu,100002,asmith,Alice Smith,asmith@x.edu",
-      "empty-lab,Dr. Mary Lee,mary@x.edu,,,,",
+      "student,jdoe,jdoe@x.edu,John Doe,100001",
+      "student,asmith,asmith@x.edu,Alice Smith,100002",
     ].join("\n");
-    const plan = imp.planLabImport(csv);
+    const plan = imp.planRosterImport(labId, csv);
     expect(plan.ok).toBe(true);
-    expect(plan.labsToCreate.map((l) => l.name).sort()).toEqual(["empty-lab", "smith-lab"]);
     expect(plan.studentsToCreate).toHaveLength(2);
-    expect(plan.membershipsToAdd).toHaveLength(2);
+    expect(plan.membershipsToAdd.sort()).toEqual(["asmith", "jdoe"]);
 
-    const res = await imp.applyLabImport(csv, "admin@x.edu");
-    expect(res).toMatchObject({ labsCreated: 2, studentsCreated: 2, membershipsAdded: 2 });
-    expect(count("SELECT COUNT(*) AS n FROM labs")).toBe(2);
-    expect(count("SELECT COUNT(*) AS n FROM lab_members")).toBe(2);
-    // empty-lab has no members.
-    expect(count("SELECT COUNT(*) AS n FROM lab_members WHERE lab_id=(SELECT id FROM labs WHERE name='empty-lab')")).toBe(0);
-    // audit row recorded with the actor.
-    expect(dbmod.db().prepare("SELECT 1 FROM audit_log WHERE action='lab.import' AND actor='admin@x.edu'").get()).toBeTruthy();
+    const res = await imp.applyRosterImport(labId, csv, "admin@x.edu");
+    expect(res).toMatchObject({ studentsCreated: 2, membershipsAdded: 2 });
+    expect(count(`SELECT COUNT(*) AS n FROM lab_members WHERE lab_id=${labId}`)).toBe(2);
+    expect(dbmod.db().prepare("SELECT 1 FROM audit_log WHERE action='lab.roster_import' AND actor='admin@x.edu'").get()).toBeTruthy();
   });
 
-  it("places one student in multiple labs (single student row, two memberships)", async () => {
+  it("defaults a row with no role column to student", async () => {
+    const csv = ["username,email,name,student_id", "alice,alice@x.edu,Alice,1"].join("\n");
+    const plan = imp.planRosterImport(labId, csv);
+    expect(plan.ok).toBe(true);
+    expect(plan.studentsToCreate).toHaveLength(1);
+    expect(plan.membershipsToAdd).toEqual(["alice"]);
+  });
+
+  it("applies a 'pi' row to the lab's PI metadata without creating a member", async () => {
     const csv = [
       HEADER,
-      "lab-a,PI A,a@x.edu,500,shared,Shared S,s@x.edu",
-      "lab-b,PI B,b@x.edu,500,shared,Shared S,s@x.edu",
+      "pi,,jane@x.edu,Dr. Jane Smith,",
+      "student,jdoe,jdoe@x.edu,John Doe,100001",
     ].join("\n");
-    await imp.applyLabImport(csv);
+    const plan = imp.planRosterImport(labId, csv);
+    expect(plan.piUpdate).toMatchObject({ piName: "Dr. Jane Smith", piEmail: "jane@x.edu" });
+    expect(plan.membershipsToAdd).toEqual(["jdoe"]);
+
+    const res = await imp.applyRosterImport(labId, csv);
+    expect(res.piUpdated).toBe(true);
+    const lab = dbmod.db().prepare("SELECT pi_name, pi_email FROM labs WHERE id=?").get(labId) as { pi_name: string; pi_email: string };
+    expect(lab).toMatchObject({ pi_name: "Dr. Jane Smith", pi_email: "jane@x.edu" });
+    expect(count(`SELECT COUNT(*) AS n FROM lab_members WHERE lab_id=${labId}`)).toBe(1);
+  });
+
+  it("is idempotent on reimport", async () => {
+    const csv = [HEADER, "pi,,pi@x.edu,PI,", "student,alice,alice@x.edu,Alice,1"].join("\n");
+    await imp.applyRosterImport(labId, csv);
+    const plan2 = imp.planRosterImport(labId, csv);
+    expect(plan2.ok).toBe(true);
+    expect(plan2.piUpdate).toBeNull();
+    expect(plan2.studentsToCreate).toHaveLength(0);
+    expect(plan2.studentsToUpdate).toHaveLength(0);
+    expect(plan2.membershipsToAdd).toHaveLength(0);
+    const res2 = await imp.applyRosterImport(labId, csv);
+    expect(res2).toMatchObject({ studentsCreated: 0, membershipsAdded: 0, piUpdated: false });
+  });
+
+  it("updates changed student metadata", async () => {
+    await imp.applyRosterImport(labId, [HEADER, "student,alice,alice@x.edu,Alice,1"].join("\n"));
+    const plan = imp.planRosterImport(labId, [HEADER, "student,alice,alice2@x.edu,Alice Anderson,1"].join("\n"));
+    expect(plan.studentsToUpdate).toHaveLength(1);
+    expect(plan.studentsToUpdate[0]).toMatchObject({ username: "alice", name: "Alice Anderson", email: "alice2@x.edu" });
+    expect(plan.membershipsToAdd).toHaveLength(0); // already a member
+  });
+
+  it("reuses an existing global student, adding only a membership to this lab", async () => {
+    const labA = labId;
+    const labB = labsmod.createLab({ name: "lab-b" }).id;
+    await imp.applyRosterImport(labA, [HEADER, "student,jdoe,j@x.edu,J Doe,777"].join("\n"));
+    const plan = imp.planRosterImport(labB, [HEADER, "student,jdoe,j@x.edu,J Doe,777"].join("\n"));
+    expect(plan.studentsToCreate).toHaveLength(0);
+    expect(plan.membershipsToAdd).toEqual(["jdoe"]);
+    await imp.applyRosterImport(labB, [HEADER, "student,jdoe,j@x.edu,J Doe,777"].join("\n"));
     expect(count("SELECT COUNT(*) AS n FROM students")).toBe(1);
     expect(count("SELECT COUNT(*) AS n FROM lab_members")).toBe(2);
   });
 
-  it("is idempotent on reimport", async () => {
-    const csv = [HEADER, "bio,PI,pi@x.edu,1,alice,Alice,alice@x.edu"].join("\n");
-    await imp.applyLabImport(csv);
-    const plan2 = imp.planLabImport(csv);
-    expect(plan2.ok).toBe(true);
-    expect(plan2.labsToCreate).toHaveLength(0);
-    expect(plan2.labsToUpdate).toHaveLength(0);
-    expect(plan2.studentsToCreate).toHaveLength(0);
-    expect(plan2.studentsToUpdate).toHaveLength(0);
-    expect(plan2.membershipsToAdd).toHaveLength(0);
-    const res2 = await imp.applyLabImport(csv);
-    expect(res2).toMatchObject({ labsCreated: 0, studentsCreated: 0, membershipsAdded: 0 });
-  });
-
-  it("updates changed lab PI and student metadata", async () => {
-    await imp.applyLabImport([HEADER, "bio,Old PI,old@x.edu,1,alice,Alice,alice@x.edu"].join("\n"));
-    const plan = imp.planLabImport([HEADER, "bio,New PI,new@x.edu,1,alice,Alice Anderson,alice2@x.edu"].join("\n"));
-    expect(plan.labsToUpdate).toEqual([{ name: "bio", piName: "New PI", piEmail: "new@x.edu" }]);
-    expect(plan.studentsToUpdate).toHaveLength(1);
-    expect(plan.studentsToUpdate[0]).toMatchObject({ username: "alice", name: "Alice Anderson", email: "alice2@x.edu" });
-    await imp.applyLabImport([HEADER, "bio,New PI,new@x.edu,1,alice,Alice Anderson,alice2@x.edu"].join("\n"));
-    const lab = dbmod.db().prepare("SELECT pi_name, pi_email FROM labs WHERE name='bio'").get() as any;
-    expect(lab).toMatchObject({ pi_name: "New PI", pi_email: "new@x.edu" });
-  });
-
-  it("matches an existing student by student_id, adding only a membership", async () => {
-    await imp.applyLabImport([HEADER, "lab-a,PI,pi@x.edu,777,jdoe,J Doe,j@x.edu"].join("\n"));
-    const plan = imp.planLabImport([HEADER, "lab-b,PI,pi2@x.edu,777,jdoe,J Doe,j@x.edu"].join("\n"));
-    expect(plan.studentsToCreate).toHaveLength(0);
-    expect(plan.membershipsToAdd).toEqual([{ lab: "lab-b", username: "jdoe" }]);
-  });
-
-  it("flags conflicting PI data for one lab", () => {
-    const plan = imp.planLabImport([
+  it("flags conflicting PI rows", () => {
+    const plan = imp.planRosterImport(labId, [
       HEADER,
-      "bio,Dr. A,a@x.edu,1,alice,Alice,alice@x.edu",
-      "bio,Dr. B,b@x.edu,2,bob,Bob,bob@x.edu",
+      "pi,,a@x.edu,Dr. A,",
+      "pi,,b@x.edu,Dr. B,",
     ].join("\n"));
     expect(plan.ok).toBe(false);
-    expect(plan.conflicts.some((c) => /PI name mismatch/.test(c.message))).toBe(true);
+    expect(plan.conflicts.some((c) => /conflicting PI/.test(c.message))).toBe(true);
   });
 
   it("flags a student_id reused across two usernames", () => {
-    const plan = imp.planLabImport([
+    const plan = imp.planRosterImport(labId, [
       HEADER,
-      "bio,PI,pi@x.edu,900,alice,Alice,alice@x.edu",
-      "bio,PI,pi@x.edu,900,bob,Bob,bob@x.edu",
+      "student,alice,alice@x.edu,Alice,900",
+      "student,bob,bob@x.edu,Bob,900",
     ].join("\n"));
     expect(plan.ok).toBe(false);
     expect(plan.conflicts.some((c) => /used by two usernames/.test(c.message))).toBe(true);
   });
 
   it("flags a student_id that already belongs to a different existing username", async () => {
-    await imp.applyLabImport([HEADER, "bio,PI,pi@x.edu,42,alice,Alice,alice@x.edu"].join("\n"));
-    const plan = imp.planLabImport([HEADER, "bio2,PI,pi@x.edu,42,bob,Bob,bob@x.edu"].join("\n"));
+    await imp.applyRosterImport(labId, [HEADER, "student,alice,alice@x.edu,Alice,42"].join("\n"));
+    const plan = imp.planRosterImport(labId, [HEADER, "student,bob,bob@x.edu,Bob,42"].join("\n"));
     expect(plan.ok).toBe(false);
     expect(plan.conflicts.some((c) => /already belongs to 'alice'/.test(c.message))).toBe(true);
   });
 
-  it("flags invalid lab names, emails, and missing username", () => {
-    const plan = imp.planLabImport([
+  it("flags unknown roles, invalid emails, and a student row with no username", () => {
+    const plan = imp.planRosterImport(labId, [
       HEADER,
-      "bad/lab,PI,pi@x.edu,,,,",
-      "ok-lab,PI,not-an-email,,,,",
-      "ok-lab,PI,pi@x.edu,123,,No Username,nouser@x.edu",
+      "teacher,carol,carol@x.edu,Carol,",
+      "student,dave,not-an-email,Dave,",
+      "student,,nouser@x.edu,No Username,123",
     ].join("\n"));
-    expect(plan.invalid.some((c) => /invalid lab_name/.test(c.message))).toBe(true);
-    expect(plan.invalid.some((c) => /invalid pi_email/.test(c.message))).toBe(true);
+    expect(plan.invalid.some((c) => /unknown role/.test(c.message))).toBe(true);
+    expect(plan.invalid.some((c) => /invalid email/.test(c.message))).toBe(true);
     expect(plan.invalid.some((c) => /username required/.test(c.message))).toBe(true);
     expect(plan.ok).toBe(false);
   });
 
-  it("enforces the row-count and size limits", () => {
-    const rows = [HEADER];
-    for (let i = 0; i < imp.MAX_IMPORT_ROWS + 1; i++) rows.push(`lab-${i},PI,pi@x.edu,,,,`);
-    const overRows = imp.planLabImport(rows.join("\n"));
-    expect(overRows.invalid.some((c) => /Too many rows/.test(c.message))).toBe(true);
-
-    const big = HEADER + "\n" + "x".repeat(imp.MAX_IMPORT_BYTES);
-    expect(imp.planLabImport(big).invalid.some((c) => /File too large/.test(c.message))).toBe(true);
+  it("rejects an unknown lab and a missing username column", () => {
+    expect(imp.planRosterImport(999999, [HEADER, "student,alice,a@x.edu,Alice,1"].join("\n")).invalid.some((c) => /Unknown lab/.test(c.message))).toBe(true);
+    expect(imp.planRosterImport(labId, ["role,email,name,student_id", "student,a@x.edu,Alice,1"].join("\n")).invalid.some((c) => /Missing required column 'username'/.test(c.message))).toBe(true);
   });
 
-  it("applyLabImport rolls back entirely when the plan is not committable", async () => {
-    const before = count("SELECT COUNT(*) AS n FROM labs");
+  it("enforces the row-count and size limits", () => {
+    const rows = [HEADER];
+    for (let i = 0; i < imp.MAX_IMPORT_ROWS + 1; i++) rows.push(`student,user${i},u${i}@x.edu,User ${i},`);
+    expect(imp.planRosterImport(labId, rows.join("\n")).invalid.some((c) => /Too many rows/.test(c.message))).toBe(true);
+
+    const big = HEADER + "\n" + "x".repeat(imp.MAX_IMPORT_BYTES);
+    expect(imp.planRosterImport(labId, big).invalid.some((c) => /File too large/.test(c.message))).toBe(true);
+  });
+
+  it("applyRosterImport rolls back entirely when the plan is not committable", async () => {
+    const before = count("SELECT COUNT(*) AS n FROM students");
     await expect(
-      imp.applyLabImport([HEADER, "bio,Dr. A,a@x.edu,1,alice,Alice,alice@x.edu", "bio,Dr. B,b@x.edu,2,bob,Bob,bob@x.edu"].join("\n")),
+      imp.applyRosterImport(labId, [HEADER, "student,alice,alice@x.edu,Alice,900", "student,bob,bob@x.edu,Bob,900"].join("\n")),
     ).rejects.toThrow(/not committable/);
-    expect(count("SELECT COUNT(*) AS n FROM labs")).toBe(before); // nothing written
+    expect(count("SELECT COUNT(*) AS n FROM students")).toBe(before); // nothing written
   });
 });

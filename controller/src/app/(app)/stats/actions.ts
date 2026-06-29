@@ -1,8 +1,11 @@
 "use server";
 
+import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
+import { putFlash } from "@/lib/flash";
+import { createNodeGroup, deleteNodeGroup, renameNodeGroup, setNodeGroupMembers } from "@/lib/nodegroups";
 import { enqueueTask } from "@/lib/queue";
 
 /**
@@ -30,4 +33,38 @@ export async function usageScanAction(formData: FormData) {
     .all(placement.lab_id) as { username: string }[]).map((r) => r.username);
   enqueueTask(placement.node, "usage.scan", { lab: placement.lab, users }, who);
   revalidatePath("/stats");
+}
+
+/** Run a node-group mutation, surfacing any error as a flash on the Stats page. */
+async function withGroupFlash(fn: (who: string) => void): Promise<void> {
+  const who = (await requireAdmin()).email;
+  try {
+    fn(who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not update node groups");
+    redirect(`/stats?error=${fid}`);
+  }
+  revalidatePath("/stats");
+}
+
+export async function createNodeGroupAction(formData: FormData) {
+  const name = String(formData.get("name") ?? "");
+  await withGroupFlash((who) => createNodeGroup(name, who));
+}
+
+export async function renameNodeGroupAction(formData: FormData) {
+  const groupId = Number(formData.get("groupId"));
+  const name = String(formData.get("name") ?? "");
+  await withGroupFlash((who) => renameNodeGroup(groupId, name, who));
+}
+
+export async function deleteNodeGroupAction(formData: FormData) {
+  const groupId = Number(formData.get("groupId"));
+  await withGroupFlash((who) => deleteNodeGroup(groupId, who));
+}
+
+export async function setNodeGroupMembersAction(formData: FormData) {
+  const groupId = Number(formData.get("groupId"));
+  const nodeIds = formData.getAll("nodeId").map((v) => Number(v)).filter((n) => Number.isFinite(n));
+  await withGroupFlash((who) => setNodeGroupMembers(groupId, nodeIds, who));
 }

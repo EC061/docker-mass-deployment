@@ -8,6 +8,7 @@ import {
   FlaskConical,
   HardDrive,
   LayoutDashboard,
+  Mail,
   ScrollText,
   Server,
   Settings,
@@ -25,6 +26,7 @@ const NAV: [string, string, LucideIcon][] = [
   ["/gpu", "GPU", Cpu],
   ["/logs", "Logs", ScrollText],
   ["/announcements", "Announce", Bell],
+  ["/email-templates", "Templates", Mail],
   ["/backups", "Backups", DatabaseBackup],
   ["/settings", "Settings", Settings],
 ];

@@ -24,13 +24,15 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
         <SidebarContent email={admin.email} logout={logout} />
       </aside>
 
-      <div className="flex min-h-screen flex-col md:pl-64">
+      <div className="flex min-h-screen min-w-0 flex-col md:pl-64">
         {/* Hamburger top bar on mobile; the same sidebar body slides in as a Sheet */}
         <MobileNav>
           <SidebarContent email={admin.email} logout={logout} />
         </MobileNav>
 
-        <main className="w-full max-w-6xl flex-1 px-4 py-6 sm:px-6 lg:px-8">{children}</main>
+        <main className="mx-auto w-full min-w-0 max-w-[100rem] flex-1 px-4 py-6 sm:px-6 lg:px-8">
+          {children}
+        </main>
       </div>
     </div>
   );

@@ -178,3 +178,74 @@ export function buildStats(): NodeStats[] {
   for (const n of nodes) n.labs.sort((a, b) => a.labName.localeCompare(b.labName));
   return nodes;
 }
+
+/** Per-node total storage usage, summed across the node's placements. Includes every node (even ones
+ * with no placements yet) so node groups can reference the whole fleet. A normal (local_zfs) node
+ * reports both fast and cold; an SMB-client node reports fast only — its cold lives on, and is counted
+ * against, its linked owner node, named in `coldOwnerName`. */
+export interface NodeUsage {
+  nodeId: number;
+  name: string;
+  alias: string | null;
+  online: number;
+  coldBackend: "local_zfs" | "smb";
+  coldOwnerName: string | null; // for SMB nodes: the linked normal node hosting their cold storage
+  fastUsed: number | null;
+  fastQuota: number | null;
+  coldUsed: number | null; // null on SMB nodes (cold is counted on the owner)
+  coldQuota: number | null;
+}
+
+export function buildNodeUsage(): NodeUsage[] {
+  const samples = latestSamples();
+  const rows = db()
+    .prepare(
+      `SELECT n.id AS id, n.name AS name, n.alias AS alias, n.online AS online,
+              n.cold_backend AS cold_backend, owner.name AS owner_name
+       FROM nodes n LEFT JOIN nodes owner ON owner.id = n.cold_owner_node_id
+       ORDER BY n.name`,
+    )
+    .all() as {
+    id: number;
+    name: string;
+    alias: string | null;
+    online: number;
+    cold_backend: "local_zfs" | "smb";
+    owner_name: string | null;
+  }[];
+
+  // node_id -> running totals (used summed only over placements that have a sample; quota over those
+  // that report one). `null` stays null until at least one sample contributes.
+  interface Acc { fastUsed: number | null; fastQuota: number | null; coldUsed: number | null; coldQuota: number | null }
+  const acc = new Map<number, Acc>();
+  const add = (cur: number | null, v: number | null | undefined) =>
+    v === null || v === undefined ? cur : (cur ?? 0) + v;
+
+  for (const p of listAllPlacements()) {
+    const a = acc.get(p.node_id) ?? { fastUsed: null, fastQuota: null, coldUsed: null, coldQuota: null };
+    const fast = samples.get(`${p.id}:L:fast`);
+    const slow = samples.get(`${p.id}:L:slow`);
+    a.fastUsed = add(a.fastUsed, fast?.used);
+    a.fastQuota = add(a.fastQuota, fast?.quota);
+    a.coldUsed = add(a.coldUsed, slow?.used);
+    a.coldQuota = add(a.coldQuota, slow?.quota);
+    acc.set(p.node_id, a);
+  }
+
+  return rows.map((r) => {
+    const a = acc.get(r.id);
+    const isSmb = r.cold_backend === "smb";
+    return {
+      nodeId: r.id,
+      name: r.name,
+      alias: r.alias,
+      online: r.online,
+      coldBackend: r.cold_backend,
+      coldOwnerName: isSmb ? r.owner_name : null,
+      fastUsed: a?.fastUsed ?? null,
+      fastQuota: a?.fastQuota ?? null,
+      coldUsed: isSmb ? null : (a?.coldUsed ?? null),
+      coldQuota: isSmb ? null : (a?.coldQuota ?? null),
+    };
+  });
+}

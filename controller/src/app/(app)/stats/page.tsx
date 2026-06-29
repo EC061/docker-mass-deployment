@@ -1,13 +1,24 @@
 import type { ReactNode } from "react";
 import { Loader2, RefreshCw } from "lucide-react";
+import { ConfirmButton } from "../_components/ConfirmButton";
+import { takeFlash } from "@/lib/flash";
 import { ago, fmtBytes, pct } from "@/lib/format";
-import { buildStats, type LabStats } from "@/lib/stats";
+import { listNodeGroups, type NodeGroup } from "@/lib/nodegroups";
+import { buildNodeUsage, buildStats, type LabStats, type NodeUsage } from "@/lib/stats";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
 import { SubmitButton } from "@/components/SubmitButton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { ScanAutoRefresh } from "./_components/ScanAutoRefresh";
-import { usageScanAction } from "./actions";
+import {
+  createNodeGroupAction,
+  deleteNodeGroupAction,
+  renameNodeGroupAction,
+  setNodeGroupMembersAction,
+  usageScanAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
@@ -151,8 +162,187 @@ function LabBlock({ lab }: { lab: LabStats }) {
   );
 }
 
-export default async function StatsPage() {
+function sumUsed(nodes: NodeUsage[], key: "fastUsed" | "coldUsed"): number | null {
+  return nodes.reduce<number | null>((s, n) => (n[key] === null ? s : (s ?? 0) + n[key]!), null);
+}
+
+function NodeName({ n }: { n: NodeUsage }) {
+  return (
+    <span className="flex flex-wrap items-center gap-x-1.5">
+      <span className="font-medium">{n.name}</span>
+      {n.alias && <span className="text-xs text-muted-foreground">· {n.alias}</span>}
+      <Badge variant={n.online ? "ok" : "err"}>{n.online ? "online" : "offline"}</Badge>
+    </span>
+  );
+}
+
+/** Cold cell for a node: SMB clients have no local cold — show the linked normal node instead. */
+function coldCell(n: NodeUsage) {
+  if (n.coldBackend === "smb") {
+    return (
+      <span className="text-muted-foreground">
+        on {n.coldOwnerName ?? <span className="text-amber-500">no owner</span>}
+      </span>
+    );
+  }
+  return quotaCell(n.coldUsed, n.coldQuota);
+}
+
+function NodeUsageTable({ nodes }: { nodes: NodeUsage[] }) {
+  if (nodes.length === 0) {
+    return <p className="text-sm text-muted-foreground">No nodes.</p>;
+  }
+  const fastTotal = sumUsed(nodes, "fastUsed");
+  const coldTotal = sumUsed(nodes, "coldUsed");
+  return (
+    <Table>
+      <TableHeader>
+        <TableRow>
+          <TableHead>Node</TableHead>
+          <TableHead>Fast</TableHead>
+          <TableHead>Cold</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {nodes.map((n) => (
+          <TableRow key={n.nodeId}>
+            <TableCell><NodeName n={n} /></TableCell>
+            <TableCell className="tabular-nums">{quotaCell(n.fastUsed, n.fastQuota)}</TableCell>
+            <TableCell className="tabular-nums">{coldCell(n)}</TableCell>
+          </TableRow>
+        ))}
+        {nodes.length > 1 && (
+          <TableRow className="border-t-2">
+            <TableCell className="font-semibold">Total ({nodes.length} nodes)</TableCell>
+            <TableCell className="font-semibold tabular-nums">{fastTotal === null ? "—" : fmtBytes(fastTotal)}</TableCell>
+            <TableCell className="font-semibold tabular-nums">{coldTotal === null ? "—" : fmtBytes(coldTotal)}</TableCell>
+          </TableRow>
+        )}
+      </TableBody>
+    </Table>
+  );
+}
+
+function GroupBlock({ group, allNodes }: { group: NodeGroup; allNodes: NodeUsage[] }) {
+  const memberSet = new Set(group.nodeIds);
+  const members = allNodes.filter((n) => memberSet.has(n.nodeId));
+  return (
+    <div className="space-y-3 rounded-md border border-border/60 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="text-sm font-semibold">
+          {group.name}{" "}
+          <span className="font-normal text-muted-foreground">· {members.length} node{members.length === 1 ? "" : "s"}</span>
+        </h4>
+        <form action={deleteNodeGroupAction}>
+          <input type="hidden" name="groupId" value={group.id} />
+          <ConfirmButton
+            size="sm"
+            variant="ghost"
+            title={`Delete group "${group.name}"?`}
+            confirmLabel="Delete group"
+            confirm={`Delete the node group "${group.name}"? This only removes the grouping; the nodes and their data are untouched.`}
+          >
+            Delete
+          </ConfirmButton>
+        </form>
+      </div>
+
+      <NodeUsageTable nodes={members} />
+
+      <details className="text-sm">
+        <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Edit group</summary>
+        <div className="mt-3 space-y-4">
+          <form action={renameNodeGroupAction} className="flex flex-wrap items-end gap-2">
+            <input type="hidden" name="groupId" value={group.id} />
+            <Input name="name" defaultValue={group.name} className="h-9 w-48" aria-label="Group name" />
+            <Button type="submit" size="sm" variant="secondary">Rename</Button>
+          </form>
+          <form action={setNodeGroupMembersAction} className="space-y-2">
+            <input type="hidden" name="groupId" value={group.id} />
+            <div className="grid grid-cols-1 gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+              {allNodes.map((n) => (
+                <label key={n.nodeId} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name="nodeId"
+                    value={n.nodeId}
+                    defaultChecked={memberSet.has(n.nodeId)}
+                    className="accent-primary"
+                  />
+                  <span>{n.name}{n.alias ? <span className="text-muted-foreground"> · {n.alias}</span> : null}</span>
+                </label>
+              ))}
+            </div>
+            <Button type="submit" size="sm">Save nodes</Button>
+          </form>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function PerNodeUsageSection({
+  usage,
+  groups,
+  flash,
+}: {
+  usage: NodeUsage[];
+  groups: NodeGroup[];
+  flash: string | null;
+}) {
+  const grouped = new Set(groups.flatMap((g) => g.nodeIds));
+  const ungrouped = usage.filter((n) => !grouped.has(n.nodeId));
+  return (
+    <Card>
+      <CardContent className="space-y-4">
+        <div className="space-y-1">
+          <h3 className="text-base font-semibold">Per-node usage</h3>
+          <p className="text-sm text-muted-foreground">
+            Total storage used on each node, summed across its labs. Normal nodes show fast and cold;
+            an SMB node shows fast only — its cold lives on the linked normal node. Create named groups
+            to roll up usage across nodes.
+          </p>
+        </div>
+
+        {flash && <p className="text-sm text-destructive">{flash}</p>}
+
+        {usage.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No nodes yet.</p>
+        ) : (
+          <>
+            {groups.map((g) => (
+              <GroupBlock key={g.id} group={g} allNodes={usage} />
+            ))}
+
+            <div className="space-y-3 rounded-md border border-border/60 p-3">
+              <h4 className="text-sm font-semibold">
+                {groups.length === 0 ? "All nodes" : "Ungrouped"}{" "}
+                <span className="font-normal text-muted-foreground">· {ungrouped.length} node{ungrouped.length === 1 ? "" : "s"}</span>
+              </h4>
+              <NodeUsageTable nodes={ungrouped} />
+            </div>
+          </>
+        )}
+
+        <form action={createNodeGroupAction} className="flex flex-wrap items-end gap-2 border-t border-border pt-4">
+          <Input name="name" placeholder="New group name" className="h-9 w-56" aria-label="New group name" required />
+          <Button type="submit" size="sm">Create group</Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+export default async function StatsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
+  const errorMsg = error ? takeFlash(error) : null;
   const nodes = buildStats();
+  const nodeUsage = buildNodeUsage();
+  const groups = listNodeGroups();
   const totalLabs = nodes.reduce((n, x) => n + x.labs.length, 0);
   const anyScanPending = nodes.some((n) => n.labs.some((l) => l.scanPending));
 
@@ -171,6 +361,10 @@ export default async function StatsPage() {
           <strong className="text-foreground">Scan now</strong> refreshes both on demand.
         </p>
       </div>
+
+      <PerNodeUsageSection usage={nodeUsage} groups={groups} flash={errorMsg} />
+
+      <h2 className="pt-2 text-lg font-semibold tracking-tight">Per-lab breakdown</h2>
 
       {totalLabs === 0 ? (
         <Card>

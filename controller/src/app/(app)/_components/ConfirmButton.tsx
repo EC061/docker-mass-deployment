@@ -16,6 +16,8 @@ type Props = Omit<ButtonProps, "onClick"> & {
   confirm: string;
   /** Heading for the dialog. */
   title?: string;
+  /** Destructive action label. Defaults to a generic confirmation label. */
+  confirmLabel?: string;
 };
 
 /**
@@ -27,6 +29,7 @@ type Props = Omit<ButtonProps, "onClick"> & {
 export function ConfirmButton({
   confirm: message,
   title = "Are you sure?",
+  confirmLabel = "Confirm",
   children,
   variant = "outline",
   ...rest
@@ -45,17 +48,17 @@ export function ConfirmButton({
         {children}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent>
-          <DialogHeader>
+        <DialogContent className="flex max-h-[calc(100dvh-1.5rem)] flex-col gap-0 overflow-hidden p-0 sm:max-h-[calc(100dvh-3rem)]">
+          <DialogHeader className="min-h-0 overflow-y-auto p-5 pr-12 sm:p-6 sm:pr-12">
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{message}</DialogDescription>
           </DialogHeader>
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
+          <DialogFooter className="shrink-0 border-t border-border bg-card p-4 sm:p-5">
+            <Button type="button" variant="outline" className="w-full sm:w-auto" onClick={() => setOpen(false)}>
               Cancel
             </Button>
-            <Button type="button" variant="destructive" onClick={onConfirm}>
-              Confirm
+            <Button type="button" variant="destructive" className="w-full sm:w-auto" onClick={onConfirm}>
+              {confirmLabel}
             </Button>
           </DialogFooter>
         </DialogContent>
