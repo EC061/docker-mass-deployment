@@ -14,3 +14,8 @@ export function renderTemplate(template: string, vars: Record<string, string | n
     Object.prototype.hasOwnProperty.call(vars, key) ? String(vars[key] ?? "") : whole,
   );
 }
+
+/** Remove the signature used by older built-in templates before the universal signature existed. */
+export function stripLegacyEmailSignature(text: string): string {
+  return text.replace(/\n*\s*—\s*Lab Manager\s*$/i, "").trimEnd();
+}

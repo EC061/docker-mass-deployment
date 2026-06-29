@@ -5,7 +5,7 @@
  */
 
 import nodemailer from "nodemailer";
-import { renderTemplate } from "./template";
+import { renderTemplate, stripLegacyEmailSignature } from "./template";
 import {
   DEFAULT_GPU_KILL_BODY,
   DEFAULT_GPU_KILL_SUBJECT,
@@ -45,11 +45,74 @@ function transport() {
   });
 }
 
+function escapeHtml(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function decodeHtmlEntities(value: string): string {
+  const named: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: '"',
+  };
+  return value.replace(/&(#x[\da-f]+|#\d+|\w+);/gi, (whole, entity: string) => {
+    if (entity[0] === "#") {
+      const hex = entity[1]?.toLowerCase() === "x";
+      const codePoint = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+        ? String.fromCodePoint(codePoint)
+        : whole;
+    }
+    return named[entity.toLowerCase()] ?? whole;
+  });
+}
+
+/** Derive the multipart plain-text signature from the admin's HTML signature. */
+export function signatureHtmlToText(html: string): string {
+  return decodeHtmlEntities(
+    html
+      .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+      .replace(/<img\b[^>]*\balt\s*=\s*(["'])(.*?)\1[^>]*>/gi, "$2")
+      .replace(/<br\s*\/?\s*>/gi, "\n")
+      .replace(/<\/(div|p|li|tr|h[1-6])\s*>/gi, "\n")
+      .replace(/<[^>]+>/g, ""),
+  )
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** Build text + HTML alternatives with the one universal signature appended to each. */
+export function emailContent(body: string): { text: string; html: string } {
+  const cleanBody = stripLegacyEmailSignature(body).trimEnd();
+  const signatureHtml = getSetting("emailSignatureHtml").trim();
+  const signatureText = signatureHtmlToText(signatureHtml);
+  return {
+    text: [cleanBody, signatureText].filter(Boolean).join("\n\n"),
+    html: [
+      `<div style="white-space: pre-wrap;">${escapeHtml(cleanBody)}</div>`,
+      signatureHtml,
+    ]
+      .filter(Boolean)
+      .join("<br><br>"),
+  };
+}
+
 export async function sendMail(to: string, subject: string, text: string): Promise<SendResult> {
   if (!isSmtpConfigured()) return { sent: false, skipped: true };
   if (!to) return { sent: false, skipped: true };
   try {
-    await transport().sendMail({ from: getSetting("smtpFrom"), to, subject, text });
+    const content = emailContent(text);
+    await transport().sendMail({ from: getSetting("smtpFrom"), to, subject, ...content });
     return { sent: true };
   } catch (err) {
     return { sent: false, error: err instanceof Error ? err.message : String(err) };

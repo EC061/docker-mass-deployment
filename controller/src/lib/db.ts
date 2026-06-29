@@ -13,6 +13,7 @@ import Database from "better-sqlite3";
 const { existsSync, mkdirSync, renameSync, rmSync } = process.getBuiltinModule("node:fs");
 const { dirname } = process.getBuiltinModule("node:path");
 import { env } from "./env";
+import { stripLegacyEmailSignature } from "./template";
 
 /** If a WebDAV restore was staged as <dbPath>.restore, swap it in before opening. */
 function applyStagedRestore(dbPath: string): void {
@@ -518,6 +519,35 @@ Thanks for helping keep the cluster healthy.`,
         "INSERT INTO announcement_templates (name, subject, body, sort) VALUES (?, ?, ?, ?)",
       );
       seed.forEach((t, i) => ins.run(t.name, t.subject, t.body, i));
+    },
+  },
+  {
+    // Signatures are now appended once by the mailer. Remove the old fixed footer from any email
+    // bodies an admin previously saved so it does not remain visible in the template editor.
+    id: "0018_universal_email_signature",
+    fn: (conn) => {
+      const keys = [
+        "welcomeEmailBody",
+        "gpuWarnEmailBody",
+        "gpuKillEmailBody",
+        "removalEmailBody",
+        "quotaEmailBody",
+        "testEmailBody",
+      ];
+      const read = conn.prepare("SELECT value FROM settings WHERE key = ?");
+      const write = conn.prepare("UPDATE settings SET value = ? WHERE key = ?");
+      for (const key of keys) {
+        const row = read.get(key) as { value: string } | undefined;
+        if (!row) continue;
+        try {
+          const body = JSON.parse(row.value);
+          if (typeof body !== "string") continue;
+          const clean = stripLegacyEmailSignature(body);
+          if (clean !== body) write.run(JSON.stringify(clean), key);
+        } catch {
+          // Invalid setting JSON already falls back safely in getSetting; leave it untouched here.
+        }
+      }
     },
   },
 ];

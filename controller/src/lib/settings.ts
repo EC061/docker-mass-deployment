@@ -33,6 +33,9 @@ export interface Settings {
   smtpPass: string;
   smtpFrom: string;
   smtpSecure: boolean; // true = implicit TLS (465); false = STARTTLS/none
+  // HTML signature appended by the mailer to every outbound email. It is edited as copy/paste HTML
+  // on the Templates page; the mailer also derives a plain-text fallback for text-only clients.
+  emailSignatureHtml: string;
   // Optional public hostname students SSH to (falls back to the node name).
   sshHostOverride: string;
   // Welcome email sent to a student when added to a lab. Both fields support {placeholder}
@@ -137,9 +140,7 @@ Your home directory contains:
   ~/scratch        fast storage for working data
   ~/cold-storage   slower storage for data you want to keep but rarely touch
 
-Please change your password after first login (run: passwd).
-
-— Lab Manager`;
+Please change your password after first login (run: passwd).`;
 
 /** Placeholders the GPU notification templates understand, shown to the admin in the settings UI. */
 export const GPU_EMAIL_VARS: { key: string; desc: string }[] = [
@@ -156,9 +157,7 @@ export const DEFAULT_GPU_WARN_BODY = `Hello {username},
 
 One of your processes (PID {pid}) on node {node} is holding GPU memory but is not using the GPU.
 
-If it stays idle it will be terminated in about {grace_minutes} minutes to free the GPU for others. If you still need it, start using the GPU again or contact an admin.
-
-— Lab Manager`;
+If it stays idle it will be terminated in about {grace_minutes} minutes to free the GPU for others. If you still need it, start using the GPU again or contact an admin.`;
 
 export const DEFAULT_GPU_KILL_SUBJECT = "Idle GPU process terminated";
 
@@ -166,9 +165,7 @@ export const DEFAULT_GPU_KILL_BODY = `Hello {username},
 
 Your idle process (PID {pid}) on node {node} was terminated because it held GPU memory without using the GPU.
 
-Please checkpoint long-running work and keep the GPU active, or ask an admin to whitelist your job.
-
-— Lab Manager`;
+Please checkpoint long-running work and keep the GPU active, or ask an admin to whitelist your job.`;
 
 /** Placeholders the removal email understands, shown to the admin in the Templates UI. */
 export const REMOVAL_EMAIL_VARS: { key: string; desc: string }[] = [
@@ -178,9 +175,7 @@ export const REMOVAL_EMAIL_VARS: { key: string; desc: string }[] = [
 
 export const DEFAULT_REMOVAL_SUBJECT = "Removed from lab {lab}";
 
-export const DEFAULT_REMOVAL_BODY = `You have been removed from the lab "{lab}". {data_status}
-
-— Lab Manager`;
+export const DEFAULT_REMOVAL_BODY = `You have been removed from the lab "{lab}". {data_status}`;
 
 /** The two fixed sentences {data_status} resolves to (chosen by whether the data was deleted). */
 export const REMOVAL_DATA_DELETED = "Your scratch and cold-storage data in this lab has been deleted.";
@@ -203,14 +198,25 @@ export const DEFAULT_QUOTA_BODY = `Lab "{lab}" has reached {pct}% of its {pool} 
 Per-student usage on the {pool} pool:
 {breakdown}
 
-You may want to ask students to clean up unneeded data, or request a larger quota.
-
-— Lab Manager`;
+You may want to ask students to clean up unneeded data, or request a larger quota.`;
 
 export const DEFAULT_TEST_SUBJECT = "Lab Manager test email";
 
 export const DEFAULT_TEST_BODY =
   "This is a test email from the Lab Manager controller. SMTP is configured correctly.";
+
+/** UGA-branded signature used by every email unless an admin replaces it on the Templates page. */
+export const DEFAULT_EMAIL_SIGNATURE_HTML = `<div id="template2" class="signature">
+  <p style="margin-bottom: 1em; font: 12px 'Georgia', 'Times', 'sans-serif';">
+    <span style="font-weight: 900;">Ningxi Cheng</span><span style="font-weight: 900;">, Graduate Research Assistant</span>
+    <br>
+    <span>School of Computing | <span style="font-style: italic;">Ph.D. Student</span></span>
+  </p>
+  <p style="margin-bottom: 1em; font: 12px 'Georgia', 'Times', 'sans-serif';">
+    <span><a href="mailto:edwardcheng@uga.edu">edwardcheng@uga.edu</a></span>
+  </p>
+  <div class="logo"><img width="160" src="https://brand.uga.edu/email-signature-builder/assets/images/uga-logo@2x.png" alt="University of Georgia"></div>
+</div>`;
 
 export const DEFAULT_SETTINGS: Settings = {
   fastQuotaDefaultBytes: 2 * TIB,
@@ -226,6 +232,7 @@ export const DEFAULT_SETTINGS: Settings = {
   smtpPass: "",
   smtpFrom: "",
   smtpSecure: false,
+  emailSignatureHtml: DEFAULT_EMAIL_SIGNATURE_HTML,
   sshHostOverride: "",
   welcomeEmailSubject: DEFAULT_WELCOME_SUBJECT,
   welcomeEmailBody: DEFAULT_WELCOME_BODY,

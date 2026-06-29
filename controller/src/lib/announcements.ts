@@ -156,14 +156,13 @@ export async function sendAnnouncement(input: {
   const recipients = [...byEmail.values()];
   const skipped = !isSmtpConfigured();
 
-  // {name}/{email} are substituted per recipient; the signature is fixed.
-  const template = `${body}\n\n— Lab Manager`;
+  // {name}/{email} are substituted per recipient. sendMail appends the universal signature.
   let sent = 0;
   if (!skipped) {
     const results = await Promise.all(
       recipients.map((r) => {
         const vars = { name: r.name, email: r.email };
-        return sendMail(r.email, renderTemplate(subject, vars), renderTemplate(template, vars));
+        return sendMail(r.email, renderTemplate(subject, vars), renderTemplate(body, vars));
       }),
     );
     sent = results.filter((r) => r.sent).length;

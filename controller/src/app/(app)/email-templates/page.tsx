@@ -14,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { ConfirmButton } from "../_components/ConfirmButton";
+import { SignatureEditor } from "./_components/SignatureEditor";
 import {
   createAnnouncementTemplateAction,
   deleteAnnouncementTemplateAction,
@@ -22,6 +23,7 @@ import {
   saveQuotaEmailAction,
   saveRemovalEmailAction,
   saveTestEmailAction,
+  saveUniversalSignatureAction,
   saveWelcomeEmailAction,
   updateAnnouncementTemplateAction,
 } from "./actions";
@@ -162,6 +164,8 @@ export default async function EmailTemplatesPage({
         </p>
       </div>
 
+      <SignatureEditor html={s.emailSignatureHtml} action={saveUniversalSignatureAction} />
+
       <EditableTemplate
         name="Welcome / credentials"
         trigger="Sent to a student once they are provisioned on a node — carries their login and SSH connection details."
@@ -232,7 +236,7 @@ export default async function EmailTemplatesPage({
                 Announcements
               </Link>{" "}
               compose form. Picking one fills the subject/body, which the admin edits before sending. A
-              fixed “— Lab Manager” signature is appended to every announcement on send.
+              universal signature above is appended to every announcement on send.
             </p>
             <div className="space-y-1.5 pt-1">
               <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
