@@ -86,6 +86,8 @@ class Mounts:
     slow_shared: str
     fast_users: str
     slow_users: str
+    # Root-owned host dir holding usage.json/status.json, bind-mounted READ-ONLY at /run/labquota.
+    labquota: str = ""
 
 
 def build_run_args(
@@ -121,6 +123,10 @@ def build_run_args(
              f"type=bind,source={mounts.fast_users},target=/labusers/fast,bind-propagation=rshared"]
     args += ["--mount",
              f"type=bind,source={mounts.slow_users},target=/labusers/slow,bind-propagation=rshared"]
+    # labquota status dir, READ-ONLY: the agent publishes usage.json/status.json here (root-owned,
+    # off any student-writable mount); students read it via the `labquota` command at /run/labquota.
+    if mounts.labquota:
+        args += ["--mount", f"type=bind,source={mounts.labquota},target=/run/labquota,readonly"]
     for key, value in sanitize_env(opts.extra_env).items():
         args += ["-e", f"{key}={value}"]
     args.append(opts.image)

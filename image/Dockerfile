@@ -97,7 +97,7 @@ RUN sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh
     && rm -f /etc/ssh/ssh_host_*
 
 # `labquota`: students run this to see their (and labmates') storage usage. It only reads the usage
-# snapshot the agent publishes under /labusers/fast/.labquota — no network, no privileges.
+# snapshot the agent publishes (read-only) at /run/labquota — no network, no privileges.
 COPY labquota /usr/local/bin/labquota
 # Oneshot unit: regenerate unique SSH host keys on first boot, before sshd starts.
 COPY ssh-hostkeys.service /etc/systemd/system/ssh-hostkeys.service

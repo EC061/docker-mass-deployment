@@ -13,6 +13,8 @@ def _patch_common(monkeypatch, *, nvidia_runtime=True, nvidia_gpu=True, nvidia_c
                         lambda ds: f"/mnt/{ds.replace('/', '_')}")
     monkeypatch.setattr(containerops.coldstore, "shared_mount", lambda cfg, lab: f"/cold/{lab}/shared")
     monkeypatch.setattr(containerops.coldstore, "users_mount", lambda cfg, lab: f"/cold/{lab}/users")
+    # _mounts ensures the root-owned labquota status dir on the host; stub the real mkdir in tests.
+    monkeypatch.setattr(containerops.usagereport, "ensure_labquota_dirs", lambda cfg, lab: f"/lq/{lab}")
     monkeypatch.setattr(containerops, "detect_capabilities",
                         lambda cfg: SimpleNamespace(nvidia_runtime=nvidia_runtime,
                                                     nvidia_gpu=nvidia_gpu, nvidia_cdi=nvidia_cdi))
@@ -27,6 +29,7 @@ def test_mounts_built_from_paths_and_coldstore(monkeypatch):
     assert mounts.fast_users == "/mnt/fast_labs_bio_users"
     assert mounts.slow_shared == "/cold/bio/shared"
     assert mounts.slow_users == "/cold/bio/users"
+    assert mounts.labquota == "/lq/bio"
 
 
 def test_ensure_container_removes_old_then_creates(monkeypatch):
