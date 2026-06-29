@@ -72,6 +72,7 @@ class Agent:
         worker = asyncio.create_task(self._task_worker(), name="task-worker")
         gpu = asyncio.create_task(self._gpu_loop(), name="gpu-killer")
         publish = asyncio.create_task(self._usage_publish_loop(), name="usage-publish")
+        lab_usage = asyncio.create_task(self._lab_usage_loop(), name="lab-usage")
         docker_scan = asyncio.create_task(self._docker_scan_loop(), name="docker-scan")
         pkg_update = asyncio.create_task(self._pkg_update_loop(), name="pkg-update")
         try:
@@ -80,6 +81,7 @@ class Agent:
             worker.cancel()
             gpu.cancel()
             publish.cancel()
+            lab_usage.cancel()
             docker_scan.cancel()
             pkg_update.cancel()
             self.localq.close()
@@ -249,6 +251,22 @@ class Agent:
                 self.log.error("usage", f"usage publish error: {exc}")
             await asyncio.sleep(max(15, self.cfg.usage_publish_interval_s))
 
+    async def _lab_usage_loop(self) -> None:
+        """Recompute each lab's lab-level usage (fast/slow ZFS + container writable layer) on a
+        fixed cadence and cache it; the heartbeat re-reports the cached snapshot. Moved off the
+        per-15s heartbeat path so the agent does one ``zfs list`` / ``docker inspect`` per interval,
+        not per heartbeat. The (expensive) per-student du breakdown is a separate, slower cache (see
+        ``_docker_scan_loop``)."""
+        while True:
+            try:
+                await asyncio.to_thread(self._refresh_lab_usage)
+            except Exception as exc:  # never let the refresher die
+                self.log.error("usage", f"lab usage refresh error: {exc}")
+            await asyncio.sleep(max(30, self.cfg.lab_usage_interval_s))
+
+    def _refresh_lab_usage(self) -> None:
+        self.usage.replace_lab_level(usagereport.collect_lab_level(self.cfg, self.usage))
+
     def _publish_all_usage(self) -> None:
         # collect_zfs_usage returns a row per lab (lab-level fast), so it enumerates the labs; the
         # roster (provisioned scratch subdirs) is added per lab so a freshly-provisioned student is
@@ -269,10 +287,10 @@ class Agent:
         """Refresh the (expensive) per-student du breakdown on a daily fallback cadence / on demand.
 
         A lab is (re)scanned when its cached data is older than ``docker_scan_interval_s`` (a daily
-        safety net; the controller drives the precise off-peak nightly scan), or when a student
-        dropped a refresh marker and the cache is older than the forced floor (5 min). The
-        container-level writable-layer total is NOT scanned here — it is measured live every
-        heartbeat (see ``telemetry`` / ``usagereport.live_docker_dataset``).
+        safety net; the controller drives the precise nightly scan, by default at midnight), or when
+        a student dropped a refresh marker and the cache is older than the forced floor (5 min). The
+        container-level writable-layer total is NOT scanned here — it lives in the lab-level cache,
+        refreshed on its own faster cadence (see ``_lab_usage_loop``).
         """
         floor_ms = 5 * 60 * 1000
         while True:
@@ -343,14 +361,22 @@ class Agent:
     def _handle_usage_scan(self, cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
         """Controller-triggered usage scan for one lab (Stats page "Scan now").
 
-        Blocks on the same single-flight lock the background loop uses, so it never double-scans a
-        container, then refreshes the shared cache. The fresh per-student numbers reach the
-        controller on the next heartbeat; the returned ``scanned_at`` is the freshness timestamp.
+        Refreshes **both** caches the Stats page reads so a single trigger updates the whole page:
+        the lab-level totals (fast/slow ZFS + container writable layer) and the per-student ``du``
+        breakdown. The per-student scan blocks on the same single-flight lock the background loop
+        uses, so it never double-scans a container. The fresh numbers reach the controller on the
+        next heartbeat; the returned ``scanned_at`` is the per-student freshness timestamp.
         """
         lab = params["lab"]
         users_list = params.get("users") or usagereport.list_lab_students(cfg, lab)
         with self._docker_lock:
             self._scan_docker_lab(lab, users_list)
+        # Also recompute the lab-level snapshot now, so fast/cold/image refresh on the same trigger
+        # rather than waiting for the next lab-usage cycle.
+        try:
+            self.usage.set_lab_level(lab, usagereport.lab_level_for(cfg, lab))
+        except Exception as exc:  # lab-level refresh is best-effort; the per-student scan still ran
+            self.log.warn("usage", f"lab-level refresh failed for '{lab}': {exc}", lab=lab)
         usage = self.usage.docker_for(lab)
         return {"lab": lab, "scanned_at": usage.scanned_at}, f"usage scan complete for '{lab}'"
 

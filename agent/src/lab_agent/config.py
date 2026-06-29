@@ -49,6 +49,11 @@ class AgentConfig:
     heartbeat_interval_s: int = 15
     # How often the per-lab labquota usage snapshot is republished (live ZFS metadata only — cheap).
     usage_publish_interval_s: int = 120
+    # How often the lab-level storage totals (fast/slow ZFS + container writable-layer "image") are
+    # recomputed and cached for the controller's Stats page. The heartbeat re-reports the cached
+    # snapshot, so this is the real refresh cadence for those numbers — they are NOT measured per
+    # heartbeat. An on-demand "Scan now" refreshes them immediately regardless of this interval.
+    lab_usage_interval_s: int = 300
     # Fallback cadence for the (expensive) per-student du scan when the agent runs it unprompted,
     # and the freshness gate below which a student-requested refresh is skipped as "already fresh".
     # The controller schedules the precise off-peak nightly scan (Settings -> per-student usage
@@ -127,6 +132,7 @@ def load_config(path: Path | None = None) -> AgentConfig:
         "state_db",
         "heartbeat_interval_s",
         "usage_publish_interval_s",
+        "lab_usage_interval_s",
         "docker_scan_interval_s",
         "apt_update_enabled",
         "apt_update_interval_s",
@@ -167,6 +173,7 @@ def render_config(cfg: AgentConfig) -> str:
         "state_db",
         "heartbeat_interval_s",
         "usage_publish_interval_s",
+        "lab_usage_interval_s",
         "docker_scan_interval_s",
         "apt_update_enabled",
         "apt_update_interval_s",

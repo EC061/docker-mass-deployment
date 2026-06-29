@@ -28,9 +28,9 @@ describe("getSetting / setSetting", () => {
   it("returns the typed default when unset", () => {
     expect(settings.getSetting("fastQuotaDefaultBytes")).toBe(2 * settings.TIB);
     expect(settings.getSetting("alertLevel")).toBe("ERROR");
-    // Nightly per-student usage-scan defaults (enabled, 03:00 UTC).
+    // Nightly per-student usage-scan defaults (enabled, midnight UTC).
     expect(settings.getSetting("usageScanEnabled")).toBe(true);
-    expect(settings.getSetting("usageScanHour")).toBe(3);
+    expect(settings.getSetting("usageScanHour")).toBe(0);
   });
 
   it("roundtrips a value through JSON", () => {
@@ -61,7 +61,7 @@ describe("getSetting / setSetting", () => {
         "INSERT INTO settings (key, value) VALUES ('usageScanHour', 'not json') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       )
       .run();
-    expect(settings.getSetting("usageScanHour")).toBe(3);
+    expect(settings.getSetting("usageScanHour")).toBe(0);
   });
 });
 

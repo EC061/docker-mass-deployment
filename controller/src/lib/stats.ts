@@ -3,12 +3,13 @@
  * separately-cadenced kinds of data, both read from the latest `storage_samples` row per (lab,
  * student, pool):
  *
- *   - LIVE container-level (`LabStats.live`): the whole-container writable layer ("whole image",
- *     pool=docker, student_id NULL) plus the live lab-level fast/slow ZFS usage-vs-quota. These are
- *     re-measured on every agent heartbeat, so they are always current.
+ *   - LAB-LEVEL (`LabStats.live`): the whole-container writable layer ("whole image", pool=docker,
+ *     student_id NULL) plus the lab-level fast/slow ZFS usage-vs-quota. The agent recomputes these
+ *     on a fixed cadence (every ~5 min) and re-reports the cached snapshot on each heartbeat — they
+ *     are NOT measured per heartbeat — so they carry a freshness timestamp (`liveUpdatedAt`).
  *   - NIGHTLY per-student (`LabStats.students`): each student's docker home (installed software),
  *     scratch (fast) and cold (slow) `du`. These come from the per-student usage scan (nightly +
- *     on-demand "Scan now"), so they carry a freshness timestamp.
+ *     on-demand "Scan now"), so they carry their own freshness timestamp.
  */
 
 import { db } from "./db";
@@ -29,12 +30,14 @@ export interface LabStats {
   labName: string;
   image: string;
   students: StudentUsage[];
-  // Container + lab totals, refreshed every heartbeat (see module doc).
+  // Container + lab totals, recomputed by the agent on a fixed ~5-min cadence (see module doc).
   live: {
     image: number | null; // whole-container writable layer (SizeRw) for the lab container
     fast: { used: number | null; quota: number | null };
     slow: { used: number | null; quota: number | null };
   };
+  liveUpdatedAt: number | null; // when the lab-level totals above were last sampled (newest ts)
+  liveStale: boolean; // lab-level totals older than LIVE_STALE_MS (e.g. node offline) -> tint
   usageScannedAt: number | null; // when the per-student du breakdown was last computed
   scanStale: boolean; // no scan yet, or older than USAGE_STALE_MS -> offer a "Scan now" button
   scanPending: boolean; // a usage.scan task is queued/sent for this lab and not yet done
@@ -44,6 +47,10 @@ export interface LabStats {
 // during healthy operation data is up to ~a day old; this sits just past a day so only an actually
 // missed night (or a never-scanned lab) reads as stale, not the normal end-of-day age.
 const USAGE_STALE_MS = 25 * 60 * 60 * 1000;
+
+// The lab-level totals refresh every ~5 min; tint their "updated" stamp once it is older than a few
+// missed cycles (the usual reason is the node going offline, since a live node updates them on time).
+const LIVE_STALE_MS = 15 * 60 * 1000;
 
 export interface NodeStats {
   node: string;
@@ -55,6 +62,7 @@ export interface NodeStats {
 interface Cell {
   used: number;
   quota: number | null;
+  ts: number;
 }
 
 /** Latest sample per (lab, student|lab-level, pool), indexed for O(1) lookup while building. */
@@ -62,17 +70,17 @@ function latestSamples(): Map<string, Cell> {
   const rows = db()
     .prepare(
       `SELECT s.lab_id AS lab_id, s.student_id AS student_id, s.pool AS pool,
-              s.used_bytes AS used, s.quota_bytes AS quota
+              s.used_bytes AS used, s.quota_bytes AS quota, s.ts AS ts
        FROM storage_samples s
        WHERE s.ts = (SELECT MAX(ts) FROM storage_samples s2
                      WHERE s2.lab_id = s.lab_id AND s2.pool = s.pool
                        AND ((s2.student_id IS NULL AND s.student_id IS NULL)
                             OR s2.student_id = s.student_id))`,
     )
-    .all() as { lab_id: number; student_id: number | null; pool: string; used: number; quota: number | null }[];
+    .all() as { lab_id: number; student_id: number | null; pool: string; used: number; quota: number | null; ts: number }[];
   const map = new Map<string, Cell>();
   for (const r of rows) {
-    map.set(`${r.lab_id}:${r.student_id ?? "L"}:${r.pool}`, { used: r.used, quota: r.quota });
+    map.set(`${r.lab_id}:${r.student_id ?? "L"}:${r.pool}`, { used: r.used, quota: r.quota, ts: r.ts });
   }
   return map;
 }
@@ -155,6 +163,11 @@ export function buildStats(): NodeStats[] {
     students.sort((a, b) => (b.docker ?? 0) - (a.docker ?? 0) || a.username.localeCompare(b.username));
 
     const usageScannedAt = lab.usage_scanned_at ?? null;
+    // Freshness of the lab-level totals: newest ts among the lab-level docker/fast/slow samples.
+    const liveTs = (["docker", "fast", "slow"] as const)
+      .map((p) => samples.get(`${lab.id}:L:${p}`)?.ts)
+      .filter((t): t is number => typeof t === "number");
+    const liveUpdatedAt = liveTs.length ? Math.max(...liveTs) : null;
     const labStats: LabStats = {
       labId: lab.id,
       labName: lab.name,
@@ -165,6 +178,8 @@ export function buildStats(): NodeStats[] {
         fast: cell(lab.id, "fast"),
         slow: cell(lab.id, "slow"),
       },
+      liveUpdatedAt,
+      liveStale: liveUpdatedAt === null || now - liveUpdatedAt > LIVE_STALE_MS,
       usageScannedAt,
       scanStale: usageScannedAt === null || now - usageScannedAt > USAGE_STALE_MS,
       scanPending: isScanPending(scans.get(`${lab.node_name}::${lab.name}`), usageScannedAt, now),

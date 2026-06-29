@@ -6,9 +6,10 @@ import { db } from "@/lib/db";
 import { enqueueTask } from "@/lib/queue";
 
 /**
- * Trigger an on-demand per-student storage (du) scan for one lab. The agent runs it on the same
- * single-flight path as its nightly scan and reports the fresh per-student home/fast/cold numbers
- * on its next heartbeat. (Container-level usage is measured live every heartbeat, independent of this.)
+ * Trigger an on-demand storage scan for one lab. The agent runs the per-student (du) breakdown on
+ * the same single-flight path as its nightly scan AND recomputes the lab-level totals (image +
+ * fast/cold), so a single "Scan now" refreshes the whole Stats page; the fresh numbers reach us on
+ * the agent's next heartbeat.
  */
 export async function usageScanAction(formData: FormData) {
   const who = (await requireAdmin()).email;

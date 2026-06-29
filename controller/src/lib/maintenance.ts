@@ -230,11 +230,11 @@ const USAGE_SCAN_MIN_GAP_MS = 20 * 3600 * 1000;
 
 /**
  * Enqueue a per-student usage (du) scan to each online lab once a night, during the configured hour
- * (in usageScanTimezone) so it runs off-peak. The agent measures each student's home/scratch/cold
+ * (in usageScanTimezone, default midnight). The agent measures each student's home/scratch/cold
  * usage and reports it back on its heartbeat; we only kick the scans off here. Returns the lab names
- * a scan was scheduled for. Container-level usage is NOT scheduled here — it is measured live on
- * every heartbeat. Since the maintenance ticker runs hourly, the configured hour is a one-hour
- * window; last_usage_scan guards against enqueuing the same lab twice in a night.
+ * a scan was scheduled for. Lab-level usage (image + fast/cold) is NOT scheduled here — the agent
+ * recomputes it on its own ~5-min cadence. Since the maintenance ticker runs hourly, the configured
+ * hour is a one-hour window; last_usage_scan guards against enqueuing the same lab twice in a night.
  */
 export function scheduleUsageScans(now = Date.now()): string[] {
   if (!getSetting("usageScanEnabled")) return [];
