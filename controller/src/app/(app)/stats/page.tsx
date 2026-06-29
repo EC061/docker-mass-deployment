@@ -15,6 +15,7 @@ import { ScanAutoRefresh } from "./_components/ScanAutoRefresh";
 import {
   createNodeGroupAction,
   deleteNodeGroupAction,
+  refreshAllAction,
   renameNodeGroupAction,
   setNodeGroupMembersAction,
   usageScanAction,
@@ -298,9 +299,10 @@ function PerNodeUsageSection({
         <div className="space-y-1">
           <h3 className="text-base font-semibold">Per-node usage</h3>
           <p className="text-sm text-muted-foreground">
-            Total storage used on each node, summed across its labs. Normal nodes show fast and cold;
-            an SMB node shows fast only — its cold lives on the linked normal node. Create named groups
-            to roll up usage across nodes.
+            Storage used on each node&apos;s ZFS pools — fast and cold — reported by the agent every
+            heartbeat (used vs. total capacity), so it reflects real on-disk usage even before any lab
+            is placed. An SMB node shows fast only; its cold lives on the linked normal node. Create
+            named groups to roll up usage across nodes.
           </p>
         </div>
 
@@ -349,17 +351,24 @@ export default async function StatsPage({
   return (
     <div className="space-y-4">
       <ScanAutoRefresh active={anyScanPending} />
-      <div className="space-y-2">
-        <h1 className="text-2xl font-semibold tracking-tight">Storage stats</h1>
-        <p className="text-sm text-muted-foreground">
-          Two kinds of data, shown separately per lab. The{" "}
-          <strong className="text-foreground">Lab storage</strong> row (container image writable
-          layer, plus Fast/Cold usage against the lab quota) is recomputed on the node about every 5
-          minutes. The <strong className="text-foreground">Per-student</strong> table (each
-          student&apos;s installed software, scratch and cold-storage) comes from a once-a-day scan
-          (by default at midnight). Both carry an &ldquo;updated&rdquo; time, and{" "}
-          <strong className="text-foreground">Scan now</strong> refreshes both on demand.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-2">
+          <h1 className="text-2xl font-semibold tracking-tight">Storage stats</h1>
+          <p className="text-sm text-muted-foreground">
+            Two kinds of data, shown separately per lab. The{" "}
+            <strong className="text-foreground">Lab storage</strong> row (container image writable
+            layer, plus Fast/Cold usage against the lab quota) is recomputed on the node about every 5
+            minutes. The <strong className="text-foreground">Per-student</strong> table (each
+            student&apos;s installed software, scratch and cold-storage) comes from a once-a-day scan
+            (by default at midnight). Both carry an &ldquo;updated&rdquo; time, and{" "}
+            <strong className="text-foreground">Scan now</strong> refreshes both on demand.
+          </p>
+        </div>
+        <form action={refreshAllAction} className="shrink-0">
+          <SubmitButton variant="outline" size="sm" icon={<RefreshCw />} pendingText="Refreshing…">
+            Refresh all
+          </SubmitButton>
+        </form>
       </div>
 
       <PerNodeUsageSection usage={nodeUsage} groups={groups} flash={errorMsg} />

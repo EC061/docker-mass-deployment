@@ -27,57 +27,62 @@ export const ANNOUNCEMENT_VARS: { key: string; desc: string }[] = [
   { key: "email", desc: "recipient's email address" },
 ];
 
+/**
+ * A prebuilt starting point for the compose form, editable on the Templates page (stored in the
+ * `announcement_templates` table; seeded with the built-in defaults in migration 0017). {tokens}
+ * render per recipient and ALL-CAPS bracketed spans are placeholders for the admin to fill in by
+ * hand.
+ */
 export interface AnnouncementTemplate {
+  id: number;
   name: string;
   subject: string;
   body: string;
 }
 
-/** Prebuilt starting points for the compose form. Edit freely before sending; {tokens} render per
- * recipient and ALL-CAPS bracketed spans are placeholders for the admin to fill in by hand. */
-export const ANNOUNCEMENT_TEMPLATES: AnnouncementTemplate[] = [
-  {
-    name: "Scheduled maintenance",
-    subject: "Scheduled maintenance on [DATE]",
-    body: `Hello {name},
+/** All prebuilt announcement templates, in display order, for the compose picker and editor. */
+export function listAnnouncementTemplates(): AnnouncementTemplate[] {
+  return db()
+    .prepare("SELECT id, name, subject, body FROM announcement_templates ORDER BY sort, id")
+    .all() as AnnouncementTemplate[];
+}
 
-The lab cluster will be unavailable for scheduled maintenance on [DATE] from [START] to [END] ([TIMEZONE]).
+/** Add a prebuilt template; appended to the end of the display order. Returns the new id. */
+export function createAnnouncementTemplate(input: { name: string; subject: string; body: string }): number {
+  const name = input.name.trim();
+  const subject = input.subject.trim();
+  const body = input.body.trim();
+  if (!name) throw new Error("template name is required");
+  if (!body) throw new Error("template body is required");
+  const maxSort = (db().prepare("SELECT COALESCE(MAX(sort), -1) AS m FROM announcement_templates").get() as {
+    m: number;
+  }).m;
+  const res = db()
+    .prepare("INSERT INTO announcement_templates (name, subject, body, sort) VALUES (?, ?, ?, ?)")
+    .run(name, subject, body, maxSort + 1);
+  return Number(res.lastInsertRowid);
+}
 
-Please save your work and log out before the window begins. Long-running jobs should be checkpointed or paused — anything still running may be interrupted.
+/** Edit an existing prebuilt template in place. */
+export function updateAnnouncementTemplate(
+  id: number,
+  input: { name: string; subject: string; body: string },
+): void {
+  const name = input.name.trim();
+  const subject = input.subject.trim();
+  const body = input.body.trim();
+  if (!name) throw new Error("template name is required");
+  if (!body) throw new Error("template body is required");
+  const res = db()
+    .prepare("UPDATE announcement_templates SET name = ?, subject = ?, body = ? WHERE id = ?")
+    .run(name, subject, body, id);
+  if (res.changes === 0) throw new Error("template not found");
+}
 
-We'll email again once everything is back online.`,
-  },
-  {
-    name: "Storage cleanup request",
-    subject: "Action needed: free up storage in your lab",
-    body: `Hello {name},
-
-Storage on the cluster is running low. Please review the data in your scratch and cold-storage directories and remove anything you no longer need.
-
-You can check your usage by logging in and running:
-    du -sh ~/scratch ~/cold-storage
-
-Thanks for helping keep the cluster healthy.`,
-  },
-  {
-    name: "New capacity available",
-    subject: "New compute capacity available",
-    body: `Hello {name},
-
-We've added new capacity to the cluster. If your work has been waiting on resources, you should now have more room to run jobs.
-
-Let us know if you'd like help making use of it.`,
-  },
-  {
-    name: "Access expiring",
-    subject: "Your cluster access expires on [DATE]",
-    body: `Hello {name},
-
-Your access to the lab cluster ({email}) is scheduled to end on [DATE].
-
-If you need to keep your account active, please reply to this message before then. After that date your account and data may be removed.`,
-  },
-];
+/** Remove a prebuilt template. */
+export function deleteAnnouncementTemplate(id: number): void {
+  db().prepare("DELETE FROM announcement_templates WHERE id = ?").run(id);
+}
 
 /** Distinct recipients (email + display name) for the given audience, deduped by email. */
 function audienceRecipients(audience: Audience): Recipient[] {

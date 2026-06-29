@@ -25,8 +25,8 @@ export function AnnouncementComposer({ templates, vars, counts, action }: Props)
   const [body, setBody] = useState("");
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
-  function applyTemplate(name: string) {
-    const tpl = templates.find((t) => t.name === name);
+  function applyTemplate(id: string) {
+    const tpl = templates.find((t) => String(t.id) === id);
     if (!tpl) return;
     setSubject(tpl.subject);
     setBody(tpl.body);
@@ -64,7 +64,7 @@ export function AnnouncementComposer({ templates, vars, counts, action }: Props)
         >
           <option value="">— blank message —</option>
           {templates.map((t) => (
-            <option key={t.name} value={t.name}>
+            <option key={t.id} value={t.id}>
               {t.name}
             </option>
           ))}

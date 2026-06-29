@@ -110,3 +110,36 @@ describe("sendAnnouncement", () => {
     expect(row.skipped).toBe(1);
   });
 });
+
+describe("announcement templates", () => {
+  it("seeds the built-in defaults without the dropped templates", () => {
+    const names = ann.listAnnouncementTemplates().map((t) => t.name);
+    expect(names).toContain("Scheduled maintenance");
+    expect(names).toContain("Storage cleanup request");
+    expect(names).not.toContain("Access expiring");
+    expect(names).not.toContain("New capacity available");
+  });
+
+  it("creates, updates, and deletes a template", () => {
+    const before = ann.listAnnouncementTemplates().length;
+    const id = ann.createAnnouncementTemplate({ name: "Holiday", subject: "Closed", body: "Hello {name}" });
+    const created = ann.listAnnouncementTemplates().find((t) => t.id === id)!;
+    expect(created).toMatchObject({ name: "Holiday", subject: "Closed", body: "Hello {name}" });
+    // Appended to the end of the display order.
+    expect(ann.listAnnouncementTemplates().at(-1)!.id).toBe(id);
+
+    ann.updateAnnouncementTemplate(id, { name: "Holiday closure", subject: "We're closed", body: "Bye {name}" });
+    const updated = ann.listAnnouncementTemplates().find((t) => t.id === id)!;
+    expect(updated).toMatchObject({ name: "Holiday closure", subject: "We're closed", body: "Bye {name}" });
+
+    ann.deleteAnnouncementTemplate(id);
+    expect(ann.listAnnouncementTemplates()).toHaveLength(before);
+    expect(ann.listAnnouncementTemplates().find((t) => t.id === id)).toBeUndefined();
+  });
+
+  it("rejects a blank name or body, and updating a missing row", () => {
+    expect(() => ann.createAnnouncementTemplate({ name: "  ", subject: "s", body: "b" })).toThrow(/name/);
+    expect(() => ann.createAnnouncementTemplate({ name: "n", subject: "s", body: "  " })).toThrow(/body/);
+    expect(() => ann.updateAnnouncementTemplate(99999, { name: "n", subject: "s", body: "b" })).toThrow(/not found/);
+  });
+});

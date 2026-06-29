@@ -149,4 +149,32 @@ describe("templated emails", () => {
     await mailer.sendRemovalEmail("a@uga.edu", "bio", false);
     expect(sent[1].text).toContain("retained");
   });
+
+  it("removal, quota, and test emails honor admin-editable templates", async () => {
+    settings.setSetting("removalEmailSubject", "Bye from {lab}");
+    settings.setSetting("removalEmailBody", "Lab {lab}: {data_status}");
+    await mailer.sendRemovalEmail("a@uga.edu", "bio", true);
+    expect(sent[0].subject).toBe("Bye from bio");
+    expect(sent[0].text).toBe("Lab bio: Your scratch and cold-storage data in this lab has been deleted.");
+
+    settings.setSetting("quotaEmailSubject", "{lab} {pct}% full");
+    settings.setSetting("quotaEmailBody", "{used}/{quota} on {pool}\n{breakdown}");
+    await mailer.sendQuotaEmail({
+      to: "pi@uga.edu", lab: "bio", pool: "fast", pct: 91,
+      usedHuman: "1.8 TB", quotaHuman: "2.0 TB", breakdown: [{ username: "alice", usedHuman: "1.0 TB" }],
+    });
+    expect(sent[1].subject).toBe("bio 91% full");
+    expect(sent[1].text).toContain("1.8 TB/2.0 TB on fast");
+    expect(sent[1].text).toContain("alice");
+
+    settings.setSetting("testEmailSubject", "ping");
+    settings.setSetting("testEmailBody", "pong");
+    await mailer.sendTestEmail("a@uga.edu");
+    expect(sent[2]).toMatchObject({ subject: "ping", text: "pong" });
+
+    // Restore defaults so later tests / runs see the built-in templates.
+    for (const k of ["removalEmailSubject", "removalEmailBody", "quotaEmailSubject", "quotaEmailBody", "testEmailSubject", "testEmailBody"] as const) {
+      settings.setSetting(k, "");
+    }
+  });
 });

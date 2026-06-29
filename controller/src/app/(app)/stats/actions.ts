@@ -6,7 +6,18 @@ import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { putFlash } from "@/lib/flash";
 import { createNodeGroup, deleteNodeGroup, renameNodeGroup, setNodeGroupMembers } from "@/lib/nodegroups";
+import { listAllPlacements } from "@/lib/placements";
 import { enqueueTask } from "@/lib/queue";
+
+/** Usernames enrolled in a lab, for the usage.scan payload. */
+function labUsernames(labId: number): string[] {
+  return (db()
+    .prepare(
+      `SELECT students.username AS username FROM lab_members
+       JOIN students ON students.id = lab_members.student_id WHERE lab_members.lab_id = ?`,
+    )
+    .all(labId) as { username: string }[]).map((r) => r.username);
+}
 
 /**
  * Trigger an on-demand storage scan for one placement (a lab on a node). The agent runs the
@@ -25,13 +36,24 @@ export async function usageScanAction(formData: FormData) {
     )
     .get(placementId) as { lab: string; node: string; lab_id: number } | undefined;
   if (!placement) return;
-  const users = (db()
-    .prepare(
-      `SELECT students.username AS username FROM lab_members
-       JOIN students ON students.id = lab_members.student_id WHERE lab_members.lab_id = ?`,
-    )
-    .all(placement.lab_id) as { username: string }[]).map((r) => r.username);
+  const users = labUsernames(placement.lab_id);
   enqueueTask(placement.node, "usage.scan", { lab: placement.lab, users }, who);
+  revalidatePath("/stats");
+}
+
+/**
+ * Global refresh for the whole Stats page. Per-node pool usage is reported every heartbeat, so
+ * re-rendering already shows the newest pool numbers; on top of that this kicks a fresh usage.scan on
+ * every placement whose node is online (the agent runs the per-student du breakdown AND recomputes
+ * the lab-level totals on that one path), so a single click refreshes everything the page shows. With
+ * no online placements it simply re-pulls the latest telemetry.
+ */
+export async function refreshAllAction() {
+  const who = (await requireAdmin()).email;
+  for (const p of listAllPlacements()) {
+    if (p.online !== 1) continue;
+    enqueueTask(p.node_name, "usage.scan", { lab: p.lab_name, users: labUsernames(p.lab_id) }, who);
+  }
   revalidatePath("/stats");
 }
 

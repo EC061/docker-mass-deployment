@@ -1,4 +1,5 @@
-import { getSettings, GPU_EMAIL_VARS, TIB, WELCOME_EMAIL_VARS } from "@/lib/settings";
+import Link from "next/link";
+import { getSettings, TIB } from "@/lib/settings";
 import { db } from "@/lib/db";
 import { fmtBytes } from "@/lib/format";
 import { logsContentBytes } from "@/lib/maintenance";
@@ -7,18 +8,15 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { ConfirmButton } from "../_components/ConfirmButton";
 import {
   clearLogsAction,
   saveAlertSettingsAction,
-  saveGpuEmailsAction,
   saveGpuPolicyAction,
   saveScrubSettingsAction,
   saveSmtpSettingsAction,
   saveStorageSettingsAction,
   saveUsageScanSettingsAction,
-  saveWelcomeEmailAction,
   scrubNowAction,
   testEmailAction,
 } from "./actions";
@@ -159,42 +157,14 @@ export default async function SettingsPage({
               Send test
             </Button>
           </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <h3 className="text-base font-semibold">Welcome email template</h3>
-            <p className="text-xs text-muted-foreground">
-              Sent to a student (with an email on file) when they are added to a lab. Use{" "}
-              <code>{"{placeholder}"}</code> tokens below; unknown tokens are left as-is. Leave a field
-              blank to use the built-in default.
-            </p>
-          </div>
-          <form action={saveWelcomeEmailAction} className="grid max-w-2xl gap-3">
-            <div>
-              <Label>Subject</Label>
-              <Input name="welcomeEmailSubject" defaultValue={s.welcomeEmailSubject} />
-            </div>
-            <div>
-              <Label>Body</Label>
-              <Textarea name="welcomeEmailBody" rows={16} defaultValue={s.welcomeEmailBody} className="font-mono text-xs" />
-            </div>
-            <div>
-              <Label>Available variables</Label>
-              <ul className="m-0 list-disc pl-5 text-xs text-muted-foreground">
-                {WELCOME_EMAIL_VARS.map((v) => (
-                  <li key={v.key}>
-                    <code>{`{${v.key}}`}</code> — {v.desc}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <Button type="submit">Save template</Button>
-            </div>
-          </form>
+          <p className="text-xs text-muted-foreground">
+            The wording of every email the controller sends — welcome, GPU notifications, removal,
+            quota alerts, the test email, and announcement starting points — is edited under{" "}
+            <Link href="/email-templates" className="text-primary hover:underline">
+              Templates
+            </Link>
+            .
+          </p>
         </CardContent>
       </Card>
 
@@ -233,50 +203,6 @@ export default async function SettingsPage({
             </div>
             <div className="sm:col-span-2">
               <Button type="submit">Save &amp; push to nodes</Button>
-            </div>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <h3 className="text-base font-semibold">GPU notification emails</h3>
-            <p className="text-xs text-muted-foreground">
-              Emailed to a student (with an email on file) when the idle killer warns about or
-              terminates their GPU process. Use <code>{"{placeholder}"}</code> tokens below; unknown
-              tokens are left as-is. Leave a field blank to use the built-in default.
-            </p>
-          </div>
-          <form action={saveGpuEmailsAction} className="grid max-w-2xl gap-3">
-            <div>
-              <Label>Warning email subject</Label>
-              <Input name="gpuWarnEmailSubject" defaultValue={s.gpuWarnEmailSubject} />
-            </div>
-            <div>
-              <Label>Warning email body</Label>
-              <Textarea name="gpuWarnEmailBody" rows={8} defaultValue={s.gpuWarnEmailBody} className="font-mono text-xs" />
-            </div>
-            <div>
-              <Label>Termination email subject</Label>
-              <Input name="gpuKillEmailSubject" defaultValue={s.gpuKillEmailSubject} />
-            </div>
-            <div>
-              <Label>Termination email body</Label>
-              <Textarea name="gpuKillEmailBody" rows={8} defaultValue={s.gpuKillEmailBody} className="font-mono text-xs" />
-            </div>
-            <div>
-              <Label>Available variables</Label>
-              <ul className="m-0 list-disc pl-5 text-xs text-muted-foreground">
-                {GPU_EMAIL_VARS.map((v) => (
-                  <li key={v.key}>
-                    <code>{`{${v.key}}`}</code> — {v.desc}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            <div>
-              <Button type="submit">Save GPU emails</Button>
             </div>
           </form>
         </CardContent>

@@ -473,6 +473,53 @@ const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => 
     );
     `,
   },
+  {
+    // Admin-editable prebuilt announcement templates (the compose-form starting points). Previously
+    // a hardcoded list in lib/announcements.ts; now stored in the DB so admins can add/edit/delete
+    // them on the Templates page. Seeded with the built-in defaults (Access expiring / New capacity
+    // available were dropped). `sort` drives display order; subject may be blank.
+    id: "0017_announcement_templates",
+    fn: (conn) => {
+      conn.exec(`
+        CREATE TABLE announcement_templates (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL,
+          subject TEXT NOT NULL DEFAULT '',
+          body TEXT NOT NULL,
+          sort INTEGER NOT NULL DEFAULT 0
+        );
+      `);
+      const seed: { name: string; subject: string; body: string }[] = [
+        {
+          name: "Scheduled maintenance",
+          subject: "Scheduled maintenance on [DATE]",
+          body: `Hello {name},
+
+The lab cluster will be unavailable for scheduled maintenance on [DATE] from [START] to [END] ([TIMEZONE]).
+
+Please save your work and log out before the window begins. Long-running jobs should be checkpointed or paused — anything still running may be interrupted.
+
+We'll email again once everything is back online.`,
+        },
+        {
+          name: "Storage cleanup request",
+          subject: "Action needed: free up storage in your lab",
+          body: `Hello {name},
+
+Storage on the cluster is running low. Please review the data in your scratch and cold-storage directories and remove anything you no longer need.
+
+You can check your usage by logging in and running:
+    du -sh ~/scratch ~/cold-storage
+
+Thanks for helping keep the cluster healthy.`,
+        },
+      ];
+      const ins = conn.prepare(
+        "INSERT INTO announcement_templates (name, subject, body, sort) VALUES (?, ?, ?, ?)",
+      );
+      seed.forEach((t, i) => ins.run(t.name, t.subject, t.body, i));
+    },
+  },
 ];
 
 function migrate(conn: Database.Database): void {
