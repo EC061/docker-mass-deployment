@@ -62,7 +62,9 @@ describe("sendMail gating", () => {
     configureSmtp();
     const res = await mailer.sendMail("a@uga.edu", "Subject", "Body");
     expect(res).toEqual({ sent: true });
-    expect(sent[0]).toMatchObject({ from: "labs@uga.edu", to: "a@uga.edu", subject: "Subject", text: "Body" });
+    expect(sent[0]).toMatchObject({ from: "labs@uga.edu", to: "a@uga.edu", subject: "Subject" });
+    expect(sent[0].text).toContain("Body\n\nNingxi Cheng, Graduate Research Assistant");
+    expect(sent[0].html).toContain("uga-logo@2x.png");
   });
 
   it("returns the error message when the transport throws", async () => {
@@ -101,7 +103,7 @@ describe("templated emails", () => {
       host: "gpu-1.uga.edu", port: 2222, lab: "bio", node: "gpu-1",
     });
     expect(sent[0].subject).toBe("Welcome Alice to bio");
-    expect(sent[0].text).toBe("User alice pw pw123 on node gpu-1 (gpu-1.uga.edu)");
+    expect(sent[0].text).toContain("User alice pw pw123 on node gpu-1 (gpu-1.uga.edu)");
     // Restore defaults so later tests see the built-in template.
     settings.setSetting("welcomeEmailSubject", "");
     settings.setSetting("welcomeEmailBody", "");
@@ -140,7 +142,7 @@ describe("templated emails", () => {
     settings.setSetting("gpuWarnEmailBody", "PID {pid} on {node} — {grace_minutes}m left");
     await mailer.sendGpuWarningEmail("a@uga.edu", { username: "alice", lab: "bio", pid: 42, node: "gpu-01", graceMinutes: 15 });
     expect(sent[0].subject).toBe("Heads up alice");
-    expect(sent[0].text).toBe("PID 42 on gpu-01 — 15m left");
+    expect(sent[0].text).toContain("PID 42 on gpu-01 — 15m left");
   });
 
   it("removal email distinguishes deleted vs retained data", async () => {
@@ -155,7 +157,7 @@ describe("templated emails", () => {
     settings.setSetting("removalEmailBody", "Lab {lab}: {data_status}");
     await mailer.sendRemovalEmail("a@uga.edu", "bio", true);
     expect(sent[0].subject).toBe("Bye from bio");
-    expect(sent[0].text).toBe("Lab bio: Your scratch and cold-storage data in this lab has been deleted.");
+    expect(sent[0].text).toContain("Lab bio: Your scratch and cold-storage data in this lab has been deleted.");
 
     settings.setSetting("quotaEmailSubject", "{lab} {pct}% full");
     settings.setSetting("quotaEmailBody", "{used}/{quota} on {pool}\n{breakdown}");
@@ -170,11 +172,27 @@ describe("templated emails", () => {
     settings.setSetting("testEmailSubject", "ping");
     settings.setSetting("testEmailBody", "pong");
     await mailer.sendTestEmail("a@uga.edu");
-    expect(sent[2]).toMatchObject({ subject: "ping", text: "pong" });
+    expect(sent[2].subject).toBe("ping");
+    expect(sent[2].text).toContain("pong\n\nNingxi Cheng");
 
     // Restore defaults so later tests / runs see the built-in templates.
     for (const k of ["removalEmailSubject", "removalEmailBody", "quotaEmailSubject", "quotaEmailBody", "testEmailSubject", "testEmailBody"] as const) {
       settings.setSetting(k, "");
     }
+  });
+
+  it("uses one editable signature for both HTML and plain-text email alternatives", async () => {
+    settings.setSetting(
+      "emailSignatureHtml",
+      '<div><strong>Research Team</strong><br><a href="mailto:team@uga.edu">team@uga.edu</a></div>',
+    );
+
+    await mailer.sendMail("a@uga.edu", "Signed", "Message body\nsecond line\n\n— Lab Manager");
+
+    expect(sent[0].text).toBe("Message body\nsecond line\n\nResearch Team\nteam@uga.edu");
+    expect(sent[0].html).toContain("Message body\nsecond line");
+    expect(sent[0].html).toContain("<strong>Research Team</strong>");
+    expect(sent[0].html).not.toContain("— Lab Manager");
+    settings.setSetting("emailSignatureHtml", settings.DEFAULT_EMAIL_SIGNATURE_HTML);
   });
 });

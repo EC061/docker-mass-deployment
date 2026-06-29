@@ -76,7 +76,7 @@ describe("sendAnnouncement", () => {
     expect(row.skipped).toBe(0);
   });
 
-  it("substitutes {name}/{email} per recipient and appends the signature", async () => {
+  it("substitutes {name}/{email} before passing the body to the universal-signature mailer", async () => {
     settings.setSetting("smtpHost", "smtp.test");
     settings.setSetting("smtpFrom", "no-reply@uga.edu");
     sendMail.mockClear();
@@ -91,7 +91,7 @@ describe("sendAnnouncement", () => {
     const aliceCall = calls.find((c) => c[0] === "alice@uga.edu");
     expect(aliceCall).toBeTruthy();
     expect(aliceCall![1]).toBe("Hi alice"); // no name set → falls back to username
-    expect(aliceCall![2]).toBe("Your address is alice@uga.edu.\n\n— Lab Manager");
+    expect(aliceCall![2]).toBe("Your address is alice@uga.edu.");
   });
 
   it("skips sending when SMTP is not configured but still records", async () => {

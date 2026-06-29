@@ -15,6 +15,12 @@ import { putFlash } from "@/lib/flash";
 // to the built-in default at render time); bodies are stored verbatim so intentional leading/trailing
 // whitespace in a template is preserved. Each save revalidates the Templates page.
 
+export async function saveUniversalSignatureAction(formData: FormData) {
+  await requireAdmin();
+  setSetting("emailSignatureHtml", String(formData.get("signatureHtml") ?? "").trim());
+  revalidatePath("/email-templates");
+}
+
 export async function saveWelcomeEmailAction(formData: FormData) {
   await requireAdmin();
   setSetting("welcomeEmailSubject", String(formData.get("subject") ?? "").trim());
