@@ -16,6 +16,17 @@ from .paths import lab_fast_shared, lab_fast_users
 from .system import detect_capabilities
 
 
+# Docker labels stamped on every lab container. lab-agent.managed=true is the authoritative signal
+# the GPU killer uses to decide a container is ours — host processes and unmanaged containers carry
+# no such label and are therefore never eligible to be warned or killed.
+def _labels(cfg: AgentConfig, lab: str) -> dict[str, str]:
+    return {
+        "lab-agent.managed": "true",
+        "lab-agent.lab": lab,
+        "lab-agent.node": cfg.node_name,
+    }
+
+
 def _mounts(cfg: AgentConfig, lab: str) -> Mounts:
     # ensure_labquota_dirs creates the root-owned status dir on the host before container start,
     # so the read-only /run/labquota bind has a source.
@@ -43,6 +54,7 @@ def ensure_container(cfg: AgentConfig, lab: str, params: dict[str, Any]) -> str:
         opts,
         mounts,
         gpus=caps.nvidia_gpu and caps.nvidia_cdi,
+        labels=_labels(cfg, lab),
     )
 
 
@@ -77,7 +89,9 @@ def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, s
 
     try:
         # 3. Bring up the candidate under the real name and verify it actually started.
-        container_id = docker.create_container(name, opts, mounts, gpus=gpus)
+        container_id = docker.create_container(
+            name, opts, mounts, gpus=gpus, labels=_labels(cfg, lab)
+        )
         if not docker.wait_systemd_ready(name):
             raise docker.DockerError("candidate container did not become ready (sshd not active)")
     except Exception as exc:

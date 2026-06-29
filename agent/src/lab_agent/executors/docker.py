@@ -97,6 +97,7 @@ def build_run_args(
     *,
     gpus: bool,
     storage_quota_supported: bool = True,
+    labels: dict[str, str] | None = None,
 ) -> list[str]:
     """Pure function building the `docker run` argv (unit-tested without Docker)."""
     args = ["docker", "run", "-d", "--name", name]
@@ -127,6 +128,11 @@ def build_run_args(
     # off any student-writable mount); students read it via the `labquota` command at /run/labquota.
     if mounts.labquota:
         args += ["--mount", f"type=bind,source={mounts.labquota},target=/run/labquota,readonly"]
+    # Identity labels: mark this an agent-managed lab container (+ which lab/node). The GPU killer
+    # ONLY touches processes inside a container with lab-agent.managed=true, so host processes and
+    # unmanaged containers can never be warned/killed (see gpu/monitor + gpu/killer).
+    for key, value in (labels or {}).items():
+        args += ["--label", f"{key}={value}"]
     for key, value in sanitize_env(opts.extra_env).items():
         args += ["-e", f"{key}={value}"]
     args.append(opts.image)
@@ -147,8 +153,15 @@ def remove_container(name: str) -> None:
             raise DockerError(res.logs)
 
 
-def create_container(name: str, opts: ContainerOptions, mounts: Mounts, *, gpus: bool) -> str:
-    res = run(build_run_args(name, opts, mounts, gpus=gpus), timeout=180)
+def create_container(
+    name: str,
+    opts: ContainerOptions,
+    mounts: Mounts,
+    *,
+    gpus: bool,
+    labels: dict[str, str] | None = None,
+) -> str:
+    res = run(build_run_args(name, opts, mounts, gpus=gpus, labels=labels), timeout=180)
     if not res.ok:
         raise DockerError(res.logs)
     return res.stdout.strip()

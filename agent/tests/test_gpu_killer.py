@@ -1,9 +1,15 @@
 from lab_agent.gpu.killer import GpuKiller, lab_from_container
 from lab_agent.gpu.policy import GpuPolicy
 
+_DERIVE = object()
 
-def _proc(pid, util, vram=1 << 30, user="alice", container="lab-bio"):
-    return {"pid": pid, "util": util, "vram_bytes": vram, "user": user, "container": container}
+
+def _proc(pid, util, vram=1 << 30, user="alice", container="lab-bio", managed=True, lab=_DERIVE):
+    # A managed lab container carries the lab-agent.lab label; default it from the container name.
+    return {
+        "pid": pid, "util": util, "vram_bytes": vram, "user": user, "container": container,
+        "managed": managed, "lab": lab_from_container(container) if lab is _DERIVE else lab,
+    }
 
 
 def test_lab_from_container():
@@ -65,6 +71,24 @@ def test_immediate_kills_without_grace():
     k = GpuKiller()
     d = k.evaluate([_proc(7, util=1)], pol, now=0)
     assert len(d) == 1 and d[0].action == "kill"
+
+
+def test_host_process_is_never_touched():
+    """A GPU process not in any container (managed=False, container=None) must never be warned/killed,
+    even under an immediate-kill policy — the killer may only act on managed lab containers."""
+    pol = GpuPolicy(enabled=True, util_threshold=5, idle_minutes=1, grace_minutes=1, immediate=True)
+    k = GpuKiller()
+    assert k.evaluate([_proc(1, util=0, container=None, managed=False)], pol, now=10_000) == []
+
+
+def test_unmanaged_container_is_never_touched():
+    """A container without the lab-agent.managed label (someone's own `docker run`, or a system
+    container) is off-limits regardless of idleness."""
+    pol = GpuPolicy(enabled=True, util_threshold=5, idle_minutes=1, grace_minutes=1, immediate=True)
+    k = GpuKiller()
+    procs = [_proc(2, util=0, container="someones-own", managed=False, lab=None)]
+    assert k.evaluate(procs, pol, now=0) == []
+    assert k.evaluate(procs, pol, now=10_000) == []
 
 
 def test_disabled_policy_does_nothing():

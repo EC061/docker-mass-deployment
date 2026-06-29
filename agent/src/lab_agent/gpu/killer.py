@@ -18,6 +18,11 @@ def lab_from_container(container: str | None) -> str | None:
     return None
 
 
+def _lab_of(proc: dict[str, Any]) -> str | None:
+    """Lab attribution: prefer the authoritative lab-agent.lab label, fall back to the name."""
+    return proc.get("lab") or lab_from_container(proc.get("container"))
+
+
 @dataclass
 class Decision:
     pid: int
@@ -40,7 +45,7 @@ class GpuKiller:
 
     def _whitelisted(self, proc: dict[str, Any], policy) -> bool:
         user = proc.get("user")
-        lab = lab_from_container(proc.get("container"))
+        lab = _lab_of(proc)
         return (user in policy.whitelist_users) or (lab in policy.whitelist_labs)
 
     def evaluate(self, processes: list[dict[str, Any]], policy, now: float) -> list[Decision]:
@@ -53,6 +58,13 @@ class GpuKiller:
                 continue
             present.add(pid)
 
+            # SAFETY GATE: only ever act on processes inside an agent-managed lab container. A host
+            # process or an unmanaged container (managed=False) is NEVER warned or killed, no matter
+            # how idle — this is the hard guarantee that the killer can't touch system/admin work.
+            if not proc.get("managed"):
+                self._state.pop(pid, None)
+                continue
+
             if (not policy.enabled or self._whitelisted(proc, policy)
                     or not self._is_idle(proc, policy)):
                 # Active / exempt -> clear any idle tracking so the timer restarts next time.
@@ -63,7 +75,7 @@ class GpuKiller:
             if st["idle_since"] is None:
                 st["idle_since"] = now
             idle_for = now - st["idle_since"]
-            lab = lab_from_container(proc.get("container"))
+            lab = _lab_of(proc)
             user = proc.get("user")
 
             if policy.immediate:

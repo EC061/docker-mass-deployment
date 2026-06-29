@@ -38,7 +38,7 @@ def test_ensure_container_removes_old_then_creates(monkeypatch):
     monkeypatch.setattr(containerops.docker, "remove_container",
                         lambda name: events.append(("remove", name)))
 
-    def fake_create(name, opts, mounts, *, gpus):
+    def fake_create(name, opts, mounts, *, gpus, labels=None):
         events.append(("create", name, gpus))
         return "cid123"
 
@@ -56,7 +56,7 @@ def test_ensure_container_disables_gpus_without_cdi(monkeypatch):
     captured = {}
     monkeypatch.setattr(containerops.docker, "remove_container", lambda name: None)
     monkeypatch.setattr(containerops.docker, "create_container",
-                        lambda name, opts, mounts, *, gpus: captured.update(gpus=gpus) or "id")
+                        lambda name, opts, mounts, *, gpus, labels=None: captured.update(gpus=gpus) or "id")
     containerops.ensure_container(_cfg(), "bio", {})
     assert captured["gpus"] is False
 
@@ -66,7 +66,7 @@ def test_ensure_container_passes_options_from_params(monkeypatch):
     captured = {}
     monkeypatch.setattr(containerops.docker, "remove_container", lambda name: None)
 
-    def fake_create(name, opts, mounts, *, gpus):
+    def fake_create(name, opts, mounts, *, gpus, labels=None):
         captured["opts"] = opts
         captured["mounts"] = mounts
         return "id"
@@ -98,7 +98,7 @@ def _fake_docker(monkeypatch, *, ready=True, image_ok=True):
         state["containers"].discard(old)
         state["containers"].add(new)
 
-    def create_container(name, opts, mounts, *, gpus):
+    def create_container(name, opts, mounts, *, gpus, labels=None):
         ev.append(("create", name))
         state["containers"].add(name)
         return "cid999"
