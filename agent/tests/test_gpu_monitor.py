@@ -24,13 +24,40 @@ def test_list_gpu_processes_merges_vram_and_util(monkeypatch):
 
     monkeypatch.setattr(monitor, "run", fake_run)
     # Avoid touching /proc and docker for resolution.
-    monkeypatch.setattr(monitor, "_container_of", lambda pid: None)
+    monkeypatch.setattr(monitor, "_container_info", lambda pid: (None, False, None))
     monkeypatch.setattr(monitor, "_student_user", lambda c, p: None)
 
     procs = {p["pid"]: p for p in monitor.list_gpu_processes()}
     assert procs[1234]["vram_bytes"] == 2048 * 1024 * 1024
     assert procs[1234]["util"] == 0.0  # idle: holding VRAM, 0% SM
     assert procs[5678]["util"] == 87.0
+    # Unresolved container -> not managed, no lab (so the killer leaves it alone).
+    assert procs[1234]["managed"] is False and procs[1234]["lab"] is None
+
+
+def test_parse_inspect_distinguishes_managed_from_unmanaged():
+    # A managed lab container: name + labels present.
+    assert monitor._parse_inspect("/lab-bio|true|bio") == ("lab-bio", True, "bio")
+    # An unmanaged container: docker emits "<no value>" for missing labels -> managed False, lab None.
+    assert monitor._parse_inspect("/rando|<no value>|<no value>") == ("rando", False, None)
+    assert monitor._parse_inspect("/x||") == ("x", False, None)
+
+
+def test_list_gpu_processes_carries_managed_label(monkeypatch):
+    def fake_run(args, **kwargs):
+        joined = " ".join(str(a) for a in args)
+        if "--query-compute-apps" in joined:
+            return CommandResult(True, [], 0, "100, 1024\n", "")
+        if "pmon" in joined:
+            return CommandResult(True, [], 0, "# h\n 0 100 C 0 1 - - python\n", "")
+        return CommandResult(False, [], 1, "", "")
+
+    monkeypatch.setattr(monitor, "run", fake_run)
+    monkeypatch.setattr(monitor, "_container_info", lambda pid: ("lab-bio", True, "bio"))
+    monkeypatch.setattr(monitor, "_student_user", lambda c, p: "alice")
+    monkeypatch.setattr(monitor, "pid_start_time", lambda pid: 1)
+    p = monitor.list_gpu_processes()[0]
+    assert p["managed"] is True and p["lab"] == "bio" and p["container"] == "lab-bio"
 
 
 def test_list_gpu_processes_empty_without_nvidia(monkeypatch):

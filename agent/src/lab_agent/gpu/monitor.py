@@ -27,6 +27,10 @@ class GpuProcess:
     container: str | None
     user: str | None
     start_time: int | None = None  # /proc/<pid>/stat field 22; identifies the PID across reuse
+    # Authoritative from the container's lab-agent.managed label — the ONLY thing that makes a
+    # process eligible for the idle-GPU killer. Host processes / unmanaged containers are False.
+    managed: bool = False
+    lab: str | None = None  # from the lab-agent.lab label (not the container name)
 
 
 def _query_compute_apps() -> dict[int, int]:
@@ -76,20 +80,40 @@ def _pmon_util() -> dict[int, float]:
     return out
 
 
-def _container_of(pid: int) -> str | None:
+# One docker inspect yields name + the two labels we trust, '|'-joined. A managed lab container
+# reads e.g. "/lab-bio|true|bio"; an unmanaged container has no labels, so Go templates emit the
+# literal "<no value>" (treated as absent), and managed stays False.
+_INSPECT_FORMAT = (
+    '{{.Name}}|{{index .Config.Labels "lab-agent.managed"}}|'
+    '{{index .Config.Labels "lab-agent.lab"}}'
+)
+
+
+def _parse_inspect(stdout: str) -> tuple[str | None, bool, str | None]:
+    """Parse the '|'-joined inspect line into (name, managed, lab). Pure, for easy unit tests."""
+    parts = (stdout.strip().split("|") + ["", "", ""])[:3]
+    name = parts[0].strip().lstrip("/") or None
+    managed = parts[1].strip() == "true"
+    lab = parts[2].strip()
+    lab = None if lab in ("", "<no value>") else lab
+    return (name, managed, lab)
+
+
+def _container_info(pid: int) -> tuple[str | None, bool, str | None]:
+    """Resolve a host PID's container to (name, managed, lab). managed/lab come from the container's
+    labels, NOT its name, so only genuinely agent-created containers are ever flagged managed."""
     try:
         with open(f"/proc/{pid}/cgroup", encoding="utf-8") as fh:
             text = fh.read()
     except OSError:
-        return None
+        return (None, False, None)
     m = _DOCKER_CGROUP.search(text)
     if not m:
-        return None
-    cid = m.group(1)
-    res = run(["docker", "inspect", "--format", "{{.Name}}", cid], timeout=15)
+        return (None, False, None)
+    res = run(["docker", "inspect", "--format", _INSPECT_FORMAT, m.group(1)], timeout=15)
     if not res.ok:
-        return None
-    return res.stdout.strip().lstrip("/") or None
+        return (None, False, None)
+    return _parse_inspect(res.stdout)
 
 
 def _proc_uid(pid: int) -> int | None:
@@ -165,7 +189,7 @@ def list_gpu_processes() -> list[dict]:
     util = _pmon_util()
     procs: list[dict] = []
     for pid, vram_bytes in vram.items():
-        container = _container_of(pid)
+        container, managed, lab = _container_info(pid)
         procs.append(
             asdict(
                 GpuProcess(
@@ -175,6 +199,8 @@ def list_gpu_processes() -> list[dict]:
                     container=container,
                     user=_student_user(container, pid),
                     start_time=pid_start_time(pid),
+                    managed=managed,
+                    lab=lab,
                 )
             )
         )

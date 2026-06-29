@@ -147,16 +147,19 @@ export function ingestTelemetry(node: string, payload: any): void {
       .run(u.scanned_at, ref.placement_id, u.scanned_at);
   }
 
-  // GPU snapshot: replace this node's rows with the current process list.
+  // GPU snapshot: replace this node's rows with the current process list. The lab a process belongs
+  // to is the agent-reported lab-agent.lab label (authoritative); (lab, node) -> placement_id.
   const gpu = (payload.gpu_processes ?? []) as any[];
   const tx = db().transaction(() => {
     db().prepare("DELETE FROM gpu_snapshot WHERE node = ?").run(node);
     const ins = db().prepare(
-      `INSERT OR REPLACE INTO gpu_snapshot (node, pid, user, lab, vram_bytes, util, ts)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO gpu_snapshot (node, pid, user, lab, placement_id, vram_bytes, util, ts)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const p of gpu) {
-      ins.run(node, p.pid, p.user ?? null, p.lab ?? null, p.vram_bytes ?? null, p.util ?? null, now);
+      const labName = typeof p.lab === "string" ? p.lab : null;
+      const placementId = labName ? (placementByLabNode(labName, node)?.placement_id ?? null) : null;
+      ins.run(node, p.pid, p.user ?? null, labName, placementId, p.vram_bytes ?? null, p.util ?? null, now);
     }
   });
   tx();

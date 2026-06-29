@@ -423,6 +423,16 @@ const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => 
     ALTER TABLE task_log ADD COLUMN result_cached INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    // Phase 9: attribute GPU rows to a placement. The lab a process belongs to now comes from the
+    // container's lab-agent.lab label (authoritative), and (lab, node) -> placement, so the controller
+    // can link a GPU process/event to its placement. Nullable: a host/unmanaged process has no lab.
+    id: "0013_gpu_placement",
+    sql: `
+    ALTER TABLE gpu_snapshot ADD COLUMN placement_id INTEGER REFERENCES lab_placements(id) ON DELETE SET NULL;
+    ALTER TABLE gpu_events ADD COLUMN placement_id INTEGER REFERENCES lab_placements(id) ON DELETE SET NULL;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

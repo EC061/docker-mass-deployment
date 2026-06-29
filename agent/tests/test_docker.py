@@ -72,6 +72,21 @@ def test_build_run_args_no_storage_opt_without_zfs_driver():
     assert "--storage-opt" not in args
 
 
+def test_build_run_args_stamps_managed_labels():
+    labels = {"lab-agent.managed": "true", "lab-agent.lab": "bio", "lab-agent.node": "gpu-1"}
+    args = build_run_args("lab-bio", ContainerOptions(ssh_port=1), _mounts(), gpus=False,
+                          labels=labels)
+    assert "--label" in args
+    assert "lab-agent.managed=true" in args
+    assert "lab-agent.lab=bio" in args
+    assert "lab-agent.node=gpu-1" in args
+
+
+def test_build_run_args_no_labels_by_default():
+    args = build_run_args("lab-bio", ContainerOptions(ssh_port=1), _mounts(), gpus=False)
+    assert "--label" not in args
+
+
 def test_options_from_params():
     opts = ContainerOptions.from_params({
         "image": "myimg",
