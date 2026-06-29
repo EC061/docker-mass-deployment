@@ -59,12 +59,21 @@ def test_remove_user_default_keeps_home(cap):
     assert "userdel -r" not in cap.calls[0]["input"]
 
 
-def test_remove_user_delete_home(cap):
-    users.remove_user("lab-bio", "alice", delete_home=True)
+def test_remove_user_delete_fast_and_cold(cap):
+    users.remove_user("lab-bio", "alice", delete_fast=True, delete_cold=True)
     script = cap.calls[0]["input"]
     assert "userdel -r alice" in script
-    # Data lives in /labusers subdirs (no per-student datasets), so delete_home wipes them too.
-    assert "rm -rf /labusers/fast/alice /labusers/slow/alice" in script
+    assert "rm -rf /labusers/fast/alice" in script
+    assert "rm -rf /labusers/slow/alice" in script
+
+
+def test_remove_user_smb_client_wipes_fast_but_never_cold(cap):
+    # An SMB client deletes its local fast data but must NOT touch /labusers/slow (the owner's share).
+    users.remove_user("lab-bio", "alice", delete_fast=True, delete_cold=False)
+    script = cap.calls[0]["input"]
+    assert "userdel -r alice" in script
+    assert "rm -rf /labusers/fast/alice" in script
+    assert "/labusers/slow/" not in script
 
 
 def test_remove_user_default_does_not_touch_labusers(cap):

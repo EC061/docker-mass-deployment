@@ -130,7 +130,7 @@ describe("removeStudentFromLab (deprovisions on every placement)", () => {
     expect(enqueueTask).toHaveBeenCalledWith(
       "gpu-1",
       "student.remove",
-      { lab: "bio", username: "dave", delete_data: true },
+      { lab: "bio", username: "dave", delete_data: true, delete_cold: true },
       "admin",
     );
     expect(sendRemovalEmail).toHaveBeenCalledWith("d@uga.edu", "bio", true);

@@ -13,7 +13,7 @@ def _patch(monkeypatch):
     monkeypatch.setattr(studentops.users, "add_user",
                         lambda c, u, p: user_calls.append(("add", c, u, p)))
     monkeypatch.setattr(studentops.users, "remove_user",
-                        lambda c, u, *, delete_home=False: user_calls.append(("remove", c, u, delete_home)))
+                        lambda c, u, *, delete_fast=False, delete_cold=False: user_calls.append(("remove", c, u, delete_fast, delete_cold)))
     return user_calls
 
 
@@ -38,12 +38,20 @@ def test_add_student_ignores_legacy_quota_params(monkeypatch):
 def test_remove_student_keeps_data_by_default(monkeypatch):
     calls = _patch(monkeypatch)
     studentops.remove_student(_cfg(), {"lab": "bio", "username": "alice"})
-    assert ("remove", "lab-bio", "alice", False) in calls
+    assert ("remove", "lab-bio", "alice", False, False) in calls
 
 
-def test_remove_student_deletes_data_when_requested(monkeypatch):
-    # delete_data is forwarded to remove_user as delete_home; the in-container script wipes the
-    # /labusers subdirs (no host-side dataset destroy).
+def test_remove_student_deletes_fast_and_cold_for_a_local_zfs_node(monkeypatch):
+    # On a standalone / owner (local-ZFS) node delete_data wipes both fast and cold (default).
     calls = _patch(monkeypatch)
     studentops.remove_student(_cfg(), {"lab": "bio", "username": "alice", "delete_data": True})
-    assert ("remove", "lab-bio", "alice", True) in calls
+    assert ("remove", "lab-bio", "alice", True, True) in calls
+
+
+def test_remove_student_on_smb_client_never_deletes_cold(monkeypatch):
+    # The controller sends delete_cold=False to an SMB client so the owner's shared cold is untouched.
+    calls = _patch(monkeypatch)
+    studentops.remove_student(
+        _cfg(), {"lab": "bio", "username": "alice", "delete_data": True, "delete_cold": False}
+    )
+    assert ("remove", "lab-bio", "alice", True, False) in calls

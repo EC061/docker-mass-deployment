@@ -143,9 +143,42 @@ export default async function LabDetail({
   const members = listMembers(labId);
   const placements = listPlacements(labId);
   const placedNodeIds = new Set(placements.map((p) => p.node_id));
-  const availableNodes = (db()
-    .prepare("SELECT id, name, online FROM nodes ORDER BY name")
-    .all() as NodeOpt[]).filter((n) => !placedNodeIds.has(n.id));
+  // Candidate nodes for "grant access", with cold-storage readiness: an SMB client is only ready when
+  // its owner already hosts this lab (active) and its mount is live.
+  interface NodeColdRow {
+    id: number;
+    name: string;
+    online: number;
+    cold_backend: "local_zfs" | "smb";
+    cold_ready: number;
+    owner_name: string | null;
+    owner_state: string | null;
+  }
+  const availableNodes: NodeOpt[] = (db()
+    .prepare(
+      `SELECT n.id, n.name, n.online, n.cold_backend, n.cold_ready, owner.name AS owner_name,
+              (SELECT state FROM lab_placements WHERE lab_id = ? AND node_id = n.cold_owner_node_id) AS owner_state
+       FROM nodes n LEFT JOIN nodes owner ON owner.id = n.cold_owner_node_id ORDER BY n.name`,
+    )
+    .all(labId) as NodeColdRow[])
+    .filter((n) => !placedNodeIds.has(n.id))
+    .map((n) => {
+      let ready = true;
+      let blockedReason: string | null = null;
+      if (n.cold_backend === "smb") {
+        if (!n.owner_name) {
+          ready = false;
+          blockedReason = "This SMB node has no cold-storage owner configured (set it on the Nodes page).";
+        } else if (n.owner_state !== "active") {
+          ready = false;
+          blockedReason = `Grant the owner '${n.owner_name}' access to this lab first (its placement is ${n.owner_state ?? "missing"}).`;
+        } else if (n.cold_ready !== 1) {
+          ready = false;
+          blockedReason = `The SMB cold-storage mount on '${n.name}' is not active yet.`;
+        }
+      }
+      return { id: n.id, name: n.name, online: n.online, coldBackend: n.cold_backend, ownerName: n.owner_name, ready, blockedReason };
+    });
   const settings = getSettings();
 
   return (

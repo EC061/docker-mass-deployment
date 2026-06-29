@@ -72,17 +72,29 @@ def set_password(container: str, username: str, password: str) -> CommandResult:
     return _run_script(container, script)
 
 
-def remove_user(container: str, username: str, *, delete_home: bool = False) -> CommandResult:
+def remove_user(
+    container: str,
+    username: str,
+    *,
+    delete_fast: bool = False,
+    delete_cold: bool = False,
+) -> CommandResult:
+    """Remove the student's account; optionally wipe their FAST (scratch) and/or COLD (cold-storage)
+    data. The two are separate because on an SMB-client node /labusers/slow is the OWNER node's
+    shared dataset over the mount — only the local-ZFS owner is ever told to delete the cold data
+    (delete_cold), so an SMB client passing delete_cold=False can never erase shared cold storage.
+    Removing any data also removes the account home (userdel -r); with neither flag the account is
+    removed but its files are kept. The username is USERNAME_RE-validated, so it is safe to use.
+    """
     validate_username(username)
-    # `|| true` so removing an already-absent user is not an error. When delete_home is set we also
-    # wipe the student's scratch/cold-storage subdirs under /labusers (there are no per-student
-    # datasets to destroy on the host — the data lives in these in-container subdirs). The username
-    # is USERNAME_RE-validated above, so it is safe to interpolate directly.
-    if delete_home:
-        script = (
-            f"userdel -r {username} 2>/dev/null || true\n"
-            f"rm -rf /labusers/fast/{username} /labusers/slow/{username}\n"
-        )
+    lines = []
+    # `|| true` so removing an already-absent user is not an error.
+    if delete_fast or delete_cold:
+        lines.append(f"userdel -r {username} 2>/dev/null || true")
     else:
-        script = f"userdel {username} 2>/dev/null || true\n"
-    return _run_script(container, script)
+        lines.append(f"userdel {username} 2>/dev/null || true")
+    if delete_fast:
+        lines.append(f"rm -rf /labusers/fast/{username}")
+    if delete_cold:
+        lines.append(f"rm -rf /labusers/slow/{username}")
+    return _run_script(container, "\n".join(lines) + "\n")
