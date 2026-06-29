@@ -58,7 +58,11 @@ export interface Settings {
   alertLevel: "WARN" | "ERROR"; // minimum log level that triggers an admin alert
   alertDedupMinutes: number; // suppress duplicate alerts (same key) within this window
   nodeOfflineGraceSeconds: number; // tolerate a node disconnect this long before alerting admins
-  logRetentionDays: number;
+  // Log rotation. The maintenance ticker (and a save of these settings) prunes the `logs` table to
+  // satisfy all three caps, newest-wins. 0 means "no cap" for the respective dimension.
+  logRetentionDays: number; // drop rows older than this many days
+  logMaxEntries: number; // keep at most this many rows
+  logMaxSizeMb: number; // keep the table's textual content under ~this many MB
   quotaAlertPct: number; // email the PI when a lab pool crosses this percent
   // WebDAV backup target. Backups are written under <webdavUrl>/<webdavBaseDir>/<env> where env is
   // "prod" or "dev" (derived from NODE_ENV) so a shared store keeps the two deployments separate.
@@ -186,6 +190,8 @@ export const DEFAULT_SETTINGS: Settings = {
   alertDedupMinutes: 15,
   nodeOfflineGraceSeconds: 60,
   logRetentionDays: 30,
+  logMaxEntries: 0,
+  logMaxSizeMb: 0,
   quotaAlertPct: 90,
   webdavUrl: "",
   webdavUser: "",

@@ -1,11 +1,16 @@
 import { getSettings, GPU_EMAIL_VARS, TIB, WELCOME_EMAIL_VARS } from "@/lib/settings";
+import { db } from "@/lib/db";
+import { fmtBytes } from "@/lib/format";
+import { logsContentBytes } from "@/lib/maintenance";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
+import { ConfirmButton } from "../_components/ConfirmButton";
 import {
+  clearLogsAction,
   saveAlertSettingsAction,
   saveGpuEmailsAction,
   saveGpuPolicyAction,
@@ -37,10 +42,12 @@ export const dynamic = "force-dynamic";
 export default async function SettingsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ smtp?: string; scrub?: string }>;
+  searchParams: Promise<{ smtp?: string; scrub?: string; logs?: string }>;
 }) {
-  const { smtp, scrub } = await searchParams;
+  const { smtp, scrub, logs: logsMsg } = await searchParams;
   const s = getSettings();
+  const logCount = (db().prepare("SELECT COUNT(*) AS n FROM logs").get() as { n: number }).n;
+  const logBytes = logsContentBytes();
   return (
     <div className="space-y-4">
       <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
@@ -288,12 +295,37 @@ export default async function SettingsPage({
             </div>
             <div>
               <Label>Log retention (days)</Label>
-              <Input name="logRetentionDays" type="number" defaultValue={s.logRetentionDays} />
+              <Input name="logRetentionDays" type="number" min={0} defaultValue={s.logRetentionDays} />
+            </div>
+            <div>
+              <Label>Max log entries (0 = unlimited)</Label>
+              <Input name="logMaxEntries" type="number" min={0} defaultValue={s.logMaxEntries} />
+            </div>
+            <div>
+              <Label>Max log size (MB, 0 = unlimited)</Label>
+              <Input name="logMaxSizeMb" type="number" min={0} step="any" defaultValue={s.logMaxSizeMb} />
             </div>
             <div className="sm:col-span-2">
               <Button type="submit">Save alerts</Button>
             </div>
           </form>
+          <div className="flex flex-wrap items-center gap-3 border-t border-border pt-3">
+            <span className="text-sm text-muted-foreground">
+              {logCount.toLocaleString()} log {logCount === 1 ? "entry" : "entries"} · ~{fmtBytes(logBytes)} stored.
+              Rotation keeps the newest within every cap above.
+            </span>
+            <form action={clearLogsAction}>
+              <ConfirmButton
+                variant="destructive"
+                size="sm"
+                title="Delete all logs"
+                confirm={`Permanently delete all ${logCount.toLocaleString()} log entries? This cannot be undone.`}
+              >
+                Delete all logs
+              </ConfirmButton>
+            </form>
+          </div>
+          {logsMsg && <p className="text-sm text-primary">{logsMsg}</p>}
         </CardContent>
       </Card>
 
