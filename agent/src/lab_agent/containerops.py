@@ -44,11 +44,57 @@ def ensure_container(cfg: AgentConfig, lab: str, params: dict[str, Any]) -> str:
 
 
 def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
-    """Dispatcher handler for container.recreate. Data is preserved (lives in datasets)."""
+    """Dispatcher handler for container.recreate, with rollback. Data is preserved (it lives in the
+    bind-mounted ZFS datasets, not the container's writable layer).
+
+    Flow that never leaves the lab without a working container on failure:
+      1. Validate + ensure the proposed image is available BEFORE stopping the running container.
+      2. Stop the old container and rename it aside (lab-<lab>-old) — preserved for rollback.
+      3. Create the candidate under the real name and wait for systemd/sshd readiness.
+      4. On success, delete the preserved old container (promote). On any failure, remove the
+         candidate and restore + restart the old container, then surface the error.
+    """
     lab = params["lab"]
-    container_id = ensure_container(cfg, lab, params)
+    name = docker.container_name(lab)
+    old = f"{name}-old"
+    opts = ContainerOptions.from_params(params)
+    mounts = _mounts(cfg, lab)
+    caps = detect_capabilities(cfg)
+    gpus = caps.nvidia_gpu and caps.nvidia_cdi
+
+    # 1. Fail early if the image is bad/unavailable — the working container is still untouched.
+    docker.ensure_image(opts.image)
+
+    had_old = docker.container_exists(name)
+    if had_old:
+        # 2. Preserve the current container aside (clear any stale -old first).
+        docker.stop_container(name)
+        docker.remove_container(old)
+        docker.rename_container(name, old)
+
+    try:
+        # 3. Bring up the candidate under the real name and verify it actually started.
+        container_id = docker.create_container(name, opts, mounts, gpus=gpus)
+        if not docker.wait_systemd_ready(name):
+            raise docker.DockerError("candidate container did not become ready (sshd not active)")
+    except Exception as exc:
+        # 4a. Roll back: drop the broken candidate and restore the preserved container.
+        try:
+            docker.remove_container(name)
+        except docker.DockerError:
+            pass
+        if had_old and docker.container_exists(old):
+            docker.rename_container(old, name)
+            docker.start_container(name)
+        raise docker.DockerError(
+            f"recreate failed for lab '{lab}', rolled back to the previous container: {exc}"
+        ) from exc
+
+    # 4b. Promote: remove the preserved old container now the candidate is confirmed healthy.
+    if had_old:
+        docker.remove_container(old)
+
     # A recreated container has a fresh writable layer = the unpatched pinned base image. Clear the
-    # apt-upgrade record so the weekly package loop re-patches it on its next tick instead of
-    # waiting up to a full interval.
+    # apt-upgrade record so the weekly package loop re-patches it on its next tick.
     maintenance_state.mark_unpatched(cfg, lab)
     return {"lab": lab, "container": container_id}, f"recreated container for lab '{lab}'"

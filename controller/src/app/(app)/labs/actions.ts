@@ -142,10 +142,32 @@ export async function recreatePlacementAction(formData: FormData) {
   const placementId = Number(formData.get("placementId"));
   const placement = getPlacement(placementId);
   if (!placement) return;
-  // Phase 1: recreate with the current (unchanged) settings; the dedicated recreation page (Phase 5)
-  // takes the proposed image/resources and does the candidate-then-promote flow.
+  // Recreate with the current (unchanged) settings.
   recreatePlacement(placementId, {}, who);
   revalidatePath(`/labs/${placement.lab_id}`);
+}
+
+/**
+ * Dedicated recreation: apply proposed image + resource settings and recreate the container. The
+ * agent validates/pulls the image, brings up a candidate, verifies readiness, and only then promotes
+ * it (rolling back to the previous container on any failure) — all data is preserved.
+ */
+export async function recreatePlacementSettingsAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const placement = getPlacement(placementId);
+  if (!placement) redirect("/labs");
+  const image = String(formData.get("image") ?? "").trim() || "custom-ssh";
+  const containerOptions = containerOptionsFromForm(formData);
+  try {
+    recreatePlacement(placementId, { image, containerOptions }, who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "recreate failed");
+    redirect(`/labs/${placement!.lab_id}/placements/${placementId}/recreate?error=${fid}`);
+  }
+  revalidatePath(`/labs/${placement!.lab_id}`);
+  const fid = putFlash("Container recreate queued — the node validates the image, brings up a candidate, verifies readiness, then promotes it (data preserved).");
+  redirect(`/labs/${placement!.lab_id}?saved=${fid}`);
 }
 
 export async function removePlacementAction(formData: FormData) {

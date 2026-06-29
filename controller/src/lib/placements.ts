@@ -31,6 +31,27 @@ export const DEFAULT_CONTAINER_OPTIONS: ContainerOptions = {
   restart: "unless-stopped",
 };
 
+// Mirrors the agent's docker.IMAGE_RE: optional registry/repo path, optional :tag and/or @sha256.
+const DOCKER_IMAGE_RE = /^[a-zA-Z0-9][a-zA-Z0-9._/-]*(:[a-zA-Z0-9._-]+)?(@sha256:[a-f0-9]{64})?$/;
+// A docker size value, e.g. "8g", "512m", "1.5g" (optional unit, optional trailing b).
+const SIZE_RE = /^\d+(\.\d+)?\s*[kKmMgGtT]?[bB]?$/;
+const RESTART_POLICIES = new Set(["no", "on-failure", "always", "unless-stopped"]);
+
+/** Validate an image reference + all container resource values before queueing work. Throws on the
+ *  first invalid field so create/recreate never enqueue a doomed run. */
+export function validateContainerConfig(image: string, opts: ContainerOptions): void {
+  if (!DOCKER_IMAGE_RE.test(image) || image.length > 256) {
+    throw new Error(`Invalid image reference '${image}'`);
+  }
+  if (!/^\d+(\.\d+)?$/.test(opts.cpus)) throw new Error("CPUs must be a number (e.g. 4 or 2.5)");
+  if (!SIZE_RE.test(opts.memory)) throw new Error("Invalid memory size (e.g. 8g, 512m)");
+  if (!SIZE_RE.test(opts.shm_size)) throw new Error("Invalid shared-memory size (e.g. 1g)");
+  if (!SIZE_RE.test(opts.image_quota)) throw new Error("Invalid image-size quota (e.g. 300g)");
+  if (!RESTART_POLICIES.has(opts.restart)) {
+    throw new Error("Restart policy must be one of: no, on-failure, always, unless-stopped");
+  }
+}
+
 /** Parse a placement's stored container_options JSON, filling any missing keys with defaults. */
 export function containerOptionsOf(p: { container_options: string | null }): ContainerOptions {
   let parsed: Partial<ContainerOptions> = {};
@@ -153,6 +174,7 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
     | { id: number; name: string; cold_backend: string; cold_owner_node_id: number | null; cold_ready: number }
     | undefined;
   if (!node) throw new Error("Unknown node");
+  validateContainerConfig(input.image, input.containerOptions);
 
   // SMB-client assignment rules: cold is the owner node's shared dataset over a mount, so this
   // placement carries NO local cold quota, and the owner must already host this lab (active) with its
@@ -348,6 +370,11 @@ export function recreatePlacement(
 ): void {
   const p = getPlacement(placementId);
   if (!p) throw new Error("Unknown placement");
+  // Validate the resulting (merged) config before changing anything or queueing the recreate.
+  validateContainerConfig(
+    input.image ?? p.image,
+    input.containerOptions ?? containerOptionsOf(p),
+  );
   if (input.image !== undefined) {
     db().prepare("UPDATE lab_placements SET image = ? WHERE id = ?").run(input.image, placementId);
   }

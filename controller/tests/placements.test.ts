@@ -223,6 +223,27 @@ describe("SMB placement rules + shared student removal", () => {
   });
 });
 
+describe("container config validation", () => {
+  it("accepts valid config and rejects bad image / resources", () => {
+    expect(() => placements.validateContainerConfig("custom-ssh", OPTS)).not.toThrow();
+    expect(() => placements.validateContainerConfig("ghcr.io/org/img:1.2@sha256:" + "a".repeat(64), OPTS)).not.toThrow();
+    expect(() => placements.validateContainerConfig("-bad", OPTS)).toThrow(/Invalid image/);
+    expect(() => placements.validateContainerConfig("ok", { ...OPTS, cpus: "lots" })).toThrow(/CPUs/);
+    expect(() => placements.validateContainerConfig("ok", { ...OPTS, memory: "8gigs" })).toThrow(/memory/);
+    expect(() => placements.validateContainerConfig("ok", { ...OPTS, restart: "sometimes" })).toThrow(/Restart/);
+  });
+
+  it("recreatePlacement rejects an invalid image before queueing anything", async () => {
+    const lab = newLab("recval");
+    const p = await grant(lab.id, nodeA);
+    enqueueTask.mockClear();
+    expect(() => placements.recreatePlacement(p.id, { image: "-bad" })).toThrow(/Invalid image/);
+    expect(enqueueTask.mock.calls.some((c) => c[1] === "container.recreate")).toBe(false);
+    // the stored image is unchanged.
+    expect(placements.getPlacement(p.id)!.image).toBe("custom-ssh");
+  });
+});
+
 describe("destroyPlacement keeps the row until the agent confirms", () => {
   it("marks deleting + enqueues lab.destroy; confirm removes the row", async () => {
     const lab = newLab("teardown");
