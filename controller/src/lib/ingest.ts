@@ -49,15 +49,40 @@ function studentIdInLab(labId: number, username: string): number | null {
   return row?.id ?? null;
 }
 
-function shouldSample(labId: number, studentId: number | null, pool: string, now: number): boolean {
+/**
+ * Whether to persist a new sample for (lab, student, pool).
+ *
+ * Live ZFS metrics — the lab-level fast/slow rows, re-measured from `zfs list` on every 15s
+ * heartbeat — are throttled to one row per STORAGE_SAMPLE_MIN_INTERVAL_MS so the time-series stays
+ * bounded. Scan-derived metrics (`scanDerived`) — the docker writable layer and the per-student
+ * `du` breakdown — only change when a usage scan runs, so they bypass the throttle whenever the
+ * value actually changes. Without that bypass, a fresh on-demand "Scan now" landing on a heartbeat
+ * <5min after the previous sample would be silently dropped, leaving the table stuck on the pre-scan
+ * number even though "updated Xm ago" (usage_scanned_at, which always moves forward) advanced — the
+ * exact desync where the image total froze at a stale value after delete+scan until a manual reload.
+ * Storing only on *change* keeps the series from bloating between scans (the agent re-reports the
+ * same cached number every heartbeat), so this fires at most once per scan.
+ */
+function shouldSample(
+  labId: number,
+  studentId: number | null,
+  pool: string,
+  used: number,
+  now: number,
+  scanDerived: boolean,
+): boolean {
+  // Order by id (insertion order), not ts: two samples can share a millisecond, and a ts tie would
+  // make "the latest value" ambiguous — picking an older-value row would spuriously store a change.
   const row = db()
     .prepare(
-      `SELECT ts FROM storage_samples
+      `SELECT ts, used_bytes AS used FROM storage_samples
        WHERE lab_id = ? AND ifnull(student_id, -1) = ifnull(?, -1) AND pool = ?
-       ORDER BY ts DESC LIMIT 1`,
+       ORDER BY id DESC LIMIT 1`,
     )
-    .get(labId, studentId, pool) as { ts: number } | undefined;
-  return !row || now - row.ts >= STORAGE_SAMPLE_MIN_INTERVAL_MS;
+    .get(labId, studentId, pool) as { ts: number; used: number } | undefined;
+  if (!row) return true;
+  if (now - row.ts >= STORAGE_SAMPLE_MIN_INTERVAL_MS) return true;
+  return scanDerived && row.used !== used;
 }
 
 interface DatasetUsage {
@@ -90,7 +115,11 @@ export function ingestTelemetry(node: string, payload: any): void {
     if (labId === null) continue;
     const studentId = parsed.user ? studentIdInLab(labId, parsed.user) : null;
     if (parsed.level === "user" && studentId === null) continue;
-    if (!shouldSample(labId, studentId, ds.pool, now)) continue;
+    // The docker writable layer and every per-student row come from the on-demand/periodic `du`
+    // scan (there are no per-student ZFS datasets), so they're scan-derived: store on change to let
+    // a fresh scan's numbers land immediately. Lab-level fast/slow are live ZFS — keep throttled.
+    const scanDerived = ds.pool === "docker" || parsed.level === "user";
+    if (!shouldSample(labId, studentId, ds.pool, ds.used_bytes, now, scanDerived)) continue;
     insertSample.run(labId, studentId, ds.pool, ds.used_bytes, ds.quota_bytes ?? null, now);
     // The "docker" pool is the container writable layer (installed software), tracked for the
     // labquota breakdown but not a managed quota — never raise a PI quota alert on it.
@@ -214,32 +243,4 @@ function maybeQuotaAlert(labId: number, pool: string, used: number, quota: numbe
     quotaHuman: fmtBytes(quota),
     breakdown,
   });
-}
-
-export function storeOldfileScan(result: any): void {
-  const lab = result?.lab;
-  if (!lab) return;
-  const labId = labIdByName(lab);
-  if (labId === null) return;
-  const now = Date.now();
-  // Replace prior scans for this lab so the UI shows the latest.
-  db().prepare("DELETE FROM oldfile_scans WHERE lab_id = ?").run(labId);
-  const ins = db().prepare(
-    `INSERT INTO oldfile_scans
-       (lab_id, student_id, atime_count, atime_bytes, mtime_count, mtime_bytes, oldest, scanned_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (const row of (result.results ?? []) as any[]) {
-    const studentId = row.username ? studentIdInLab(labId, row.username) : null;
-    ins.run(
-      labId,
-      studentId,
-      row.atime_count ?? 0,
-      row.atime_bytes ?? 0,
-      row.mtime_count ?? 0,
-      row.mtime_bytes ?? 0,
-      row.oldest ?? null,
-      now,
-    );
-  }
 }

@@ -152,7 +152,7 @@ export async function sendQuotaEmail(info: QuotaEmail): Promise<SendResult> {
 Per-student usage on the ${info.pool} pool:
 ${lines}
 
-You may want to ask students to clean up old files, or request a larger quota.
+You may want to ask students to clean up unneeded data, or request a larger quota.
 
 — Lab Manager`;
   return sendMail(info.to, `Lab ${info.lab} is at ${info.pct}% of its ${info.pool} quota`, text);

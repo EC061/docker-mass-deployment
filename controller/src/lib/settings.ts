@@ -1,6 +1,6 @@
 /**
  * Operational settings, stored in the `settings` key/value table and editable in the UI.
- * Everything tunable at runtime lives here (quota defaults, SSH port range, old-file threshold,
+ * Everything tunable at runtime lives here (quota defaults, SSH port range, usage-scan schedule,
  * and — added in later phases — SMTP, WebDAV, GPU policy, alert threshold).
  */
 
@@ -19,11 +19,13 @@ export interface Settings {
   slowQuotaDefaultBytes: number;
   sshPortStart: number;
   sshPortEnd: number;
-  oldFileThresholdDays: number;
-  // Nightly old-file scan. The controller enqueues oldfiles.scan to each lab's node when due; the
-  // agent walks the datasets and reports counts back, stored in oldfile_scans.
-  oldFileScanEnabled: boolean;
-  oldFileScanIntervalDays: number; // scan each lab at most this often
+  // Nightly per-student usage (du) scan. Once a day, during usageScanHour (in usageScanTimezone),
+  // the controller enqueues a usage.scan to each online lab's node; the agent measures each
+  // student's home/scratch/cold usage and reports it back. Container-level usage is separate — it
+  // is measured live on every agent heartbeat and is not gated by this schedule.
+  usageScanEnabled: boolean;
+  usageScanHour: number; // hour of day (0-23, in usageScanTimezone) the nightly scan may start
+  usageScanTimezone: string; // IANA tz name the usage-scan hour is evaluated in
   // External SMTP (no bundled mail server). Empty host disables email.
   smtpHost: string;
   smtpPort: number;
@@ -162,9 +164,9 @@ export const DEFAULT_SETTINGS: Settings = {
   slowQuotaDefaultBytes: 3 * TIB,
   sshPortStart: 50000,
   sshPortEnd: 51000,
-  oldFileThresholdDays: 30,
-  oldFileScanEnabled: true,
-  oldFileScanIntervalDays: 1,
+  usageScanEnabled: true,
+  usageScanHour: 3,
+  usageScanTimezone: "UTC",
   smtpHost: "",
   smtpPort: 587,
   smtpUser: "",

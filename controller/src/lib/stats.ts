@@ -1,10 +1,14 @@
 /**
- * Per-student storage stats, grouped node -> lab -> student, for the Stats page. All numbers come
- * from the latest `storage_samples` row per (lab, student, pool); the agent reports three pools:
- *   - docker: a student's writable-layer / overlayfs usage (installed software in their home);
- *             the lab-level (student_id NULL) docker row is the whole container's writable layer.
- *   - fast:   scratch tier (per-student is usually null — the lab quota covers everyone).
- *   - slow:   cold-storage tier (likewise usually lab-level only).
+ * Storage stats, grouped node -> lab -> student, for the Stats page. The page presents two
+ * separately-cadenced kinds of data, both read from the latest `storage_samples` row per (lab,
+ * student, pool):
+ *
+ *   - LIVE container-level (`LabStats.live`): the whole-container writable layer ("whole image",
+ *     pool=docker, student_id NULL) plus the live lab-level fast/slow ZFS usage-vs-quota. These are
+ *     re-measured on every agent heartbeat, so they are always current.
+ *   - NIGHTLY per-student (`LabStats.students`): each student's docker home (installed software),
+ *     scratch (fast) and cold (slow) `du`. These come from the per-student usage scan (nightly +
+ *     on-demand "Scan now"), so they carry a freshness timestamp.
  */
 
 import { db } from "./db";
@@ -15,7 +19,7 @@ export interface StudentUsage {
   studentId: number;
   username: string;
   name: string | null;
-  docker: number | null; // overlay/image usage attributed to this student
+  docker: number | null; // docker home (installed software) attributed to this student
   fast: number | null; // scratch
   slow: number | null; // cold storage
 }
@@ -25,8 +29,9 @@ export interface LabStats {
   labName: string;
   image: string;
   students: StudentUsage[];
-  aggregate: {
-    docker: number | null; // whole-image writable layer (SizeRw) for the lab container
+  // Container + lab totals, refreshed every heartbeat (see module doc).
+  live: {
+    image: number | null; // whole-container writable layer (SizeRw) for the lab container
     fast: { used: number | null; quota: number | null };
     slow: { used: number | null; quota: number | null };
   };
@@ -154,8 +159,8 @@ export function buildStats(): NodeStats[] {
       labName: lab.name,
       image: lab.image,
       students,
-      aggregate: {
-        docker: cell(lab.id, "docker").used,
+      live: {
+        image: cell(lab.id, "docker").used,
         fast: cell(lab.id, "fast"),
         slow: cell(lab.id, "slow"),
       },
@@ -170,7 +175,7 @@ export function buildStats(): NodeStats[] {
       byNode.set(lab.node_name, node);
     }
     node.labs.push(labStats);
-    node.totalImageBytes += labStats.aggregate.docker ?? 0;
+    node.totalImageBytes += labStats.live.image ?? 0;
   }
 
   const nodes = [...byNode.values()];

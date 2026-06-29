@@ -14,17 +14,33 @@ export async function saveStorageSettingsAction(formData: FormData) {
   const slowTb = Number(formData.get("slowTb"));
   const portStart = Number(formData.get("sshPortStart"));
   const portEnd = Number(formData.get("sshPortEnd"));
-  const threshold = Number(formData.get("oldFileThresholdDays"));
-  const scanInterval = Number(formData.get("oldFileScanIntervalDays"));
 
   if (fastTb > 0) setSetting("fastQuotaDefaultBytes", Math.round(fastTb * TIB));
   if (slowTb > 0) setSetting("slowQuotaDefaultBytes", Math.round(slowTb * TIB));
   if (portStart > 0) setSetting("sshPortStart", portStart);
   if (portEnd > portStart) setSetting("sshPortEnd", portEnd);
-  if (threshold > 0) setSetting("oldFileThresholdDays", threshold);
-  setSetting("oldFileScanEnabled", formData.get("oldFileScanEnabled") === "on");
-  if (scanInterval > 0) setSetting("oldFileScanIntervalDays", scanInterval);
 
+  revalidatePath("/settings");
+}
+
+/** Save the nightly per-student usage (du) scan schedule (mirrors saveScrubSettingsAction). */
+export async function saveUsageScanSettingsAction(formData: FormData) {
+  await requireAdmin();
+  setSetting("usageScanEnabled", formData.get("usageScanEnabled") === "on");
+  const hour = Number(formData.get("usageScanHour"));
+  setSetting("usageScanHour", Number.isFinite(hour) && hour >= 0 && hour <= 23 ? Math.trunc(hour) : 3);
+  const tz = String(formData.get("usageScanTimezone") ?? "").trim();
+  // Validate the IANA name by round-tripping it through Intl; reject anything DateTimeFormat won't take.
+  let validTz = "UTC";
+  try {
+    if (tz) {
+      new Intl.DateTimeFormat("en-US", { timeZone: tz });
+      validTz = tz;
+    }
+  } catch {
+    validTz = "UTC";
+  }
+  setSetting("usageScanTimezone", validTz);
   revalidatePath("/settings");
 }
 

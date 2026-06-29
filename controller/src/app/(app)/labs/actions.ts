@@ -7,7 +7,7 @@ import { db } from "@/lib/db";
 import { putFlash } from "@/lib/flash";
 import { createLab, destroyLab, getLab, updateLabSettings, updateQuota } from "@/lib/labs";
 import { enqueueTask } from "@/lib/queue";
-import { getSettings, nextSshPort, TIB } from "@/lib/settings";
+import { nextSshPort, TIB } from "@/lib/settings";
 import { addStudentToLab, copyMembers, removeStudentFromLab } from "@/lib/students";
 
 // Enforcing auth gate: throws/redirects when the caller is not a live admin, and returns the
@@ -115,28 +115,6 @@ export async function destroyLabAction(formData: FormData) {
   // The lab detail page (/labs/[id]) no longer exists after destroy, so send the admin to the labs
   // list rather than leaving them on a 404.
   redirect("/labs");
-}
-
-export async function rescanAction(formData: FormData) {
-  const who = await actor();
-  const labId = Number(formData.get("labId"));
-  const lab = db().prepare("SELECT labs.name AS name, nodes.name AS node FROM labs JOIN nodes ON nodes.id = labs.node_id WHERE labs.id = ?").get(labId) as
-    | { name: string; node: string }
-    | undefined;
-  if (!lab) return;
-  const users = (db()
-    .prepare(
-      `SELECT students.username AS username FROM lab_members
-       JOIN students ON students.id = lab_members.student_id WHERE lab_members.lab_id = ?`,
-    )
-    .all(labId) as { username: string }[]).map((r) => r.username);
-  enqueueTask(
-    lab.node,
-    "oldfiles.scan",
-    { lab: lab.name, users, threshold_days: getSettings().oldFileThresholdDays },
-    who,
-  );
-  revalidatePath(`/labs/${labId}`);
 }
 
 export async function recreateContainerAction(formData: FormData) {

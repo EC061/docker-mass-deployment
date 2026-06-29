@@ -28,9 +28,9 @@ describe("getSetting / setSetting", () => {
   it("returns the typed default when unset", () => {
     expect(settings.getSetting("fastQuotaDefaultBytes")).toBe(2 * settings.TIB);
     expect(settings.getSetting("alertLevel")).toBe("ERROR");
-    // Nightly old-file scan defaults (enabled, daily).
-    expect(settings.getSetting("oldFileScanEnabled")).toBe(true);
-    expect(settings.getSetting("oldFileScanIntervalDays")).toBe(1);
+    // Nightly per-student usage-scan defaults (enabled, 03:00 UTC).
+    expect(settings.getSetting("usageScanEnabled")).toBe(true);
+    expect(settings.getSetting("usageScanHour")).toBe(3);
   });
 
   it("roundtrips a value through JSON", () => {
@@ -58,10 +58,10 @@ describe("getSetting / setSetting", () => {
     dbmod
       .db()
       .prepare(
-        "INSERT INTO settings (key, value) VALUES ('oldFileThresholdDays', 'not json') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        "INSERT INTO settings (key, value) VALUES ('usageScanHour', 'not json') ON CONFLICT(key) DO UPDATE SET value=excluded.value",
       )
       .run();
-    expect(settings.getSetting("oldFileThresholdDays")).toBe(30);
+    expect(settings.getSetting("usageScanHour")).toBe(3);
   });
 });
 

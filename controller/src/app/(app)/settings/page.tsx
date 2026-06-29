@@ -17,12 +17,13 @@ import {
   saveScrubSettingsAction,
   saveSmtpSettingsAction,
   saveStorageSettingsAction,
+  saveUsageScanSettingsAction,
   saveWelcomeEmailAction,
   scrubNowAction,
   testEmailAction,
 } from "./actions";
 
-// A short list of common IANA timezones for the scrub schedule picker (free text still allowed).
+// A short list of common IANA timezones for the schedule pickers (free text still allowed).
 const COMMON_TIMEZONES = [
   "UTC",
   "America/New_York",
@@ -72,27 +73,41 @@ export default async function SettingsPage({
               <Label>SSH port range end</Label>
               <Input name="sshPortEnd" type="number" defaultValue={s.sshPortEnd} />
             </div>
-            <div>
-              <Label>Old-file threshold (days)</Label>
-              <Input name="oldFileThresholdDays" type="number" defaultValue={s.oldFileThresholdDays} />
-            </div>
-            <div>
-              <Label>Old-file scan interval (days)</Label>
-              <Input name="oldFileScanIntervalDays" type="number" defaultValue={s.oldFileScanIntervalDays} />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  name="oldFileScanEnabled"
-                  defaultChecked={s.oldFileScanEnabled}
-                  className="accent-primary"
-                />
-                Run nightly old-file scans automatically
-              </label>
-            </div>
             <div className="sm:col-span-2">
               <Button type="submit">Save</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Per-student usage scan</h3>
+          <p className="text-xs text-muted-foreground">
+            Once a night the controller measures each student&apos;s home / scratch / cold usage (a{" "}
+            <em>du</em> scan) on every online lab&apos;s node, shown on the Stats page. Container-level
+            usage is separate: it is measured live on every heartbeat and is always current.
+          </p>
+          <form action={saveUsageScanSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input type="checkbox" name="usageScanEnabled" defaultChecked={s.usageScanEnabled} className="accent-primary" />
+              Run the nightly per-student usage scan automatically
+            </label>
+            <div>
+              <Label>Start at hour (0–23)</Label>
+              <Input name="usageScanHour" type="number" min={0} max={23} defaultValue={s.usageScanHour} />
+            </div>
+            <div>
+              <Label>Timezone</Label>
+              <Input name="usageScanTimezone" defaultValue={s.usageScanTimezone} list="usage-tz-list" placeholder="UTC" />
+              <datalist id="usage-tz-list">
+                {COMMON_TIMEZONES.map((tz) => (
+                  <option key={tz} value={tz} />
+                ))}
+              </datalist>
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit">Save usage scan</Button>
             </div>
           </form>
         </CardContent>
