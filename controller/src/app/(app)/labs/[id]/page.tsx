@@ -8,6 +8,7 @@ import { listPlacements, type Placement } from "@/lib/placements";
 import { listMembers } from "@/lib/students";
 import { getSettings, TIB } from "@/lib/settings";
 import { PlacementForm, type NodeOpt } from "../_components/PlacementForm";
+import { RosterImportForm } from "../_components/RosterImportForm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -16,8 +17,10 @@ import { Label } from "@/components/ui/label";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   addMemberAction,
+  applyRosterImportAction,
   destroyLabAction,
   grantNodeAccessAction,
+  previewRosterImportAction,
   removeMemberAction,
   updateLabMetaAction,
 } from "../actions";
@@ -262,11 +265,24 @@ export default async function LabDetail({
       </Card>
 
       <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Import roster from CSV</h3>
+          <RosterImportForm
+            labId={lab.id}
+            preview={previewRosterImportAction}
+            apply={applyRosterImportAction}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
         <CardContent className="flex flex-wrap items-center gap-3">
           <form action={destroyLabAction}>
             <input type="hidden" name="labId" value={lab.id} />
             <ConfirmButton
               variant="destructive"
+              title={`Delete ${lab.name}?`}
+              confirmLabel="Delete lab"
               confirm={
                 placements.length > 0
                   ? `Delete lab "${lab.name}"? Its ${placements.length} placement(s) are torn down first (container + data on each node); the lab is removed once every node confirms.`

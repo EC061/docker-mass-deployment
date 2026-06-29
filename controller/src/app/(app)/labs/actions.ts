@@ -4,7 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { putFlash } from "@/lib/flash";
-import { applyLabImport, type ImportPlan, type ImportResult, planLabImport } from "@/lib/labimport";
+import { applyRosterImport, type RosterImportPlan, type RosterImportResult, planRosterImport } from "@/lib/labimport";
 import { createLab, destroyLab, getLab, updateLabMeta } from "@/lib/labs";
 import {
   type ContainerOptions,
@@ -262,18 +262,21 @@ export async function addMemberAction(formData: FormData) {
   redirect(`/labs/${labId}?saved=${fid}`);
 }
 
-/** Preview a lab+roster CSV import: validate the whole file against the DB without writing anything. */
-export async function previewLabImportAction(text: string): Promise<ImportPlan> {
+/** Preview a per-lab roster CSV import: validate the whole file against the DB without writing anything. */
+export async function previewRosterImportAction(labId: number, text: string): Promise<RosterImportPlan> {
   await requireAdmin();
-  return planLabImport(String(text ?? ""));
+  return planRosterImport(Number(labId), String(text ?? ""));
 }
 
-/** Apply a previewed lab+roster CSV import in one transaction. */
-export async function applyLabImportAction(text: string): Promise<{ result?: ImportResult; error?: string }> {
+/** Apply a previewed per-lab roster CSV import in one transaction. */
+export async function applyRosterImportAction(
+  labId: number,
+  text: string,
+): Promise<{ result?: RosterImportResult; error?: string }> {
   const who = await actor();
   try {
-    const result = await applyLabImport(String(text ?? ""), who);
-    revalidatePath("/labs");
+    const result = await applyRosterImport(Number(labId), String(text ?? ""), who);
+    revalidatePath(`/labs/${Number(labId)}`);
     revalidatePath("/students");
     return { result };
   } catch (e) {

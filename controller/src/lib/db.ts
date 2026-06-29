@@ -455,6 +455,24 @@ const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => 
     ALTER TABLE placement_members ADD COLUMN credential_delivered_at INTEGER;
     `,
   },
+  {
+    // User-defined named groupings of nodes, shown on the Stats page for per-node usage roll-ups.
+    // Membership is many-to-many (a node can be in several groups); both FKs cascade so deleting a
+    // group or a node cleans up its membership rows automatically.
+    id: "0016_node_groups",
+    sql: `
+    CREATE TABLE node_groups (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      created_at INTEGER NOT NULL
+    );
+    CREATE TABLE node_group_members (
+      group_id INTEGER NOT NULL REFERENCES node_groups(id) ON DELETE CASCADE,
+      node_id INTEGER NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
+      PRIMARY KEY (group_id, node_id)
+    );
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

@@ -1,12 +1,9 @@
-import { audienceCounts, recentAnnouncements } from "@/lib/announcements";
+import { ANNOUNCEMENT_TEMPLATES, ANNOUNCEMENT_VARS, audienceCounts, recentAnnouncements } from "@/lib/announcements";
 import { isSmtpConfigured } from "@/lib/settings";
 import { ago } from "@/lib/format";
 import { sendAnnouncementAction } from "./actions";
-import { Button } from "@/components/ui/button";
+import { AnnouncementComposer } from "./_components/AnnouncementComposer";
 import { Card, CardContent } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const dynamic = "force-dynamic";
@@ -51,33 +48,17 @@ export default async function AnnouncementsPage({
       <Card>
         <CardContent className="space-y-3">
           <h3 className="text-base font-semibold">Send a service announcement</h3>
-          <form action={sendAnnouncementAction} className="space-y-3">
-            <div>
-              <Label>Subject</Label>
-              <Input name="subject" required maxLength={200} placeholder="e.g. Scheduled maintenance Saturday" />
-            </div>
-            <div>
-              <Label>Message</Label>
-              <Textarea name="body" required rows={6} placeholder="Write your announcement…" />
-            </div>
-            <fieldset className="rounded-md border border-border p-3">
-              <legend className="px-1 text-xs text-muted-foreground">Recipients</legend>
-              <div className="flex flex-wrap gap-x-6 gap-y-2">
-                <label className="flex items-center gap-1.5 text-sm">
-                  <input type="checkbox" name="students" defaultChecked className="accent-primary" />
-                  All users ({counts.students})
-                </label>
-                <label className="flex items-center gap-1.5 text-sm">
-                  <input type="checkbox" name="pis" className="accent-primary" />
-                  All PIs ({counts.pis})
-                </label>
-              </div>
-            </fieldset>
-            <Button type="submit">Send announcement</Button>
-          </form>
+          <AnnouncementComposer
+            templates={ANNOUNCEMENT_TEMPLATES}
+            vars={ANNOUNCEMENT_VARS}
+            counts={counts}
+            action={sendAnnouncementAction}
+          />
           <p className="text-xs text-muted-foreground">
-            Sent by email to the distinct addresses in the selected audiences. A PI who is also a user
-            is mailed once.
+            Sent by email to the distinct addresses in the selected audiences (a PI who is also a user
+            is mailed once). <code>{"{name}"}</code> and <code>{"{email}"}</code> are filled in per
+            recipient. See all templates and variables under{" "}
+            <a href="/email-templates" className="underline">Email templates</a>.
           </p>
         </CardContent>
       </Card>

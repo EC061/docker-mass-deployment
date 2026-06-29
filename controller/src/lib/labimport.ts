@@ -1,19 +1,25 @@
 /**
- * Lab + roster CSV import (Phase 2). One row per lab/student membership:
+ * Per-lab roster CSV import (Phase 2, role-based). The import is scoped to a single lab (run from that
+ * lab's page), so the lab is never named in the file and PI info is not repeated on every row. Columns:
  *
- *   lab_name,pi_name,pi_email,student_id,username,student_name,student_email
+ *   role,username,email,name,student_id
+ *
+ * `role` is `student` (the default when the column is blank or absent) or `pi`. A `pi` row carries the
+ * lab's PI metadata only — its `name`/`email` become the lab's PI name/email and any username/student_id
+ * on it is ignored (the PI is not a roster member). `student` rows create/update the global student
+ * record and add a membership to THIS lab.
  *
  * The whole file is parsed and validated against the current DB BEFORE any write, producing a plan
- * (labs/students to create or update, memberships to add, plus conflicts / invalid rows). The plan is
+ * (PI change, students to create/update, memberships to add, plus conflicts / invalid rows). The plan is
  * shown as a preview; applying it re-derives the plan and commits everything in one transaction, then
- * records an audit row. Imports are idempotent (re-running changes nothing) and never delete a lab or
- * membership merely because it is absent from a later CSV. Node/quota/image config is NOT in the CSV.
+ * records an audit row. Imports are idempotent (re-running changes nothing) and never remove a member
+ * merely because they are absent from a later CSV. Node/quota/image config is NOT in the CSV.
  */
 
 import { audit } from "./audit";
 import { parseCsv } from "./csv";
 import { db } from "./db";
-import { isValidLabName } from "./labs";
+import { getLab } from "./labs";
 import { listPlacements, provisionMemberOnPlacement, type ProvisionStudent } from "./placements";
 
 export const MAX_IMPORT_BYTES = 1_000_000; // 1 MB
@@ -28,16 +34,6 @@ export interface ImportIssue {
   message: string;
 }
 
-export interface LabCreate {
-  name: string;
-  piName: string | null;
-  piEmail: string | null;
-}
-export interface LabUpdate {
-  name: string;
-  piName?: string;
-  piEmail?: string;
-}
 export interface StudentCreate {
   username: string;
   studentId: string | null;
@@ -50,17 +46,18 @@ export interface StudentUpdate {
   name?: string;
   email?: string;
 }
-export interface MembershipAdd {
-  lab: string;
-  username: string;
+/** The PI fields that would change on this lab (only changed, non-blank fields are present). */
+export interface PiUpdate {
+  piName?: string;
+  piEmail?: string;
 }
 
-export interface ImportPlan {
-  labsToCreate: LabCreate[];
-  labsToUpdate: LabUpdate[];
+export interface RosterImportPlan {
+  lab: string; // target lab name, for display
+  piUpdate: PiUpdate | null;
   studentsToCreate: StudentCreate[];
   studentsToUpdate: StudentUpdate[];
-  membershipsToAdd: MembershipAdd[];
+  membershipsToAdd: string[]; // usernames to add to this lab's roster
   conflicts: ImportIssue[];
   invalid: ImportIssue[];
   ok: boolean; // committable: no conflicts and no invalid rows
@@ -68,14 +65,11 @@ export interface ImportPlan {
 
 interface ValidRow {
   line: number;
-  lab: string;
-  piName: string | null;
-  piEmail: string | null;
-  sid: string | null;
+  role: "student" | "pi";
   user: string | null;
+  sid: string | null;
   sname: string | null;
   semail: string | null;
-  hasStudent: boolean;
 }
 
 interface DbStudent {
@@ -85,19 +79,14 @@ interface DbStudent {
   email: string | null;
   name: string | null;
 }
-interface DbLab {
-  id: number;
-  pi_name: string | null;
-  pi_email: string | null;
-}
 
 const norm = (v: string | undefined) => (v ?? "").trim();
 const lower = (v: string | undefined) => norm(v).toLowerCase();
 
-function emptyPlan(issue?: ImportIssue): ImportPlan {
+function emptyPlan(lab: string, issue?: ImportIssue): RosterImportPlan {
   return {
-    labsToCreate: [],
-    labsToUpdate: [],
+    lab,
+    piUpdate: null,
     studentsToCreate: [],
     studentsToUpdate: [],
     membershipsToAdd: [],
@@ -107,81 +96,84 @@ function emptyPlan(issue?: ImportIssue): ImportPlan {
   };
 }
 
-/** Compute an import plan from CSV text WITHOUT writing anything. Reads current DB state. */
-export function planLabImport(text: string): ImportPlan {
+/** Compute a per-lab roster import plan from CSV text WITHOUT writing anything. Reads current DB state. */
+export function planRosterImport(labId: number, text: string): RosterImportPlan {
+  const lab = getLab(labId);
+  if (!lab) return emptyPlan("", { line: 0, message: "Unknown lab" });
   if (text.length > MAX_IMPORT_BYTES) {
-    return emptyPlan({ line: 0, message: `File too large (${text.length} bytes; max ${MAX_IMPORT_BYTES})` });
+    return emptyPlan(lab.name, { line: 0, message: `File too large (${text.length} bytes; max ${MAX_IMPORT_BYTES})` });
   }
   const parsed = parseCsv(text);
-  if (parsed.headers.length === 0) return emptyPlan({ line: 0, message: "Empty CSV" });
-  if (!parsed.headers.includes("lab_name")) {
-    return emptyPlan({ line: 1, message: "Missing required column 'lab_name'" });
+  if (parsed.headers.length === 0) return emptyPlan(lab.name, { line: 0, message: "Empty CSV" });
+  if (!parsed.headers.includes("username")) {
+    return emptyPlan(lab.name, { line: 1, message: "Missing required column 'username'" });
   }
   if (parsed.rows.length > MAX_IMPORT_ROWS) {
-    return emptyPlan({ line: 0, message: `Too many rows (${parsed.rows.length}; max ${MAX_IMPORT_ROWS})` });
+    return emptyPlan(lab.name, { line: 0, message: `Too many rows (${parsed.rows.length}; max ${MAX_IMPORT_ROWS})` });
   }
 
   const invalid: ImportIssue[] = [];
   const conflicts: ImportIssue[] = [];
   const valid: ValidRow[] = [];
 
-  // Phase A — per-row field validation.
+  // Phase A — per-row field validation. `role` defaults to student when blank/absent.
   parsed.rows.forEach((r, i) => {
     const line = i + 2; // +1 header, +1 to 1-base
     const bad = (message: string) => invalid.push({ line, message });
-    const lab = norm(r.lab_name);
-    if (!lab) return void bad("missing lab_name");
-    if (!isValidLabName(lab)) return void bad(`invalid lab_name '${lab}'`);
-    const piName = norm(r.pi_name) || null;
-    const piEmail = lower(r.pi_email) || null;
-    if (piEmail && !EMAIL_RE.test(piEmail)) return void bad("invalid pi_email");
-    const sid = norm(r.student_id) || null;
+    const roleRaw = lower(r.role) || "student";
+    if (roleRaw !== "student" && roleRaw !== "pi") return void bad(`unknown role '${roleRaw}' (use 'student' or 'pi')`);
+    const role = roleRaw;
     const user = lower(r.username) || null;
-    const sname = norm(r.student_name) || null;
-    const semail = lower(r.student_email) || null;
-    const hasStudent = !!(sid || user || sname || semail);
-    if (hasStudent && !user) return void bad("username required when any student field is present");
-    if (user && !USERNAME_RE.test(user)) return void bad(`invalid username '${user}'`);
+    const sid = norm(r.student_id) || null;
+    const sname = norm(r.name) || null;
+    const semail = lower(r.email) || null;
+
+    if (role === "pi") {
+      if (!sname && !semail) return void bad("a 'pi' row needs a name or email");
+      if (semail && !EMAIL_RE.test(semail)) return void bad("invalid pi email");
+      valid.push({ line, role, user: null, sid: null, sname, semail });
+      return;
+    }
+    // student row
+    if (!user) return void bad("username required on a student row");
+    if (!USERNAME_RE.test(user)) return void bad(`invalid username '${user}'`);
     if (sid && !STUDENT_ID_RE.test(sid)) return void bad(`invalid student_id '${sid}'`);
-    if (semail && !EMAIL_RE.test(semail)) return void bad("invalid student_email");
-    valid.push({ line, lab, piName, piEmail, sid, user, sname, semail, hasStudent });
+    if (semail && !EMAIL_RE.test(semail)) return void bad("invalid email");
+    valid.push({ line, role, user, sid, sname, semail });
   });
 
-  // Phase B — PI consistency per lab (repeated PI info for one lab must match).
-  const labPI = new Map<string, { piName: string | null; piEmail: string | null }>();
+  // Phase B — PI metadata: at most one effective PI (repeated 'pi' rows must agree).
+  let piName: string | null = null;
+  let piEmail: string | null = null;
   for (const r of valid) {
-    const cur = labPI.get(r.lab);
-    if (!cur) {
-      labPI.set(r.lab, { piName: r.piName, piEmail: r.piEmail });
-      continue;
+    if (r.role !== "pi") continue;
+    if (r.sname) {
+      if (piName && piName !== r.sname) conflicts.push({ line: r.line, message: "conflicting PI name in 'pi' rows" });
+      else piName = r.sname;
     }
-    if (r.piName && cur.piName && r.piName !== cur.piName) conflicts.push({ line: r.line, message: `PI name mismatch for lab '${r.lab}'` });
-    else if (r.piName && !cur.piName) cur.piName = r.piName;
-    if (r.piEmail && cur.piEmail && r.piEmail !== cur.piEmail) conflicts.push({ line: r.line, message: `PI email mismatch for lab '${r.lab}'` });
-    else if (r.piEmail && !cur.piEmail) cur.piEmail = r.piEmail;
+    if (r.semail) {
+      if (piEmail && piEmail !== r.semail) conflicts.push({ line: r.line, message: "conflicting PI email in 'pi' rows" });
+      else piEmail = r.semail;
+    }
   }
 
-  // Load current DB state.
-  const dbLabs = new Map<string, DbLab>();
-  for (const l of db().prepare("SELECT id, name, pi_name, pi_email FROM labs").all() as (DbLab & { name: string })[]) {
-    dbLabs.set(l.name, { id: l.id, pi_name: l.pi_name, pi_email: l.pi_email });
-  }
+  // Load current DB state for this lab.
   const dbByName = new Map<string, DbStudent>();
   const dbById = new Map<string, DbStudent>();
   for (const s of db().prepare("SELECT id, student_id, username, email, name FROM students").all() as DbStudent[]) {
     dbByName.set(s.username, s);
     if (s.student_id) dbById.set(s.student_id, s);
   }
-  const dbMembers = new Set<string>();
-  for (const m of db().prepare("SELECT lab_id, student_id FROM lab_members").all() as { lab_id: number; student_id: number }[]) {
-    dbMembers.add(`${m.lab_id}:${m.student_id}`);
+  const dbMembers = new Set<number>();
+  for (const m of db().prepare("SELECT student_id FROM lab_members WHERE lab_id = ?").all(labId) as { student_id: number }[]) {
+    dbMembers.add(m.student_id);
   }
 
   // Phase C — merge student rows by username, detecting in-batch conflicts.
   interface BatchStudent { sid: string | null; name: string | null; email: string | null; line: number }
   const batch = new Map<string, BatchStudent>();
   for (const r of valid) {
-    if (!r.hasStudent || !r.user) continue;
+    if (r.role !== "student" || !r.user) continue;
     const prev = batch.get(r.user);
     if (!prev) {
       batch.set(r.user, { sid: r.sid, name: r.sname, email: r.semail, line: r.line });
@@ -227,38 +219,27 @@ export function planLabImport(text: string): ImportPlan {
     if (upd.name !== undefined || upd.email !== undefined || upd.studentId !== undefined) studentsToUpdate.push(upd);
   }
 
-  // Phase D — labs to create / update (only changed, non-blank PI fields).
-  const labsToCreate: LabCreate[] = [];
-  const labsToUpdate: LabUpdate[] = [];
-  for (const [lab, pi] of labPI) {
-    const existing = dbLabs.get(lab);
-    if (!existing) {
-      labsToCreate.push({ name: lab, piName: pi.piName, piEmail: pi.piEmail });
-    } else {
-      const upd: LabUpdate = { name: lab };
-      if (pi.piName !== null && pi.piName !== existing.pi_name) upd.piName = pi.piName;
-      if (pi.piEmail !== null && pi.piEmail !== existing.pi_email) upd.piEmail = pi.piEmail;
-      if (upd.piName !== undefined || upd.piEmail !== undefined) labsToUpdate.push(upd);
-    }
-  }
+  // PI update — only changed, non-blank fields relative to the lab's current PI.
+  let piUpdate: PiUpdate | null = null;
+  const pi: PiUpdate = {};
+  if (piName !== null && piName !== lab.pi_name) pi.piName = piName;
+  if (piEmail !== null && piEmail !== lab.pi_email) pi.piEmail = piEmail;
+  if (pi.piName !== undefined || pi.piEmail !== undefined) piUpdate = pi;
 
-  // Phase E — memberships to add (dedup; skip ones that already exist in the DB).
-  const membershipsToAdd: MembershipAdd[] = [];
+  // Memberships to add (dedup; skip students already in this lab's roster).
+  const membershipsToAdd: string[] = [];
   const seenMember = new Set<string>();
-  for (const r of valid) {
-    if (!r.hasStudent || !r.user) continue;
-    const key = `${r.lab} ${r.user}`;
-    if (seenMember.has(key)) continue;
-    seenMember.add(key);
-    const dbLab = dbLabs.get(r.lab);
-    const dbStudent = dbByName.get(r.user) ?? (r.sid ? dbById.get(r.sid) : undefined);
-    if (dbLab && dbStudent && dbMembers.has(`${dbLab.id}:${dbStudent.id}`)) continue; // already a member -> idempotent
-    membershipsToAdd.push({ lab: r.lab, username: r.user });
+  for (const [user] of batch) {
+    if (seenMember.has(user)) continue;
+    seenMember.add(user);
+    const existing = dbByName.get(user) ?? (batch.get(user)?.sid ? dbById.get(batch.get(user)!.sid!) : undefined);
+    if (existing && dbMembers.has(existing.id)) continue; // already a member -> idempotent
+    membershipsToAdd.push(user);
   }
 
   return {
-    labsToCreate,
-    labsToUpdate,
+    lab: lab.name,
+    piUpdate,
     studentsToCreate,
     studentsToUpdate,
     membershipsToAdd,
@@ -268,9 +249,8 @@ export function planLabImport(text: string): ImportPlan {
   };
 }
 
-export interface ImportResult {
-  labsCreated: number;
-  labsUpdated: number;
+export interface RosterImportResult {
+  piUpdated: boolean;
   studentsCreated: number;
   studentsUpdated: number;
   membershipsAdded: number;
@@ -278,12 +258,13 @@ export interface ImportResult {
 }
 
 /**
- * Apply an import: re-derive the plan from the text (never trust a client-supplied plan), commit all
- * labs/students/memberships in ONE transaction, audit it, then provision any newly-added memberships
- * on labs that already have placements (best-effort, post-commit). Throws if the plan isn't committable.
+ * Apply a per-lab roster import: re-derive the plan from the text (never trust a client-supplied plan),
+ * commit the PI change + students + memberships in ONE transaction, audit it, then provision any
+ * newly-added members on placements the lab already has (best-effort, post-commit). Throws if the plan
+ * isn't committable.
  */
-export async function applyLabImport(text: string, actor?: string): Promise<ImportResult> {
-  const plan = planLabImport(text);
+export async function applyRosterImport(labId: number, text: string, actor?: string): Promise<RosterImportResult> {
+  const plan = planRosterImport(labId, text);
   if (!plan.ok) {
     const first = [...plan.invalid, ...plan.conflicts][0];
     throw new Error(
@@ -293,62 +274,55 @@ export async function applyLabImport(text: string, actor?: string): Promise<Impo
   }
 
   const now = Date.now();
-  const labId = new Map<string, number>();
   const studentId = new Map<string, number>();
-  const added: { labId: number; student: ProvisionStudent }[] = [];
+  const added: ProvisionStudent[] = [];
 
   db().transaction(() => {
-    const dbName = (sql: string) => db().prepare(sql);
-    // Seed maps with existing rows referenced by memberships.
-    for (const l of db().prepare("SELECT id, name FROM labs").all() as { id: number; name: string }[]) labId.set(l.name, l.id);
-    for (const s of db().prepare("SELECT id, username FROM students").all() as { id: number; username: string }[]) studentId.set(s.username, s.id);
-
-    for (const l of plan.labsToCreate) {
-      const info = dbName("INSERT INTO labs (name, pi_name, pi_email, created_at, updated_at) VALUES (?, ?, ?, ?, ?)").run(l.name, l.piName, l.piEmail, now, now);
-      labId.set(l.name, Number(info.lastInsertRowid));
+    const stmt = (sql: string) => db().prepare(sql);
+    for (const s of db().prepare("SELECT id, username FROM students").all() as { id: number; username: string }[]) {
+      studentId.set(s.username, s.id);
     }
-    for (const l of plan.labsToUpdate) {
-      if (l.piName !== undefined) dbName("UPDATE labs SET pi_name = ? WHERE name = ?").run(l.piName, l.name);
-      if (l.piEmail !== undefined) dbName("UPDATE labs SET pi_email = ? WHERE name = ?").run(l.piEmail, l.name);
-      dbName("UPDATE labs SET updated_at = ? WHERE name = ?").run(now, l.name);
+
+    if (plan.piUpdate) {
+      if (plan.piUpdate.piName !== undefined) stmt("UPDATE labs SET pi_name = ? WHERE id = ?").run(plan.piUpdate.piName, labId);
+      if (plan.piUpdate.piEmail !== undefined) stmt("UPDATE labs SET pi_email = ? WHERE id = ?").run(plan.piUpdate.piEmail, labId);
+      stmt("UPDATE labs SET updated_at = ? WHERE id = ?").run(now, labId);
     }
     for (const s of plan.studentsToCreate) {
-      const info = dbName("INSERT INTO students (student_id, username, email, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(s.studentId, s.username, s.email, s.name, now, now);
+      const info = stmt("INSERT INTO students (student_id, username, email, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(s.studentId, s.username, s.email, s.name, now, now);
       studentId.set(s.username, Number(info.lastInsertRowid));
     }
     for (const s of plan.studentsToUpdate) {
-      if (s.studentId !== undefined) dbName("UPDATE students SET student_id = ? WHERE username = ?").run(s.studentId, s.username);
-      if (s.name !== undefined) dbName("UPDATE students SET name = ? WHERE username = ?").run(s.name, s.username);
-      if (s.email !== undefined) dbName("UPDATE students SET email = ? WHERE username = ?").run(s.email, s.username);
-      dbName("UPDATE students SET updated_at = ? WHERE username = ?").run(now, s.username);
+      if (s.studentId !== undefined) stmt("UPDATE students SET student_id = ? WHERE username = ?").run(s.studentId, s.username);
+      if (s.name !== undefined) stmt("UPDATE students SET name = ? WHERE username = ?").run(s.name, s.username);
+      if (s.email !== undefined) stmt("UPDATE students SET email = ? WHERE username = ?").run(s.email, s.username);
+      stmt("UPDATE students SET updated_at = ? WHERE username = ?").run(now, s.username);
     }
-    for (const m of plan.membershipsToAdd) {
-      const lid = labId.get(m.lab)!;
-      const sid = studentId.get(m.username)!;
-      const exists = dbName("SELECT 1 FROM lab_members WHERE lab_id = ? AND student_id = ?").get(lid, sid);
+    for (const user of plan.membershipsToAdd) {
+      const sid = studentId.get(user)!;
+      const exists = stmt("SELECT 1 FROM lab_members WHERE lab_id = ? AND student_id = ?").get(labId, sid);
       if (!exists) {
-        dbName("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, ?)").run(lid, sid, now);
+        stmt("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, ?)").run(labId, sid, now);
         const student = db().prepare("SELECT id, username, email, name, student_id FROM students WHERE id = ?").get(sid) as ProvisionStudent;
-        added.push({ labId: lid, student });
+        added.push(student);
       }
     }
   })();
 
-  const result: ImportResult = {
-    labsCreated: plan.labsToCreate.length,
-    labsUpdated: plan.labsToUpdate.length,
+  const result: RosterImportResult = {
+    piUpdated: plan.piUpdate !== null,
     studentsCreated: plan.studentsToCreate.length,
     studentsUpdated: plan.studentsToUpdate.length,
     membershipsAdded: added.length,
     provisioned: 0,
   };
-  audit(actor, "lab.import", undefined, JSON.stringify(result));
+  audit(actor, "lab.roster_import", plan.lab, JSON.stringify(result));
 
-  // Provision newly-added members on any placements the lab already has (no-op pre-rollout, when
-  // labs have no placements yet). Credentials are delivered only after each agent confirms success.
-  for (const a of added) {
-    for (const p of listPlacements(a.labId)) {
-      const res = await provisionMemberOnPlacement(p, a.student, actor);
+  // Provision newly-added members on any placements the lab already has. Credentials are delivered only
+  // after each agent confirms success.
+  for (const student of added) {
+    for (const p of listPlacements(labId)) {
+      const res = await provisionMemberOnPlacement(p, student, actor);
       if (res) result.provisioned += 1;
     }
   }

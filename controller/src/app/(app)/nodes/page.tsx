@@ -189,20 +189,15 @@ export default async function NodesPage({
           {nodes.length === 0 ? (
             <p className="text-sm text-muted-foreground">No nodes have connected yet.</p>
           ) : (
-            <Table>
+            <Table className="min-w-[52rem]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Node</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Auth</TableHead>
-                  <TableHead>GPUs</TableHead>
-                  <TableHead>Pools</TableHead>
+                  <TableHead>State</TableHead>
+                  <TableHead>Storage</TableHead>
                   <TableHead>Cold storage</TableHead>
-                  <TableHead>Dependencies</TableHead>
-                  <TableHead>Scrub</TableHead>
-                  <TableHead>Issues</TableHead>
-                  <TableHead>Last seen</TableHead>
-                  <TableHead>Token</TableHead>
+                  <TableHead>Health</TableHead>
+                  <TableHead>Activity</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -212,7 +207,7 @@ export default async function NodesPage({
                   const scrub = scrubSummary(n.scrub_status);
                   return (
                     <TableRow key={n.name}>
-                      <TableCell>
+                      <TableCell className="w-44 align-top">
                         {n.alias ? (
                           <>
                             <div>{n.alias}</div>
@@ -235,21 +230,38 @@ export default async function NodesPage({
                           </Button>
                         </form>
                       </TableCell>
-                      <TableCell>
-                        <Badge variant={n.online ? "ok" : "err"}>
-                          {n.online ? "online" : "offline"}
-                        </Badge>
+                      <TableCell className="w-28 align-top">
+                        <div className="space-y-2">
+                          <Badge variant={n.online ? "ok" : "err"}>
+                            {n.online ? "online" : "offline"}
+                          </Badge>
+                          <dl className="space-y-1 text-xs">
+                            <div>
+                              <dt className="text-muted-foreground">Auth</dt>
+                              <dd className={n.allowed !== 1 ? "text-warn" : undefined}>{authLabel(n)}</dd>
+                            </div>
+                            <div>
+                              <dt className="text-muted-foreground">GPUs</dt>
+                              <dd>{caps.gpu_count ?? 0}</dd>
+                            </div>
+                          </dl>
+                        </div>
                       </TableCell>
-                      <TableCell className={n.allowed !== 1 ? "text-warn" : undefined}>
-                        {authLabel(n)}
+                      <TableCell className="w-36 align-top text-xs">
+                        {pools.length === 0 ? (
+                          "—"
+                        ) : (
+                          <div className="space-y-1.5">
+                            {pools.map((p: any) => (
+                              <div key={p.name}>
+                                <div className="font-medium text-foreground">{p.name}</div>
+                                <div className="whitespace-nowrap text-muted-foreground">{fmtBytes(p.free)} free</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </TableCell>
-                      <TableCell>{caps.gpu_count ?? 0}</TableCell>
-                      <TableCell>
-                        {pools.length === 0
-                          ? "—"
-                          : pools.map((p: any) => `${p.name}: ${fmtBytes(p.free)} free`).join(", ")}
-                      </TableCell>
-                      <TableCell>
+                      <TableCell className="w-40 align-top">
                         {n.cold_backend === "smb" ? (
                           <span>Managed by {n.owner_name ?? <span className="text-warn">no owner</span>}</span>
                         ) : (
@@ -273,24 +285,33 @@ export default async function NodesPage({
                           </div>
                         )}
                       </TableCell>
-                      <TableCell className="min-w-40 text-xs">
-                        {n.hosted_labs ? <div><span className="text-muted-foreground">Labs:</span> {n.hosted_labs}</div> : null}
-                        {n.client_nodes ? <div><span className="text-muted-foreground">SMB clients:</span> {n.client_nodes}</div> : null}
-                        {!n.hosted_labs && !n.client_nodes ? "—" : null}
+                      <TableCell className="w-44 align-top text-xs">
+                        <dl className="space-y-2">
+                          <div>
+                            <dt className="text-muted-foreground">Dependencies</dt>
+                            <dd>
+                              {n.hosted_labs ? <div><span className="text-muted-foreground">Labs:</span> {n.hosted_labs}</div> : null}
+                              {n.client_nodes ? <div><span className="text-muted-foreground">SMB clients:</span> {n.client_nodes}</div> : null}
+                              {!n.hosted_labs && !n.client_nodes ? "—" : null}
+                            </dd>
+                          </div>
+                          <div>
+                            <dt className="text-muted-foreground">Scrub</dt>
+                            <dd className={scrub.bad ? "text-warn" : undefined}>{scrub.text}</dd>
+                          </div>
+                          <div>
+                            <dt className="text-muted-foreground">Issues</dt>
+                            <dd className={caps.issues && caps.issues.length > 0 ? "text-warn" : undefined}>
+                              {caps.issues && caps.issues.length > 0 ? caps.issues.length : "—"}
+                            </dd>
+                          </div>
+                        </dl>
                       </TableCell>
-                      <TableCell className={scrub.bad ? "text-warn" : undefined}>{scrub.text}</TableCell>
-                      <TableCell>
-                        {caps.issues && caps.issues.length > 0 ? (
-                          <span className="text-warn">{caps.issues.length}</span>
-                        ) : (
-                          "—"
-                        )}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap text-muted-foreground">
-                        {ago(n.last_seen)}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        <div className="flex gap-1.5">
+                      <TableCell className="w-44 align-top">
+                        <div className="mb-2 whitespace-nowrap text-xs text-muted-foreground">
+                          Last seen {ago(n.last_seen)}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
                           <form action={rotateNodeTokenAction}>
                             <input type="hidden" name="name" value={n.name} />
                             <Button type="submit" variant="secondary" size="sm">
@@ -312,6 +333,7 @@ export default async function NodesPage({
                               size="sm"
                               className="text-err"
                               confirm={`Delete node "${n.name}"? This removes it from the controller (it fails if any labs are still pinned to it).`}
+                              confirmLabel="Delete node"
                             >
                               Delete
                             </ConfirmButton>
