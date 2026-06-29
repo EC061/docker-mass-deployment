@@ -3,13 +3,13 @@
 // Server Actions are CSRF-protected by comparing the request Origin to the Host. Behind a
 // TLS-terminating reverse proxy the internal Host (e.g. controller:8443) differs from the public
 // domain, so the check rejects every action unless the public domain is allow-listed here.
-// CONTROLLER_DOMAIN pins that domain (host only, no scheme) — set it in compose for any deployment
-// reached through a proxy or under a real hostname. Comma-separated to allow more than one; a leading
-// wildcard label is supported (e.g. "lab.cs.uga.edu" or "*.cs.uga.edu"). Unset → same-origin only.
-const allowedOrigins = (process.env.CONTROLLER_DOMAIN ?? "")
-  .split(",")
-  .map((d) => d.trim())
-  .filter(Boolean);
+// CONTROLLER_DOMAIN pins that ONE domain (host only — no scheme, port, path, wildcard, or comma list).
+// Authoritative validation with a clear error happens at server boot (assertEnv in lib/env.ts); this
+// keeps a defensive copy so a malformed value never widens the allow-list. Unset → same-origin only.
+const raw = (process.env.CONTROLLER_DOMAIN ?? "").trim();
+const looksValid =
+  raw !== "" && !/[,/*\s]/.test(raw) && !raw.includes("://") && !raw.includes(":");
+const allowedOrigins = looksValid ? [raw] : [];
 
 const nextConfig = {
   reactStrictMode: true,

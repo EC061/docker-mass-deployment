@@ -17,9 +17,10 @@ services:
       SIGNUP_TOKEN: ${SIGNUP_TOKEN:?set SIGNUP_TOKEN}
       AGENT_TOKEN: ${AGENT_TOKEN:?set AGENT_TOKEN}
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET}
-      # Public domain the controller is reached at (host only, no scheme), e.g. lab.cs.uga.edu.
-      # Required when a reverse proxy terminates TLS in front of the controller, otherwise Server
-      # Action requests fail their CSRF/origin check. Comma-separated for multiple; "" → same-origin.
+      # Public domain the controller is reached at: EXACTLY ONE bare hostname (no scheme/port/path/
+      # wildcard/comma), e.g. lab.edwardcheng.net. Required when a reverse proxy terminates TLS in
+      # front of the controller, otherwise Server Action requests fail their CSRF/origin check. The
+      # browser Origin and agent WebSocket host are also validated against it. "" → same-origin.
       CONTROLLER_DOMAIN: ${CONTROLLER_DOMAIN:-}
       NODE_ENV: production
     volumes:

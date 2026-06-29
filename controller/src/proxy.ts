@@ -17,6 +17,20 @@ export const config = {
 };
 
 export async function proxy(req: NextRequest) {
+  // Server Actions are POSTs. When a public domain is configured (reverse-proxy deploy), require the
+  // browser Origin to be exactly https://<CONTROLLER_DOMAIN> — defense-in-depth alongside Next's own
+  // allowedOrigins check, and it also covers any future non-action POST route. Same-origin dev
+  // (CONTROLLER_DOMAIN unset) skips this. The /agent WebSocket upgrade is excluded by the matcher.
+  if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
+    const domain = (process.env.CONTROLLER_DOMAIN ?? "").trim().toLowerCase();
+    if (domain) {
+      const origin = req.headers.get("origin");
+      if (origin !== `https://${domain}`) {
+        return new NextResponse("forbidden: bad origin", { status: 403 });
+      }
+    }
+  }
+
   const token = req.cookies.get("lab_session")?.value;
   const loginUrl = new URL("/login", req.url);
   if (!token) return NextResponse.redirect(loginUrl);
