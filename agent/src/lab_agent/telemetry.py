@@ -7,6 +7,12 @@ Reports, every heartbeat:
   - ZFS scrub status per pool (so the controller can alert when a scrub finds errors),
   - the live GPU process list (pid + VRAM, resolved to container/user where possible).
 
+Storage usage is **not** measured on the heartbeat: the lab-level totals (fast/slow ZFS + container
+writable-layer "image") come from the lab-usage cache (refreshed every ``lab_usage_interval_s``, see
+``usagereport.collect_lab_level``) and the per-student ``du`` breakdown from the scan cache. The
+heartbeat just re-reports whichever cached numbers are current, so a 15s heartbeat never triggers an
+expensive ``zfs list`` / ``docker inspect`` / ``du``.
+
 The controller stores the latest snapshot; GPU is snapshot-only (no time-series).
 """
 
@@ -14,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import coldstore, usagereport
+from . import usagereport
 from .config import AgentConfig
 from .executors import zfs
 from .executors.base import run
@@ -39,38 +45,20 @@ def _pools(cfg: AgentConfig) -> list[dict[str, Any]]:
 
 
 def _dataset_usage(cfg: AgentConfig, docker_state: Any = None) -> list[dict[str, Any]]:
-    out = []
-    labs: set[str] = set()
-    for u in zfs.list_usage(cfg.labs_fast_root):
-        out.append(
-            {
-                "pool": "fast",
-                "dataset": u.dataset,
-                "used_bytes": u.used_bytes,
-                "quota_bytes": u.quota_bytes,
-                "available_bytes": u.available_bytes,
-            }
-        )
-        parsed = usagereport._parse_dataset(u.dataset, cfg.labs_fast_root)
-        if parsed is not None and parsed[1] is None:  # lab-level row -> a lab to measure
-            labs.add(parsed[0])
-    out.extend(coldstore.list_usage(cfg))
-    if docker_state is not None:
-        labs |= set(docker_state.all_docker().keys())
-    # Container-level usage: the whole-container writable layer (pool="docker", lab level), measured
-    # LIVE every heartbeat (one cheap ``docker inspect --size`` per lab) so the Stats page's
-    # whole-image number is always current rather than frozen until the next scan.
-    for lab in sorted(labs):
-        row = usagereport.live_docker_dataset(lab)
-        if row is not None:
-            out.append(row)
+    if docker_state is None:
+        return []
+    out: list[dict[str, Any]] = []
+    # Lab-level totals: the container writable-layer ("image") plus lab-level fast/slow ZFS
+    # usage-vs-quota. Sourced from the lab-usage cache (refreshed every ``lab_usage_interval_s`` /
+    # on-demand), so the heartbeat re-reports the last computed snapshot — it does not re-measure.
+    for level in docker_state.all_lab_level().values():
+        out.extend(level.datasets)
     # Per-student breakdown from the (expensive) scan cache: each student's docker home (installed
     # software) plus their scratch/cold ``du``. Updated only by the nightly / on-demand scan, so the
     # heartbeat just re-reports the cached numbers — they change on disk only when a scan reruns.
-    if docker_state is not None:
-        for lab, usage in docker_state.all_docker().items():
-            out.extend(usagereport.docker_datasets(lab, usage))
-            out.extend(usagereport.tier_datasets(lab, usage))
+    for lab, usage in docker_state.all_docker().items():
+        out.extend(usagereport.docker_datasets(lab, usage))
+        out.extend(usagereport.tier_datasets(lab, usage))
     return out
 
 

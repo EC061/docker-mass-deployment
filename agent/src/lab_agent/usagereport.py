@@ -85,11 +85,32 @@ class DockerUsage:
         }
 
 
+@dataclass
+class LabLevelUsage:
+    """Cached lab-level storage totals, refreshed on a fixed cadence (NOT per heartbeat).
+
+    Holds the ready-to-emit telemetry rows for one lab's lab-level usage: the fast/slow ZFS
+    used/quota rows plus the container writable-layer ("image") total. The agent recomputes these on
+    its lab-usage cadence (``lab_usage_interval_s``) — or immediately on an on-demand scan — and
+    caches them here; the heartbeat just re-reports the cached ``datasets`` every cycle, so the
+    expensive ``zfs list`` / ``docker inspect`` work no longer runs on every 15s heartbeat.
+    """
+
+    computed_at: int | None = None  # epoch ms of the last refresh
+    datasets: list[dict[str, Any]] = field(default_factory=list)  # lab-level telemetry rows
+
+
 class UsageState:
-    """Per-lab docker-usage cache shared between the publish loop, the scan loop, and telemetry."""
+    """Per-lab usage cache shared between the publish loop, the scan loop, and telemetry.
+
+    Two independently-cadenced caches: ``_docker`` is the expensive per-student ``du`` breakdown
+    (refreshed by the nightly / on-demand scan) and ``_lab`` is the lab-level totals (fast/slow ZFS
+    + container writable layer, refreshed every ``lab_usage_interval_s`` / on demand).
+    """
 
     def __init__(self) -> None:
         self._docker: dict[str, DockerUsage] = {}
+        self._lab: dict[str, LabLevelUsage] = {}
 
     def docker_for(self, lab: str) -> DockerUsage:
         return self._docker.get(lab, DockerUsage())
@@ -99,6 +120,19 @@ class UsageState:
 
     def all_docker(self) -> dict[str, DockerUsage]:
         return dict(self._docker)
+
+    def lab_level_for(self, lab: str) -> LabLevelUsage:
+        return self._lab.get(lab, LabLevelUsage())
+
+    def set_lab_level(self, lab: str, usage: LabLevelUsage) -> None:
+        self._lab[lab] = usage
+
+    def all_lab_level(self) -> dict[str, LabLevelUsage]:
+        return dict(self._lab)
+
+    def replace_lab_level(self, mapping: dict[str, LabLevelUsage]) -> None:
+        """Swap in a freshly-computed map for every lab, so labs that disappeared drop out."""
+        self._lab = dict(mapping)
 
 
 # --------------------------------------------------------------------------- ZFS usage collection
@@ -236,13 +270,13 @@ def build_snapshot(
 
 
 def live_docker_dataset(lab: str) -> dict[str, Any] | None:
-    """The lab-level docker writable-layer (``SizeRw``) telemetry row, measured **live**.
+    """The lab-level docker writable-layer (``SizeRw``) telemetry row.
 
-    This is the "whole image" / container-level number. Unlike the per-student ``du`` breakdown
-    (expensive, cached, refreshed only by a scan), the container total is cheap enough to re-measure
-    on every heartbeat via ``docker inspect --size``, so the controller's Stats page always shows
-    the current writable-layer size. Returns None when the container is absent or the measurement
-    fails, in which case the heartbeat omits the row and the controller keeps the last known value.
+    This is the "whole image" / container-level number, measured with one ``docker inspect --size``.
+    It is recomputed on the agent's lab-usage cadence (``lab_usage_interval_s``) and cached in
+    ``LabLevelUsage`` — not measured on every heartbeat — alongside the lab-level ZFS rows (see
+    ``lab_level_for``). Returns None when the container is absent or the measurement fails, in which
+    case the row is omitted and the controller keeps the last known value.
     """
     container = docker.container_name(lab)
     if not docker.container_exists(container):
@@ -258,12 +292,67 @@ def live_docker_dataset(lab: str) -> dict[str, Any] | None:
     }
 
 
+def _zfs_row(pool: str, u: zfs.Usage) -> dict[str, Any]:
+    return {
+        "pool": pool,
+        "dataset": u.dataset,
+        "used_bytes": u.used_bytes,
+        "quota_bytes": u.quota_bytes,
+        "available_bytes": u.available_bytes,
+    }
+
+
+def lab_level_for(
+    cfg: AgentConfig, lab: str, lab_usage: LabUsage | None = None, *, now: int | None = None
+) -> LabLevelUsage:
+    """Compute one lab's lab-level usage rows: fast/slow ZFS (+ any per-student ZFS datasets) plus
+    the container writable-layer "image" total. ``lab_usage`` may be passed in (e.g. from a single
+    ``collect_zfs_usage`` covering all labs) to avoid re-listing ZFS per lab."""
+    now = now if now is not None else now_ms()
+    if lab_usage is None:
+        lab_usage = collect_zfs_usage(cfg).get(lab, LabUsage())
+    rows: list[dict[str, Any]] = []
+    if lab_usage.fast is not None:
+        rows.append(_zfs_row("fast", lab_usage.fast))
+    if lab_usage.slow is not None:
+        rows.append(_zfs_row("slow", lab_usage.slow))
+    # Per-student ZFS rows only exist if per-student datasets are in use; normally empty (scratch
+    # and cold come from the du scan's tier_datasets instead). Included so both layouts work.
+    for tiers in lab_usage.users.values():
+        if "fast" in tiers:
+            rows.append(_zfs_row("fast", tiers["fast"]))
+        if "slow" in tiers:
+            rows.append(_zfs_row("slow", tiers["slow"]))
+    image = live_docker_dataset(lab)
+    if image is not None:
+        rows.append(image)
+    return LabLevelUsage(computed_at=now, datasets=rows)
+
+
+def collect_lab_level(
+    cfg: AgentConfig, docker_state: UsageState | None = None, *, now: int | None = None
+) -> dict[str, LabLevelUsage]:
+    """Recompute lab-level usage for every lab: one ``zfs list`` per pool + one ``docker inspect
+    --size`` per lab. This is the work that used to run on every 15s heartbeat; it now runs on the
+    agent's lab-usage cadence and is cached. Labs are enumerated from ZFS (every lab has a fast
+    dataset), unioned with any lab present only in the docker-scan cache."""
+    now = now if now is not None else now_ms()
+    grouped = collect_zfs_usage(cfg)
+    labs = set(grouped.keys())
+    if docker_state is not None:
+        labs |= set(docker_state.all_docker().keys())
+    return {
+        lab: lab_level_for(cfg, lab, grouped.get(lab, LabUsage()), now=now) for lab in sorted(labs)
+    }
+
+
 def docker_datasets(lab: str, docker_usage: DockerUsage) -> list[dict[str, Any]]:
     """Per-student docker-home telemetry rows from the cached scan (installed software per student).
 
-    The lab-level container total is **not** emitted here — it is measured live every heartbeat by
-    ``live_docker_dataset``. These per-student rows come from the (expensive) ``du`` scan cache and
-    only change when a scan runs. Dataset names mirror the ZFS layout
+    The lab-level container total is **not** emitted here — it lives in the lab-level cache
+    (``lab_level_for`` / ``live_docker_dataset``), refreshed on the lab-usage cadence. These
+    per-student rows come from the (expensive) ``du`` scan cache and only change when a scan runs.
+    Dataset names mirror the ZFS layout
     (``docker/labs/<lab>/users/<u>``) so the controller's ``parseDataset`` maps them to the right
     student. quota is omitted (the writable layer is not a per-student quota and must not alert).
     """

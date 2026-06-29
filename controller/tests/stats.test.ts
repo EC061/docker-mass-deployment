@@ -83,6 +83,9 @@ describe("buildStats", () => {
     expect(lab.live.image).toBe(300);
     expect(lab.live.fast).toEqual({ used: 500, quota: 2000 });
     expect(lab.live.slow).toEqual({ used: 200, quota: 3000 });
+    // Freshness of the lab-level row is the newest ts among its docker/fast/slow samples.
+    expect(lab.liveUpdatedAt).toBe(200);
+    expect(lab.liveStale).toBe(true); // ts=200 (epoch) is far older than LIVE_STALE_MS
   });
 });
 

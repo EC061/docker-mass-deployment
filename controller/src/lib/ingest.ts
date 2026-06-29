@@ -52,16 +52,16 @@ function studentIdInLab(labId: number, username: string): number | null {
 /**
  * Whether to persist a new sample for (lab, student, pool).
  *
- * Live ZFS metrics — the lab-level fast/slow rows, re-measured from `zfs list` on every 15s
- * heartbeat — are throttled to one row per STORAGE_SAMPLE_MIN_INTERVAL_MS so the time-series stays
- * bounded. Scan-derived metrics (`scanDerived`) — the docker writable layer and the per-student
- * `du` breakdown — only change when a usage scan runs, so they bypass the throttle whenever the
- * value actually changes. Without that bypass, a fresh on-demand "Scan now" landing on a heartbeat
- * <5min after the previous sample would be silently dropped, leaving the table stuck on the pre-scan
- * number even though "updated Xm ago" (usage_scanned_at, which always moves forward) advanced — the
- * exact desync where the image total froze at a stale value after delete+scan until a manual reload.
- * Storing only on *change* keeps the series from bloating between scans (the agent re-reports the
- * same cached number every heartbeat), so this fires at most once per scan.
+ * Lab-level fast/slow ZFS rows — recomputed by the agent on its lab-usage cadence (~5 min) and
+ * re-reported on each heartbeat — are throttled to one row per STORAGE_SAMPLE_MIN_INTERVAL_MS so the
+ * time-series stays bounded. Scan-derived metrics (`scanDerived`) — the docker writable layer and
+ * the per-student `du` breakdown — only change when a usage scan runs, so they bypass the throttle
+ * whenever the value actually changes. Without that bypass, a fresh on-demand "Scan now" landing on
+ * a heartbeat <5min after the previous sample would be silently dropped, leaving the table stuck on
+ * the pre-scan number even though "updated Xm ago" (usage_scanned_at, which always moves forward)
+ * advanced — the exact desync where the image total froze at a stale value after delete+scan until a
+ * manual reload. Storing only on *change* keeps the series from bloating between scans (the agent
+ * re-reports the same cached number every heartbeat), so this fires at most once per scan.
  */
 function shouldSample(
   labId: number,
@@ -115,9 +115,10 @@ export function ingestTelemetry(node: string, payload: any): void {
     if (labId === null) continue;
     const studentId = parsed.user ? studentIdInLab(labId, parsed.user) : null;
     if (parsed.level === "user" && studentId === null) continue;
-    // The docker writable layer and every per-student row come from the on-demand/periodic `du`
-    // scan (there are no per-student ZFS datasets), so they're scan-derived: store on change to let
-    // a fresh scan's numbers land immediately. Lab-level fast/slow are live ZFS — keep throttled.
+    // The docker writable layer (lab-level image + per-student homes) and per-student fast/slow rows
+    // change only when their cache is recomputed — the lab-usage refresh or the `du` scan — so
+    // they're scan-derived: store on change to let a fresh value land immediately. Lab-level
+    // fast/slow are periodic ZFS reads, re-reported every heartbeat — keep them throttled.
     const scanDerived = ds.pool === "docker" || parsed.level === "user";
     if (!shouldSample(labId, studentId, ds.pool, ds.used_bytes, now, scanDerived)) continue;
     insertSample.run(labId, studentId, ds.pool, ds.used_bytes, ds.quota_bytes ?? null, now);

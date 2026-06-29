@@ -83,10 +83,13 @@ function LabBlock({ lab }: { lab: LabStats }) {
         </span>
       </h4>
 
-      {/* Container-level + lab totals — re-measured on every agent heartbeat, so always current. */}
+      {/* Container-level + lab totals — recomputed by the agent on a ~5-min cadence, not per heartbeat. */}
       <div className="rounded-md border border-border/60 bg-muted/20 p-3">
-        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          Live · refreshed every heartbeat
+        <div className="mb-2 flex flex-wrap items-center gap-x-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <span>Lab storage · checked every 5 min</span>
+          <span className={lab.liveStale ? "text-amber-500" : "text-muted-foreground/70"}>
+            · {lab.liveUpdatedAt ? `updated ${ago(lab.liveUpdatedAt)}` : "no data yet"}
+          </span>
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Stat
@@ -160,12 +163,12 @@ export default async function StatsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Storage stats</h1>
         <p className="text-sm text-muted-foreground">
           Two kinds of data, shown separately per lab. The{" "}
-          <strong className="text-foreground">Live</strong> row (container image writable layer, plus
-          Fast/Cold usage against the lab quota) is re-measured on every node heartbeat, so it is
-          always current. The <strong className="text-foreground">Per-student</strong> table (each
-          student&apos;s installed software, scratch and cold-storage) comes from a nightly{" "}
-          <em>du</em> scan — use <strong className="text-foreground">Scan now</strong> to refresh it
-          on demand.
+          <strong className="text-foreground">Lab storage</strong> row (container image writable
+          layer, plus Fast/Cold usage against the lab quota) is recomputed on the node about every 5
+          minutes. The <strong className="text-foreground">Per-student</strong> table (each
+          student&apos;s installed software, scratch and cold-storage) comes from a once-a-day scan
+          (by default at midnight). Both carry an &ldquo;updated&rdquo; time, and{" "}
+          <strong className="text-foreground">Scan now</strong> refreshes both on demand.
         </p>
       </div>
 
@@ -183,7 +186,7 @@ export default async function StatsPage() {
                 {node.node}{" "}
                 <Badge variant={node.online ? "ok" : "err"}>{node.online ? "online" : "offline"}</Badge>
                 <span className="text-sm font-normal text-muted-foreground">
-                  {" "}· whole-image usage on this node (live): {fmtBytes(node.totalImageBytes)}
+                  {" "}· whole-image usage on this node: {fmtBytes(node.totalImageBytes)}
                 </span>
               </h3>
 

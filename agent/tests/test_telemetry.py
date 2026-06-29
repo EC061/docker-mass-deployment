@@ -72,25 +72,26 @@ def test_pools_drops_unavailable_pool(monkeypatch):
 
 
 def test_collect_heartbeat_assembles_all_sections(monkeypatch):
+    from lab_agent import usagereport
+
     cfg = _cfg()
     monkeypatch.setattr(
         telemetry, "run",
         lambda args, **kw: CommandResult(True, [], 0, f"{args[-1]}\t10\t1\t9\n", ""),
     )
-    monkeypatch.setattr(telemetry.zfs, "list_usage", lambda root: [
-        SimpleNamespace(dataset="fast/labs/bio", used_bytes=100, quota_bytes=200, available_bytes=100),
-    ])
-    monkeypatch.setattr(telemetry.coldstore, "list_usage", lambda cfg: [
-        {"pool": "slow", "dataset": "slow/labs/bio", "used_bytes": 5, "quota_bytes": None,
-         "available_bytes": None},
-    ])
     monkeypatch.setattr(telemetry.zfs, "scrub_status",
                         lambda p: SimpleNamespace(to_dict=lambda: {"pool": p, "healthy": True}))
     monkeypatch.setattr(telemetry, "list_gpu_processes", lambda: [{"pid": 1, "vram_bytes": 1024}])
-    # No container present -> no live container-level docker row.
-    monkeypatch.setattr(telemetry.usagereport, "live_docker_dataset", lambda lab: None)
 
-    hb = telemetry.collect_heartbeat(cfg)
+    # Lab-level usage comes from the cache (refreshed off the heartbeat path by the lab-usage loop),
+    # not from a live measurement on the heartbeat itself.
+    state = usagereport.UsageState()
+    state.set_lab_level("bio", usagereport.LabLevelUsage(computed_at=1, datasets=[
+        {"pool": "fast", "dataset": "fast/labs/bio", "used_bytes": 100, "quota_bytes": 200},
+        {"pool": "slow", "dataset": "slow/labs/bio", "used_bytes": 5, "quota_bytes": None},
+    ]))
+
+    hb = telemetry.collect_heartbeat(cfg, state)
     assert {p["name"] for p in hb["pools"]} == {"fast", "slow"}
     datasets = {d["dataset"] for d in hb["datasets"]}
     assert datasets == {"fast/labs/bio", "slow/labs/bio"}
@@ -100,30 +101,40 @@ def test_collect_heartbeat_assembles_all_sections(monkeypatch):
     assert hb["usage_scans"] == []
 
 
-def test_collect_heartbeat_includes_scan_breakdown(monkeypatch):
-    """Live container total + cached per-student docker/fast/slow rows + a scan timestamp.
+def test_collect_heartbeat_emits_nothing_without_state(monkeypatch):
+    """With no usage state there is no cache to report, so storage datasets are empty (the rest of
+    the heartbeat still assembles)."""
+    cfg = _cfg()
+    monkeypatch.setattr(telemetry, "run",
+                        lambda args, **kw: CommandResult(True, [], 0, f"{args[-1]}\t10\t1\t9\n", ""))
+    monkeypatch.setattr(telemetry.zfs, "scrub_status",
+                        lambda p: SimpleNamespace(to_dict=lambda: {"pool": p}))
+    monkeypatch.setattr(telemetry, "list_gpu_processes", lambda: [])
+    hb = telemetry.collect_heartbeat(cfg)
+    assert hb["datasets"] == []
+    assert {p["name"] for p in hb["pools"]} == {"fast", "slow"}
 
-    The lab-level docker row is measured live (``live_docker_dataset``); the per-student rows come
-    from the scan cache. A lab present only in the cache (no fast dataset rows this heartbeat) is
-    still measured live, so the whole-image number never disappears between scans.
+
+def test_collect_heartbeat_includes_scan_breakdown(monkeypatch):
+    """Lab-level cache (whole-image total) + cached per-student docker/fast/slow rows + a scan ts.
+
+    The lab-level docker row comes from the lab-usage cache; the per-student rows come from the scan
+    cache. A lab present only in the scan cache contributes only its per-student rows.
     """
     from lab_agent import usagereport
 
     cfg = _cfg()
     monkeypatch.setattr(telemetry, "run",
                         lambda args, **kw: CommandResult(True, [], 0, f"{args[-1]}\t10\t1\t9\n", ""))
-    monkeypatch.setattr(telemetry.zfs, "list_usage", lambda root: [])
-    monkeypatch.setattr(telemetry.coldstore, "list_usage", lambda cfg: [])
     monkeypatch.setattr(telemetry.zfs, "scrub_status",
                         lambda p: SimpleNamespace(to_dict=lambda: {"pool": p}))
     monkeypatch.setattr(telemetry, "list_gpu_processes", lambda: [])
-    monkeypatch.setattr(
-        telemetry.usagereport, "live_docker_dataset",
-        lambda lab: {"pool": "docker", "dataset": f"docker/labs/{lab}", "used_bytes": 300,
-                     "quota_bytes": None} if lab == "bio" else None,
-    )
 
     state = usagereport.UsageState()
+    # Lab-level cache holds the whole-image row (from the lab-usage loop / on-demand scan).
+    state.set_lab_level("bio", usagereport.LabLevelUsage(computed_at=1, datasets=[
+        {"pool": "docker", "dataset": "docker/labs/bio", "used_bytes": 300, "quota_bytes": None},
+    ]))
     state.set_docker("bio", usagereport.DockerUsage(
         scanned_at=777, total_used=300, per_user={"alice": 120},
         per_user_fast={"alice": 40}, per_user_slow={"alice": 10},
@@ -131,7 +142,7 @@ def test_collect_heartbeat_includes_scan_breakdown(monkeypatch):
 
     hb = telemetry.collect_heartbeat(cfg, state)
     rows = {(d["pool"], d["dataset"]): d["used_bytes"] for d in hb["datasets"]}
-    assert rows[("docker", "docker/labs/bio")] == 300  # live container total
+    assert rows[("docker", "docker/labs/bio")] == 300  # whole-image total from the lab-level cache
     assert rows[("docker", "docker/labs/bio/users/alice")] == 120
     assert rows[("fast", "fast/labs/bio/users/alice")] == 40
     assert rows[("slow", "slow/labs/bio/users/alice")] == 10

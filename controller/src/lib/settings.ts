@@ -19,10 +19,10 @@ export interface Settings {
   slowQuotaDefaultBytes: number;
   sshPortStart: number;
   sshPortEnd: number;
-  // Nightly per-student usage (du) scan. Once a day, during usageScanHour (in usageScanTimezone),
-  // the controller enqueues a usage.scan to each online lab's node; the agent measures each
-  // student's home/scratch/cold usage and reports it back. Container-level usage is separate — it
-  // is measured live on every agent heartbeat and is not gated by this schedule.
+  // Nightly per-student usage (du) scan. Once a day, during usageScanHour (in usageScanTimezone,
+  // default midnight), the controller enqueues a usage.scan to each online lab's node; the agent
+  // measures each student's home/scratch/cold usage and reports it back. Lab-level usage is separate
+  // — the agent recomputes it on its own ~5-min cadence and it is not gated by this schedule.
   usageScanEnabled: boolean;
   usageScanHour: number; // hour of day (0-23, in usageScanTimezone) the nightly scan may start
   usageScanTimezone: string; // IANA tz name the usage-scan hour is evaluated in
@@ -165,7 +165,7 @@ export const DEFAULT_SETTINGS: Settings = {
   sshPortStart: 50000,
   sshPortEnd: 51000,
   usageScanEnabled: true,
-  usageScanHour: 3,
+  usageScanHour: 0, // midnight (in usageScanTimezone)
   usageScanTimezone: "UTC",
   smtpHost: "",
   smtpPort: 587,

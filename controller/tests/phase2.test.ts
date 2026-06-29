@@ -40,7 +40,7 @@ beforeAll(async () => {
 
 describe("settings", () => {
   it("roundtrips and falls back to defaults", () => {
-    expect(settings.getSetting("usageScanHour")).toBe(3);
+    expect(settings.getSetting("usageScanHour")).toBe(0); // midnight default
     settings.setSetting("usageScanHour", 5);
     expect(settings.getSetting("usageScanHour")).toBe(5);
   });

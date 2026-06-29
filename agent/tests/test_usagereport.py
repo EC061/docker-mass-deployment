@@ -136,7 +136,7 @@ def test_list_lab_students_missing_mount(monkeypatch):
 
 
 def test_docker_datasets_are_per_student_only():
-    # The lab-level container total is measured live (live_docker_dataset), not from this cache.
+    # The lab-level container total lives in the lab-level cache (lab_level_for), not in these rows.
     usage = usagereport.DockerUsage(total_used=300, per_user={"alice": 120})
     rows = usagereport.docker_datasets("bio", usage)
     assert {"pool": "docker", "dataset": "docker/labs/bio/users/alice", "used_bytes": 120,
@@ -161,6 +161,52 @@ def test_live_docker_dataset_none_when_measure_fails(monkeypatch):
     monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
     monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: None)
     assert usagereport.live_docker_dataset("bio") is None
+
+
+# --------------------------------------------------------------------------- lab-level cache
+
+
+def test_lab_level_for_builds_zfs_and_image_rows(monkeypatch):
+    monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
+    monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: 4242)
+    lab_usage = usagereport.LabUsage(
+        fast=U("fast/labs/bio", 500, 1000, 500),
+        slow=U("slow/labs/bio", 200, 2000, 1800),
+        users={"alice": {"fast": U("fast/labs/bio/users/alice", 40, 100, 60)}},
+    )
+    level = usagereport.lab_level_for(cfg(), "bio", lab_usage, now=999)
+    assert level.computed_at == 999
+    rows = {(d["pool"], d["dataset"]): d["used_bytes"] for d in level.datasets}
+    assert rows[("fast", "fast/labs/bio")] == 500
+    assert rows[("slow", "slow/labs/bio")] == 200
+    assert rows[("fast", "fast/labs/bio/users/alice")] == 40
+    assert rows[("docker", "docker/labs/bio")] == 4242  # whole-image writable-layer total
+
+
+def test_lab_level_for_omits_image_when_no_container(monkeypatch):
+    monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: False)
+    level = usagereport.lab_level_for(
+        cfg(), "bio", usagereport.LabUsage(fast=U("fast/labs/bio", 5, 10, 5)), now=1
+    )
+    pools = {d["pool"] for d in level.datasets}
+    assert "docker" not in pools  # no container -> no image row, but the ZFS row still reports
+    assert ("fast", "fast/labs/bio") in {(d["pool"], d["dataset"]) for d in level.datasets}
+
+
+def test_collect_lab_level_covers_all_labs(monkeypatch):
+    fast_rows = [U("fast/labs/bio", 500, 1000, 500), U("fast/labs/chem", 10, 100, 90)]
+    monkeypatch.setattr(
+        usagereport.zfs, "list_usage",
+        lambda root: fast_rows if root == "fast/labs" else [],
+    )
+    monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
+    monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: 7)
+    levels = usagereport.collect_lab_level(cfg(), now=123)
+    assert set(levels) == {"bio", "chem"}
+    bio_rows = {(d["pool"], d["dataset"]) for d in levels["bio"].datasets}
+    assert ("fast", "fast/labs/bio") in bio_rows
+    assert ("docker", "docker/labs/bio") in bio_rows
+    assert levels["bio"].computed_at == 123
 
 
 def test_tier_datasets_per_student_fast_and_cold():
