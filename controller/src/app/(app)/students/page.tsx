@@ -44,7 +44,7 @@ export default async function StudentsPage() {
                       {lab.name}
                     </a>{" "}
                     <span className="font-normal text-muted-foreground">
-                      · {lab.node_name} · {members.length} student{members.length === 1 ? "" : "s"}
+                      · {members.length} student{members.length === 1 ? "" : "s"}
                     </span>
                   </h4>
                   <Table>

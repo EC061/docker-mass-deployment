@@ -1,25 +1,12 @@
-import { db } from "@/lib/db";
 import { takeFlash } from "@/lib/flash";
-import { fmtBytes, pct } from "@/lib/format";
-import { containerOptionsOf, listLabs } from "@/lib/labs";
-import { getSettings, TIB } from "@/lib/settings";
+import { listLabs } from "@/lib/labs";
 import { createLabAction } from "./actions";
-import { CreateLabForm, type LabTemplate, type NodeOpt } from "./_components/CreateLabForm";
+import { CreateLabForm, type LabTemplate } from "./_components/CreateLabForm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 export const dynamic = "force-dynamic";
-
-function latestUsage(labId: number, pool: string): { used: number; quota: number | null } | null {
-  const row = db()
-    .prepare(
-      `SELECT used_bytes, quota_bytes FROM storage_samples
-       WHERE lab_id = ? AND student_id IS NULL AND pool = ? ORDER BY ts DESC LIMIT 1`,
-    )
-    .get(labId, pool) as { used_bytes: number; quota_bytes: number | null } | undefined;
-  return row ? { used: row.used_bytes, quota: row.quota_bytes } : null;
-}
 
 export default async function LabsPage({
   searchParams,
@@ -29,24 +16,7 @@ export default async function LabsPage({
   const { imported } = await searchParams;
   const importedMsg = imported ? takeFlash(imported) : null;
   const labs = listLabs();
-  const nodes = db().prepare("SELECT id, name, online FROM nodes ORDER BY name").all() as NodeOpt[];
-  const settings = getSettings();
-
-  const templates: LabTemplate[] = labs.map((l) => {
-    const opts = containerOptionsOf(l);
-    return {
-      id: l.id,
-      name: l.name,
-      image: l.image,
-      fastTb: l.fast_quota_bytes / TIB,
-      slowTb: l.slow_quota_bytes / TIB,
-      cpus: opts.cpus,
-      memory: opts.memory,
-      shmSize: opts.shm_size,
-      imageQuota: opts.image_quota,
-      restart: opts.restart,
-    };
-  });
+  const templates: LabTemplate[] = labs.map((l) => ({ id: l.id, name: l.name }));
 
   return (
     <div className="space-y-4">
@@ -62,20 +32,14 @@ export default async function LabsPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Create lab</h3>
-          {nodes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Connect a node first — a lab is pinned to one node.
+          <div className="space-y-1">
+            <h3 className="text-base font-semibold">Create lab</h3>
+            <p className="text-xs text-muted-foreground">
+              A lab is node-independent: create it here, manage its roster, then grant it access to
+              one or more nodes from the lab page.
             </p>
-          ) : (
-            <CreateLabForm
-              nodes={nodes}
-              labs={templates}
-              defaultFastTb={settings.fastQuotaDefaultBytes / TIB}
-              defaultSlowTb={settings.slowQuotaDefaultBytes / TIB}
-              action={createLabAction}
-            />
-          )}
+          </div>
+          <CreateLabForm labs={templates} action={createLabAction} />
         </CardContent>
       </Card>
 
@@ -88,44 +52,35 @@ export default async function LabsPage({
               <TableHeader>
                 <TableRow>
                   <TableHead>Lab</TableHead>
-                  <TableHead>Node</TableHead>
-                  <TableHead>Fast</TableHead>
-                  <TableHead>Slow</TableHead>
-                  <TableHead>SSH</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead>PI</TableHead>
+                  <TableHead>Students</TableHead>
+                  <TableHead>Nodes</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {labs.map((lab) => {
-                  const fast = latestUsage(lab.id, "fast");
-                  const slow = latestUsage(lab.id, "slow");
-                  return (
-                    <TableRow key={lab.id}>
-                      <TableCell>
-                        <a href={`/labs/${lab.id}`} className="font-medium text-primary hover:underline">
-                          {lab.name}
-                        </a>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {lab.node_name}{" "}
-                        <Badge variant={lab.online ? "ok" : "err"}>
-                          {lab.online ? "online" : "offline"}
+                {labs.map((lab) => (
+                  <TableRow key={lab.id}>
+                    <TableCell>
+                      <a href={`/labs/${lab.id}`} className="font-medium text-primary hover:underline">
+                        {lab.name}
+                      </a>
+                    </TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {lab.pi_name ?? "—"}
+                      {lab.pi_email ? <span className="text-muted-foreground"> · {lab.pi_email}</span> : null}
+                    </TableCell>
+                    <TableCell>{lab.student_count}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {lab.placement_count === 0 ? (
+                        <span className="text-muted-foreground">none</span>
+                      ) : (
+                        <Badge variant={lab.active_placements === lab.placement_count ? "ok" : "warn"}>
+                          {lab.active_placements}/{lab.placement_count} active
                         </Badge>
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {fmtBytes(fast?.used ?? 0)} / {fmtBytes(lab.fast_quota_bytes)}
-                        {fast && pct(fast.used, lab.fast_quota_bytes) !== null
-                          ? ` (${pct(fast.used, lab.fast_quota_bytes)}%)`
-                          : ""}
-                      </TableCell>
-                      <TableCell className="whitespace-nowrap">
-                        {fmtBytes(slow?.used ?? 0)} / {fmtBytes(lab.slow_quota_bytes)}
-                      </TableCell>
-                      <TableCell>{lab.ssh_port ?? "—"}</TableCell>
-                      <TableCell>{lab.status}</TableCell>
-                    </TableRow>
-                  );
-                })}
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
               </TableBody>
             </Table>
           )}

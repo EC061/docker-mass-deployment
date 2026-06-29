@@ -19,23 +19,29 @@ vi.mock("../src/lib/mailer", () => ({ sendCredentialEmail, sendRemovalEmail }));
 let dbmod: typeof import("../src/lib/db");
 let students: typeof import("../src/lib/students");
 let labs: typeof import("../src/lib/labs");
-let labId: number;
+let placements: typeof import("../src/lib/placements");
+let labId: number; // a lab with one placement on gpu-1
+let rosterOnlyLabId: number; // a lab with no placement
 
 beforeAll(async () => {
   dbmod = await import("../src/lib/db");
   students = await import("../src/lib/students");
   labs = await import("../src/lib/labs");
+  placements = await import("../src/lib/placements");
   dbmod.db().prepare("INSERT INTO nodes (name, online, created_at) VALUES ('gpu-1', 1, 0)").run();
   const nodeId = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='gpu-1'").get() as any).id;
-  const lab = labs.createLab({
-    name: "bio",
+  const lab = labs.createLab({ name: "bio", actor: "admin" });
+  labId = lab.id;
+  await placements.createPlacement({
+    labId,
     nodeId,
     fastQuotaBytes: 1000,
-    slowQuotaBytes: 2000,
-    image: "custom-ssh",
+    coldQuotaBytes: 2000,
     sshPort: 2222,
+    image: "custom-ssh",
+    containerOptions: { cpus: "4", memory: "8g", shm_size: "1g", image_quota: "300g", restart: "unless-stopped" },
   });
-  labId = lab.id;
+  rosterOnlyLabId = labs.createLab({ name: "noplacement", actor: "admin" }).id;
 });
 
 beforeEach(() => {
@@ -49,78 +55,78 @@ describe("generatePassword", () => {
     const pw = students.generatePassword(16);
     expect(pw).toHaveLength(16);
     expect(pw).toMatch(/^[a-zA-Z0-9]+$/);
-    // Avoids visually ambiguous characters (l, o, I, O, 0, 1).
     expect(pw).not.toMatch(/[loIO01]/);
   });
 
-  it("defaults to length 12 and is non-deterministic", () => {
-    expect(students.generatePassword()).toHaveLength(12);
+  it("is non-deterministic", () => {
     expect(students.generatePassword()).not.toBe(students.generatePassword());
   });
 });
 
 describe("findOrCreateStudent", () => {
-  it("creates a student then returns the same row on repeat", () => {
+  it("creates a student then returns the same row on repeat (by username)", () => {
     const a = students.findOrCreateStudent({ username: "newbie", email: "n@uga.edu" });
     const b = students.findOrCreateStudent({ username: "newbie" });
     expect(a.id).toBe(b.id);
     expect(b.email).toBe("n@uga.edu");
   });
+
+  it("matches by student_id before username", () => {
+    const a = students.findOrCreateStudent({ username: "sid1", studentId: "100" });
+    // Same student_id, different username -> still resolves to the same record.
+    const b = students.findOrCreateStudent({ username: "sid1-renamed", studentId: "100" });
+    expect(b.id).toBe(a.id);
+  });
 });
 
-describe("addStudentToLab", () => {
+describe("addStudentToLab (provisions on every placement)", () => {
   it("creates membership, enqueues student.add, and emails credentials", async () => {
     const res = await students.addStudentToLab(labId, { username: "alice", email: "a@uga.edu" }, "admin");
     expect(res.student.username).toBe("alice");
-    expect(res.password).toHaveLength(12);
-    expect(res.emailed).toBe(true);
+    expect(res.provisioned).toHaveLength(1);
+    expect(res.provisioned[0].emailed).toBe(true);
+    expect(res.provisioned[0].password.length).toBeGreaterThanOrEqual(12);
 
-    const member = dbmod
-      .db()
-      .prepare(
-        "SELECT * FROM lab_members WHERE lab_id=? AND student_id=(SELECT id FROM students WHERE username='alice')",
-      )
-      .get(labId);
-    expect(member).toBeTruthy();
-
+    expect(dbmod.db().prepare(
+      "SELECT 1 FROM lab_members WHERE lab_id=? AND student_id=(SELECT id FROM students WHERE username='alice')",
+    ).get(labId)).toBeTruthy();
     expect(enqueueTask).toHaveBeenCalledWith(
       "gpu-1",
       "student.add",
-      expect.objectContaining({ lab: "bio", username: "alice", password: res.password }),
+      expect.objectContaining({ lab: "bio", username: "alice", password: res.provisioned[0].password }),
       "admin",
     );
     const cred = sendCredentialEmail.mock.calls[0][0] as any;
-    expect(cred).toMatchObject({ to: "a@uga.edu", username: "alice", port: 2222, lab: "bio" });
+    expect(cred).toMatchObject({ to: "a@uga.edu", username: "alice", port: 2222, lab: "bio", node: "gpu-1" });
   });
 
   it("does not email when the student has no address", async () => {
     const res = await students.addStudentToLab(labId, { username: "bob" });
-    expect(res.emailed).toBe(false);
+    expect(res.provisioned[0].emailed).toBe(false);
     expect(sendCredentialEmail).not.toHaveBeenCalled();
   });
 
-  it("rejects a duplicate membership", async () => {
-    await students.addStudentToLab(labId, { username: "carol", email: "c@uga.edu" });
-    await expect(students.addStudentToLab(labId, { username: "carol" })).rejects.toThrow(
-      /already a member/,
-    );
+  it("adds to the roster only (no provisioning) when the lab has no placement", async () => {
+    const res = await students.addStudentToLab(rosterOnlyLabId, { username: "carol", email: "c@uga.edu" });
+    expect(res.provisioned).toHaveLength(0);
+    expect(enqueueTask).not.toHaveBeenCalled();
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
   });
 
-  it("throws for an unknown lab", async () => {
+  it("rejects a duplicate membership and an unknown lab", async () => {
+    await students.addStudentToLab(labId, { username: "dup", email: "d@uga.edu" });
+    await expect(students.addStudentToLab(labId, { username: "dup" })).rejects.toThrow(/already a member/);
     await expect(students.addStudentToLab(999999, { username: "x" })).rejects.toThrow(/Unknown lab/);
   });
 });
 
-describe("listMembers / removeStudentFromLab", () => {
-  it("lists members and removes one, enqueuing student.remove + removal email", async () => {
+describe("removeStudentFromLab (deprovisions on every placement)", () => {
+  it("enqueues student.remove, drops membership, and emails once", async () => {
     await students.addStudentToLab(labId, { username: "dave", email: "d@uga.edu" });
-    const before = students.listMembers(labId);
-    const dave = before.find((m) => m.username === "dave")!;
-    expect(dave).toBeTruthy();
-
+    const dave = students.listMembers(labId).find((m) => m.username === "dave")!;
     enqueueTask.mockClear();
-    students.removeStudentFromLab(labId, dave.id, true, "admin");
 
+    students.removeStudentFromLab(labId, dave.id, true, "admin");
     expect(enqueueTask).toHaveBeenCalledWith(
       "gpu-1",
       "student.remove",
@@ -129,5 +135,9 @@ describe("listMembers / removeStudentFromLab", () => {
     );
     expect(sendRemovalEmail).toHaveBeenCalledWith("d@uga.edu", "bio", true);
     expect(students.listMembers(labId).find((m) => m.username === "dave")).toBeUndefined();
+  });
+
+  it("throws when the student is not a member", () => {
+    expect(() => students.removeStudentFromLab(labId, 999999, false, "admin")).toThrow(/not a member/);
   });
 });

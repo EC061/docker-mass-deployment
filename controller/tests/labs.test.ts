@@ -11,34 +11,44 @@ process.env.SESSION_SECRET = "test-session-secret-test-session";
 
 const enqueueTask = vi.fn((..._args: unknown[]) => ({ id: "x" }));
 vi.mock("../src/lib/queue", () => ({ enqueueTask }));
+const sendCredentialEmail = vi.fn(async () => ({ sent: true }));
+const sendRemovalEmail = vi.fn(async () => ({ sent: true }));
+vi.mock("../src/lib/mailer", () => ({ sendCredentialEmail, sendRemovalEmail }));
 
 let dbmod: typeof import("../src/lib/db");
 let labs: typeof import("../src/lib/labs");
+let placements: typeof import("../src/lib/placements");
 let nodeId: number;
+let port = 50000;
+
+const OPTS = { cpus: "4", memory: "8g", shm_size: "1g", image_quota: "300g", restart: "unless-stopped" };
 
 beforeAll(async () => {
   dbmod = await import("../src/lib/db");
   labs = await import("../src/lib/labs");
+  placements = await import("../src/lib/placements");
   dbmod.db().prepare("INSERT INTO nodes (name, online, created_at) VALUES ('gpu-1', 1, 0)").run();
   nodeId = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='gpu-1'").get() as any).id;
 });
 
 beforeEach(() => {
   enqueueTask.mockClear();
+  sendCredentialEmail.mockClear();
+  sendRemovalEmail.mockClear();
 });
 
-function makeLab(name: string) {
-  return labs.createLab({
-    name,
+const makeLab = (name: string) => labs.createLab({ name, piName: "Dr. X", piEmail: "pi@uga.edu", actor: "admin" });
+const makePlacement = (labId: number) =>
+  placements.createPlacement({
+    labId,
     nodeId,
-    piEmail: "pi@uga.edu",
     fastQuotaBytes: 1000,
-    slowQuotaBytes: 2000,
+    coldQuotaBytes: 2000,
+    sshPort: ++port,
     image: "custom-ssh",
-    sshPort: 50001,
-    containerOptions: { cpus: "4" },
+    containerOptions: OPTS,
+    actor: "admin",
   });
-}
 
 describe("lab name validation (M-04)", () => {
   it("accepts a simple name and rejects junk", () => {
@@ -55,136 +65,89 @@ describe("lab name validation (M-04)", () => {
   });
 });
 
-describe("createLab", () => {
-  it("inserts the lab, enqueues lab.create, and audits", () => {
+describe("createLab (logical, node-independent)", () => {
+  it("inserts the lab + PI metadata and audits, without enqueuing any node task", () => {
     const lab = makeLab("bio");
     expect(lab.name).toBe("bio");
-    expect(lab.node_name).toBe("gpu-1");
-    expect(lab.status).toBe("provisioning");
+    expect(lab.pi_name).toBe("Dr. X");
+    expect(lab.pi_email).toBe("pi@uga.edu");
+    expect(enqueueTask).not.toHaveBeenCalled(); // node tasks happen on placement, not lab creation
 
-    expect(enqueueTask).toHaveBeenCalledWith(
-      "gpu-1",
-      "lab.create",
-      expect.objectContaining({
-        lab: "bio",
-        fast_quota_bytes: 1000,
-        slow_quota_bytes: 2000,
-        image: "custom-ssh",
-        ssh_port: 50001,
-        container_options: { cpus: "4" },
-      }),
-      undefined,
-    );
-
-    const audit = dbmod
-      .db()
-      .prepare("SELECT * FROM audit_log WHERE action='lab.create' AND target='bio'")
-      .get() as any;
+    const audit = dbmod.db().prepare("SELECT * FROM audit_log WHERE action='lab.create' AND target='bio'").get();
     expect(audit).toBeTruthy();
-    expect(audit.detail).toBe("node=gpu-1");
   });
 
-  it("throws for an unknown node", () => {
-    expect(() =>
-      labs.createLab({ name: "x", nodeId: 9999, fastQuotaBytes: 1, slowQuotaBytes: 1, image: "i" }),
-    ).toThrow(/Unknown node/);
+  it("rejects a duplicate name", () => {
+    expect(() => makeLab("bio")).toThrow(/already exists/);
   });
 });
 
 describe("getters", () => {
-  it("getLabByName and getLab return the row with node join", () => {
-    makeLab("chem");
+  it("getLabByName / getLab / listLabs with derived counts", async () => {
+    const chem = makeLab("chem");
+    await makePlacement(chem.id);
     const byName = labs.getLabByName("chem")!;
-    expect(byName.online).toBe(1);
     expect(labs.getLab(byName.id)!.name).toBe("chem");
     expect(labs.getLab(123456)).toBeUndefined();
-  });
 
-  it("listLabs returns all labs ordered by name", () => {
+    const summary = labs.listLabs().find((l) => l.name === "chem")!;
+    expect(summary.placement_count).toBe(1);
+    expect(summary.active_placements).toBe(0); // still 'provisioning' until the agent confirms
+    expect(summary.student_count).toBe(0);
+
     const names = labs.listLabs().map((l) => l.name);
-    expect(names).toContain("bio");
-    expect(names).toContain("chem");
     expect([...names]).toEqual([...names].sort());
   });
 });
 
-describe("updateQuota", () => {
-  it("updates only provided fields and enqueues lab.set_quota", () => {
+describe("updateLabMeta", () => {
+  it("updates PI metadata and audits", () => {
     const lab = makeLab("phys");
-    enqueueTask.mockClear();
-    labs.updateQuota(lab.id, 5000, undefined, "admin");
+    labs.updateLabMeta(lab.id, { piName: "Dr. Y", piEmail: "y@uga.edu" }, "admin");
     const row = labs.getLab(lab.id)!;
-    expect(row.fast_quota_bytes).toBe(5000);
-    expect(row.slow_quota_bytes).toBe(2000); // unchanged
-    expect(enqueueTask).toHaveBeenCalledWith(
-      "gpu-1",
-      "lab.set_quota",
-      expect.objectContaining({ lab: "phys", fast_quota_bytes: 5000 }),
-      "admin",
-    );
-    expect(enqueueTask.mock.calls[0][2]).not.toHaveProperty("slow_quota_bytes");
-  });
-
-  it("throws for an unknown lab", () => {
-    expect(() => labs.updateQuota(999999, 1, 1)).toThrow(/Unknown lab/);
+    expect(row.pi_name).toBe("Dr. Y");
+    expect(row.pi_email).toBe("y@uga.edu");
+    expect(dbmod.db().prepare("SELECT 1 FROM audit_log WHERE action='lab.update_meta' AND target='phys'").get()).toBeTruthy();
   });
 });
 
 describe("destroyLab", () => {
-  it("enqueues lab.destroy, deletes the row, and audits", () => {
-    const lab = makeLab("geo");
-    enqueueTask.mockClear();
-    labs.destroyLab(lab.id, "admin");
-    expect(labs.getLab(lab.id)).toBeUndefined();
-    expect(enqueueTask).toHaveBeenCalledWith("gpu-1", "lab.destroy", { lab: "geo" }, "admin");
-    const audit = dbmod
-      .db()
-      .prepare("SELECT * FROM audit_log WHERE action='lab.destroy' AND target='geo'")
-      .get();
-    expect(audit).toBeTruthy();
-  });
-
-  it("is a no-op for an unknown lab (no enqueue)", () => {
-    labs.destroyLab(999999);
-    expect(enqueueTask).not.toHaveBeenCalled();
-  });
-
-  it("removes students that belonged only to the destroyed lab, keeps shared ones", () => {
+  it("with no placements: deletes the lab and orphan-only students, keeps shared ones", () => {
     const a = makeLab("alpha");
     const b = makeLab("beta");
     const db = dbmod.db();
-    // sole: only in alpha. shared: in both alpha and beta.
-    const sole = Number(
-      db.prepare("INSERT INTO students (username, created_at) VALUES ('sole', 0)").run().lastInsertRowid,
-    );
-    const shared = Number(
-      db.prepare("INSERT INTO students (username, created_at) VALUES ('shared', 0)").run().lastInsertRowid,
-    );
+    const sole = Number(db.prepare("INSERT INTO students (username, created_at, updated_at) VALUES ('sole', 0, 0)").run().lastInsertRowid);
+    const shared = Number(db.prepare("INSERT INTO students (username, created_at, updated_at) VALUES ('shared', 0, 0)").run().lastInsertRowid);
     db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(a.id, sole);
     db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(a.id, shared);
     db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(b.id, shared);
 
-    labs.destroyLab(a.id, "admin");
-
-    // sole had no other membership -> deleted; shared still in beta -> kept.
+    const res = labs.destroyLab(a.id, "admin");
+    expect(res).toEqual({ deleted: true, teardownStarted: 0 });
+    expect(labs.getLab(a.id)).toBeUndefined();
     expect(db.prepare("SELECT id FROM students WHERE id = ?").get(sole)).toBeUndefined();
     expect(db.prepare("SELECT id FROM students WHERE id = ?").get(shared)).toBeTruthy();
-    // memberships in the destroyed lab are gone (ON DELETE CASCADE).
-    expect(db.prepare("SELECT 1 FROM lab_members WHERE lab_id = ?").get(a.id)).toBeUndefined();
-  });
-});
-
-describe("markLabStatus", () => {
-  it("transitions a provisioning lab to active (and to failed)", () => {
-    const lab = makeLab("statuslab");
-    expect(labs.getLab(lab.id)!.status).toBe("provisioning");
-    labs.markLabStatus("statuslab", "active");
-    expect(labs.getLab(lab.id)!.status).toBe("active");
-    labs.markLabStatus("statuslab", "failed");
-    expect(labs.getLab(lab.id)!.status).toBe("failed");
   });
 
-  it("is a silent no-op for an unknown lab name", () => {
-    expect(() => labs.markLabStatus("nope", "active")).not.toThrow();
+  it("with placements: tears them down (kept until confirmed), then deletes once gone", async () => {
+    const lab = makeLab("geo");
+    const placement = await makePlacement(lab.id);
+    enqueueTask.mockClear();
+
+    const res = labs.destroyLab(lab.id, "admin");
+    expect(res).toEqual({ deleted: false, teardownStarted: 1 });
+    expect(labs.getLab(lab.id)).toBeTruthy(); // lab kept until the node confirms
+    expect(placements.getPlacement(placement.id)!.state).toBe("deleting");
+    expect(enqueueTask).toHaveBeenCalledWith("gpu-1", "lab.destroy", { lab: "geo" }, "admin");
+
+    // Agent confirms destruction -> placement row removed; deleting the lab again removes it.
+    placements.confirmPlacementDestroyed("geo", "gpu-1");
+    expect(placements.getPlacement(placement.id)).toBeUndefined();
+    expect(labs.destroyLab(lab.id, "admin")).toEqual({ deleted: true, teardownStarted: 0 });
+    expect(labs.getLab(lab.id)).toBeUndefined();
+  });
+
+  it("is a no-op for an unknown lab", () => {
+    expect(labs.destroyLab(999999)).toEqual({ deleted: false, teardownStarted: 0 });
   });
 });

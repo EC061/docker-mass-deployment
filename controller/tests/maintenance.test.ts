@@ -133,26 +133,30 @@ describe("pruneLogs caps", () => {
 describe("scheduleUsageScans", () => {
   let bioId: number;
 
+  let bioPlacementId: number;
+
   beforeAll(() => {
-    dbmod.db().prepare("INSERT INTO nodes (name, online, created_at) VALUES ('on-1', 1, 0)").run();
-    dbmod.db().prepare("INSERT INTO nodes (name, online, created_at) VALUES ('down-1', 0, 0)").run();
-    const onId = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='on-1'").get() as any).id;
-    const downId = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='down-1'").get() as any).id;
-    const insLab = dbmod
-      .db()
-      .prepare(
-        `INSERT INTO labs (name, node_id, fast_quota_bytes, slow_quota_bytes, image, created_at)
-         VALUES (?, ?, 1, 1, 'custom-ssh', 0)`,
-      );
-    insLab.run("bio", onId);
-    insLab.run("offline-lab", downId);
-    bioId = (dbmod.db().prepare("SELECT id FROM labs WHERE name='bio'").get() as any).id;
-    dbmod.db().prepare("INSERT INTO students (username, created_at) VALUES ('alice', 0)").run();
-    const sid = (dbmod.db().prepare("SELECT id FROM students WHERE username='alice'").get() as any).id;
-    dbmod
-      .db()
-      .prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)")
-      .run(bioId, sid);
+    const d = dbmod.db();
+    d.prepare("INSERT INTO nodes (name, online, created_at) VALUES ('on-1', 1, 0)").run();
+    d.prepare("INSERT INTO nodes (name, online, created_at) VALUES ('down-1', 0, 0)").run();
+    const onId = (d.prepare("SELECT id FROM nodes WHERE name='on-1'").get() as any).id;
+    const downId = (d.prepare("SELECT id FROM nodes WHERE name='down-1'").get() as any).id;
+    const insLab = d.prepare("INSERT INTO labs (name, created_at, updated_at) VALUES (?, 0, 0)");
+    insLab.run("bio");
+    insLab.run("offline-lab");
+    bioId = (d.prepare("SELECT id FROM labs WHERE name='bio'").get() as any).id;
+    const offlineId = (d.prepare("SELECT id FROM labs WHERE name='offline-lab'").get() as any).id;
+    // bio is active on an online node; offline-lab is active on an offline node (must be skipped).
+    const insP = d.prepare(
+      `INSERT INTO lab_placements (lab_id, node_id, fast_quota_bytes, cold_quota_bytes, ssh_port, image, state, created_at, updated_at)
+       VALUES (?, ?, 1, 1, ?, 'custom-ssh', 'active', 0, 0)`,
+    );
+    insP.run(bioId, onId, 40000);
+    insP.run(offlineId, downId, 40000);
+    bioPlacementId = (d.prepare("SELECT id FROM lab_placements WHERE lab_id=?").get(bioId) as any).id;
+    d.prepare("INSERT INTO students (username, created_at, updated_at) VALUES ('alice', 0, 0)").run();
+    const sid = (d.prepare("SELECT id FROM students WHERE username='alice'").get() as any).id;
+    d.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(bioId, sid);
   });
 
   it("does nothing when disabled", () => {
@@ -178,23 +182,23 @@ describe("scheduleUsageScans", () => {
     const t0 = 1_000_000_000_000;
 
     const scheduled = maintenance.scheduleUsageScans(t0);
-    expect(scheduled).toContain("bio");
-    expect(scheduled).not.toContain("offline-lab");
+    expect(scheduled).toContain("bio@on-1");
+    expect(scheduled).not.toContain("offline-lab@down-1");
     expect(enqueueTask).toHaveBeenCalledWith(
       "on-1",
       "usage.scan",
       { lab: "bio", users: ["alice"] },
       "usage-scheduler",
     );
-    const row = dbmod.db().prepare("SELECT last_usage_scan FROM labs WHERE id = ?").get(bioId) as {
+    const row = dbmod.db().prepare("SELECT last_usage_scan FROM lab_placements WHERE id = ?").get(bioPlacementId) as {
       last_usage_scan: number;
     };
     expect(row.last_usage_scan).toBe(t0);
 
     // An hour later is well within the ~20h re-fire gap -> bio is not scanned again.
-    expect(maintenance.scheduleUsageScans(t0 + 3600 * 1000)).not.toContain("bio");
+    expect(maintenance.scheduleUsageScans(t0 + 3600 * 1000)).not.toContain("bio@on-1");
 
     // The next night (past the gap) -> due again.
-    expect(maintenance.scheduleUsageScans(t0 + 21 * 3600 * 1000)).toContain("bio");
+    expect(maintenance.scheduleUsageScans(t0 + 21 * 3600 * 1000)).toContain("bio@on-1");
   });
 });

@@ -18,20 +18,21 @@ beforeAll(async () => {
   settings = await import("../src/lib/settings");
   ingest = await import("../src/lib/ingest");
 
-  // Seed: one node, one lab, one student member named alice.
+  // Seed: one node, one logical lab placed on it, one student member named alice.
   const now = Date.now();
   db.db().prepare("INSERT INTO nodes (name, online, created_at) VALUES ('gpu-1', 1, ?)").run(now);
   const nodeId = (db.db().prepare("SELECT id FROM nodes WHERE name='gpu-1'").get() as any).id;
-  db.db()
-    .prepare(
-      `INSERT INTO labs (name, node_id, fast_quota_bytes, slow_quota_bytes, image, created_at)
-       VALUES ('bio', ?, 2199023255552, 3298534883328, 'custom-ssh', ?)`,
-    )
-    .run(nodeId, now);
+  db.db().prepare("INSERT INTO labs (name, created_at, updated_at) VALUES ('bio', ?, ?)").run(now, now);
   const labId = (db.db().prepare("SELECT id FROM labs WHERE name='bio'").get() as any).id;
   db.db()
-    .prepare("INSERT INTO students (username, email, created_at) VALUES ('alice', 'a@uga.edu', ?)")
-    .run(now);
+    .prepare(
+      `INSERT INTO lab_placements (lab_id, node_id, fast_quota_bytes, cold_quota_bytes, ssh_port, image, state, created_at, updated_at)
+       VALUES (?, ?, 2199023255552, 3298534883328, 2222, 'custom-ssh', 'active', ?, ?)`,
+    )
+    .run(labId, nodeId, now, now);
+  db.db()
+    .prepare("INSERT INTO students (username, email, created_at, updated_at) VALUES ('alice', 'a@uga.edu', ?, ?)")
+    .run(now, now);
   const studentId = (db.db().prepare("SELECT id FROM students WHERE username='alice'").get() as any).id;
   db.db()
     .prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, ?)")
@@ -43,13 +44,6 @@ describe("settings", () => {
     expect(settings.getSetting("usageScanHour")).toBe(0); // midnight default
     settings.setSetting("usageScanHour", 5);
     expect(settings.getSetting("usageScanHour")).toBe(5);
-  });
-
-  it("nextSshPort skips ports already assigned to labs", () => {
-    settings.setSetting("sshPortStart", 50000);
-    settings.setSetting("sshPortEnd", 50010);
-    db.db().prepare("UPDATE labs SET ssh_port = 50000 WHERE name='bio'").run();
-    expect(settings.nextSshPort()).toBe(50001);
   });
 });
 
@@ -96,7 +90,7 @@ describe("telemetry ingestion", () => {
       usage_scans: [{ lab: "bio", scanned_at: 5000 }],
       gpu_processes: [],
     });
-    const after = db.db().prepare("SELECT usage_scanned_at FROM labs WHERE name='bio'").get() as any;
+    const after = db.db().prepare("SELECT usage_scanned_at FROM lab_placements WHERE lab_id=(SELECT id FROM labs WHERE name='bio')").get() as any;
     expect(after.usage_scanned_at).toBe(5000);
 
     // An older (stale) report must not roll the timestamp back.
@@ -105,7 +99,7 @@ describe("telemetry ingestion", () => {
       usage_scans: [{ lab: "bio", scanned_at: 1000 }],
       gpu_processes: [],
     });
-    const stale = db.db().prepare("SELECT usage_scanned_at FROM labs WHERE name='bio'").get() as any;
+    const stale = db.db().prepare("SELECT usage_scanned_at FROM lab_placements WHERE lab_id=(SELECT id FROM labs WHERE name='bio')").get() as any;
     expect(stale.usage_scanned_at).toBe(5000);
   });
 

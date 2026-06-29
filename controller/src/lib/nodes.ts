@@ -112,21 +112,21 @@ export function revokeNode(name: string, actor: string): void {
 }
 
 /**
- * Permanently delete a node from the DB. Refuses if any lab is still pinned to it (labs.node_id is
- * a RESTRICT foreign key — its storage lives on that machine). Also clears the node's queued tasks
- * and live GPU snapshot so a later same-named node starts clean; historical logs/events are kept.
+ * Permanently delete a node from the DB. Refuses while any lab placement still lives on it (its
+ * storage is on that machine — remove the placements first). Also clears the node's queued tasks and
+ * live GPU snapshot so a later same-named node starts clean; historical logs/events are kept.
  */
 export function deleteNode(name: string, actor: string): void {
   const row = db().prepare("SELECT id FROM nodes WHERE name = ?").get(name) as
     | { id: number }
     | undefined;
   if (!row) throw new Error(`unknown node '${name}'`);
-  const { n: labCount } = db()
-    .prepare("SELECT COUNT(*) AS n FROM labs WHERE node_id = ?")
+  const { n: placementCount } = db()
+    .prepare("SELECT COUNT(*) AS n FROM lab_placements WHERE node_id = ?")
     .get(row.id) as { n: number };
-  if (labCount > 0) {
+  if (placementCount > 0) {
     throw new Error(
-      `node '${name}' still has ${labCount} lab(s); delete or move them before deleting the node`,
+      `node '${name}' still hosts ${placementCount} lab placement(s); remove them before deleting the node`,
     );
   }
   db().transaction(() => {

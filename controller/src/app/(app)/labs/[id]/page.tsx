@@ -3,9 +3,11 @@ import { ConfirmButton } from "../../_components/ConfirmButton";
 import { db } from "@/lib/db";
 import { takeFlash } from "@/lib/flash";
 import { fmtBytes, pct } from "@/lib/format";
-import { containerOptionsOf, getLab } from "@/lib/labs";
+import { getLab } from "@/lib/labs";
+import { containerOptionsOf, listPlacements, type Placement } from "@/lib/placements";
 import { listMembers } from "@/lib/students";
-import { TIB } from "@/lib/settings";
+import { getSetting, getSettings, TIB } from "@/lib/settings";
+import { PlacementForm, type NodeOpt } from "../_components/PlacementForm";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -15,50 +17,111 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import {
   addMemberAction,
   destroyLabAction,
-  recreateContainerAction,
+  grantNodeAccessAction,
+  recreatePlacementAction,
   removeMemberAction,
-  setQuotaAction,
-  updateLabSettingsAction,
+  removePlacementAction,
+  setPlacementQuotaAction,
+  updateLabMetaAction,
 } from "../actions";
 
 export const dynamic = "force-dynamic";
 
-function samples(labId: number, pool: string) {
-  return (db()
+/** Latest lab-level (student_id NULL) usage for a placement+pool. */
+function placementUsage(placementId: number, pool: string): { used: number; quota: number | null } | null {
+  const row = db()
     .prepare(
-      `SELECT used_bytes, quota_bytes, ts FROM storage_samples
-       WHERE lab_id = ? AND student_id IS NULL AND pool = ? ORDER BY ts ASC LIMIT 500`,
+      `SELECT used_bytes, quota_bytes FROM storage_samples
+       WHERE placement_id = ? AND student_id IS NULL AND pool = ? ORDER BY ts DESC LIMIT 1`,
     )
-    .all(labId, pool) as { used_bytes: number; quota_bytes: number | null; ts: number }[]);
+    .get(placementId, pool) as { used_bytes: number; quota_bytes: number | null } | undefined;
+  return row ? { used: row.used_bytes, quota: row.quota_bytes } : null;
 }
 
-/** Latest docker writable-layer usage (installed software) per student, from labquota telemetry. */
-function dockerByStudent(labId: number): Map<string, number> {
-  const rows = db()
-    .prepare(
-      `SELECT students.username AS username, s.used_bytes AS used
-       FROM storage_samples s JOIN students ON students.id = s.student_id
-       WHERE s.lab_id = ? AND s.pool = 'docker' AND s.student_id IS NOT NULL
-         AND s.ts = (SELECT MAX(ts) FROM storage_samples s2
-                      WHERE s2.student_id = s.student_id AND s2.pool = 'docker')
-       GROUP BY students.id`,
-    )
-    .all(labId) as { username: string; used: number }[];
-  return new Map(rows.map((r) => [r.username, r.used]));
-}
+const STATE_VARIANT: Record<string, "ok" | "warn" | "err"> = {
+  active: "ok",
+  provisioning: "warn",
+  queued: "warn",
+  deleting: "warn",
+  failed: "err",
+};
 
-function Sparkline({ values }: { values: number[] }) {
-  if (values.length < 2) return <span className="text-sm text-muted-foreground">not enough history</span>;
-  const w = 240;
-  const h = 40;
-  const max = Math.max(...values, 1);
-  const pts = values
-    .map((v, i) => `${(i / (values.length - 1)) * w},${h - (v / max) * h}`)
-    .join(" ");
+function PlacementCard({ p }: { p: Placement }) {
+  const opts = containerOptionsOf(p);
+  const host = getSetting("sshHostOverride").trim() || p.node_name;
+  const fast = placementUsage(p.id, "fast");
+  const slow = placementUsage(p.id, "slow");
+  const isSmbClient = p.cold_quota_bytes === null;
+
   return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="block h-10 w-full max-w-[240px]">
-      <polyline points={pts} fill="none" stroke="var(--primary)" strokeWidth="2" />
-    </svg>
+    <Card>
+      <CardContent className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <h4 className="text-base font-semibold">{p.node_name}</h4>
+          <Badge variant={p.online ? "ok" : "err"}>{p.online ? "online" : "offline"}</Badge>
+          <Badge variant={STATE_VARIANT[p.state] ?? "warn"}>{p.state}</Badge>
+        </div>
+        {p.last_error && p.state === "failed" && (
+          <p className="text-xs text-destructive">{p.last_error}</p>
+        )}
+        <p className="text-sm text-muted-foreground">
+          SSH <code className="font-mono">ssh -p {p.ssh_port} &lt;user&gt;@{host}</code> · image {p.image} ·
+          {" "}{opts.cpus} CPU · {opts.memory} RAM · img-quota {opts.image_quota}
+        </p>
+
+        <form action={setPlacementQuotaAction} className="flex flex-wrap items-end gap-3">
+          <input type="hidden" name="placementId" value={p.id} />
+          <div>
+            <Label>Fast (TB)</Label>
+            <Input
+              name="fastTb"
+              type="number"
+              step="0.5"
+              defaultValue={p.fast_quota_bytes / TIB}
+              className="w-28"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              used {fmtBytes(fast?.used ?? 0)}
+              {fast && pct(fast.used, p.fast_quota_bytes) !== null ? ` (${pct(fast.used, p.fast_quota_bytes)}%)` : ""}
+            </p>
+          </div>
+          <div>
+            <Label>Cold (TB)</Label>
+            <Input
+              name="coldTb"
+              type="number"
+              step="0.5"
+              defaultValue={p.cold_quota_bytes !== null ? p.cold_quota_bytes / TIB : ""}
+              disabled={isSmbClient}
+              className="w-28"
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              {isSmbClient ? "managed by owner node" : `used ${fmtBytes(slow?.used ?? 0)}`}
+            </p>
+          </div>
+          <Button type="submit">Apply (live)</Button>
+        </form>
+
+        <div className="flex flex-wrap gap-3">
+          <form action={recreatePlacementAction}>
+            <input type="hidden" name="placementId" value={p.id} />
+            <Button type="submit" variant="secondary" size="sm">
+              Recreate container
+            </Button>
+          </form>
+          <form action={removePlacementAction}>
+            <input type="hidden" name="placementId" value={p.id} />
+            <ConfirmButton
+              variant="destructive"
+              size="sm"
+              confirm={`Remove ${p.lab_name} from ${p.node_name}? The container and all of this node's data (shared + every student) are destroyed. Shared cold data on an owner node is removed once, after dependent SMB clients are gone.`}
+            >
+              Remove access
+            </ConfirmButton>
+          </form>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -72,26 +135,22 @@ export default async function LabDetail({
   const { id } = await params;
   const { newuser, pwid, emailed, saved } = await searchParams;
   const savedMsg = saved ? takeFlash(saved) : null;
-  // The cleartext password is fetched once from the server-side flash store, never the URL (M-07).
   const pw = pwid ? takeFlash(pwid) : null;
   const labId = Number(id);
   const lab = getLab(labId);
   if (!lab) notFound();
-  const opts = containerOptionsOf(lab);
-  const members = listMembers(labId);
-  const dockerUsed = dockerByStudent(labId);
 
-  const fast = samples(labId, "fast");
-  const slow = samples(labId, "slow");
-  const fastNow = fast.at(-1);
-  const slowNow = slow.at(-1);
+  const members = listMembers(labId);
+  const placements = listPlacements(labId);
+  const placedNodeIds = new Set(placements.map((p) => p.node_id));
+  const availableNodes = (db()
+    .prepare("SELECT id, name, online FROM nodes ORDER BY name")
+    .all() as NodeOpt[]).filter((n) => !placedNodeIds.has(n.id));
+  const settings = getSettings();
 
   return (
     <div className="space-y-4">
-      <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-        Lab: {lab.name}
-        <Badge variant={lab.online ? "ok" : "err"}>{lab.online ? "online" : "offline"}</Badge>
-      </h1>
+      <h1 className="text-2xl font-semibold tracking-tight">Lab: {lab.name}</h1>
 
       {savedMsg && (
         <Card className="border-primary/50">
@@ -102,98 +161,20 @@ export default async function LabDetail({
       )}
 
       <Card>
-        <CardContent>
-          <p className="text-sm">
-            Node <b>{lab.node_name}</b> · PI {lab.pi_email ?? "—"} · image {lab.image} · SSH port{" "}
-            {lab.ssh_port ?? "—"} · status {lab.status}
-          </p>
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <Card>
-          <CardContent className="space-y-2">
-            <h3 className="text-base font-semibold">Fast pool</h3>
-            <p className="text-sm">
-              {fmtBytes(fastNow?.used_bytes ?? 0)} / {fmtBytes(lab.fast_quota_bytes)}
-              {fastNow && pct(fastNow.used_bytes, lab.fast_quota_bytes) !== null
-                ? ` · ${pct(fastNow.used_bytes, lab.fast_quota_bytes)}%`
-                : ""}
-            </p>
-            <Sparkline values={fast.map((s) => s.used_bytes)} />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent className="space-y-2">
-            <h3 className="text-base font-semibold">Slow pool</h3>
-            <p className="text-sm">
-              {fmtBytes(slowNow?.used_bytes ?? 0)} / {fmtBytes(lab.slow_quota_bytes)}
-            </p>
-            <Sparkline values={slow.map((s) => s.used_bytes)} />
-          </CardContent>
-        </Card>
-      </div>
-
-      <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Quota (applies live)</h3>
-          <form action={setQuotaAction} className="flex flex-wrap items-end gap-3">
+          <h3 className="text-base font-semibold">PI / metadata</h3>
+          <form action={updateLabMetaAction} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <input type="hidden" name="labId" value={lab.id} />
             <div>
-              <Label>Fast (TB)</Label>
-              <Input name="fastTb" type="number" step="0.5" defaultValue={lab.fast_quota_bytes / TIB} className="w-32" />
+              <Label>PI name</Label>
+              <Input name="piName" defaultValue={lab.pi_name ?? ""} placeholder="Dr. Jane Smith" />
             </div>
-            <div>
-              <Label>Slow (TB)</Label>
-              <Input name="slowTb" type="number" step="0.5" defaultValue={lab.slow_quota_bytes / TIB} className="w-32" />
-            </div>
-            <Button type="submit">Apply</Button>
-          </form>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="space-y-3">
-          <div className="space-y-1">
-            <h3 className="text-base font-semibold">Lab settings</h3>
-            <p className="text-xs text-muted-foreground">
-              PI email is metadata. Changing the image or any container option recreates the container
-              (student data on the fast/slow pools is preserved). The node and SSH port can&apos;t change.
-            </p>
-          </div>
-          <form action={updateLabSettingsAction} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <input type="hidden" name="labId" value={lab.id} />
             <div>
               <Label>PI email</Label>
               <Input name="piEmail" type="email" defaultValue={lab.pi_email ?? ""} placeholder="pi@uga.edu" />
             </div>
-            <div>
-              <Label>Base image</Label>
-              <Input name="image" defaultValue={lab.image} />
-            </div>
-            <div className="hidden lg:block" />
-            <div>
-              <Label>CPUs</Label>
-              <Input name="cpus" defaultValue={opts.cpus} />
-            </div>
-            <div>
-              <Label>RAM</Label>
-              <Input name="memory" defaultValue={opts.memory} />
-            </div>
-            <div>
-              <Label>Shared memory</Label>
-              <Input name="shmSize" defaultValue={opts.shm_size} />
-            </div>
-            <div>
-              <Label>Image size quota</Label>
-              <Input name="imageQuota" defaultValue={opts.image_quota} />
-            </div>
-            <div>
-              <Label>Restart policy</Label>
-              <Input name="restart" defaultValue={opts.restart} />
-            </div>
             <div className="flex items-end">
-              <Button type="submit">Save settings</Button>
+              <Button type="submit">Save</Button>
             </div>
           </form>
         </CardContent>
@@ -201,7 +182,37 @@ export default async function LabDetail({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Members</h3>
+          <h3 className="text-base font-semibold">Nodes ({placements.length})</h3>
+          {placements.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              This lab has no node access yet — grant it below to provision its container and roster.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+              {placements.map((p) => (
+                <PlacementCard key={p.id} p={p} />
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Grant node access</h3>
+          <PlacementForm
+            labId={lab.id}
+            nodes={availableNodes}
+            defaultFastTb={settings.fastQuotaDefaultBytes / TIB}
+            defaultColdTb={settings.slowQuotaDefaultBytes / TIB}
+            action={grantNodeAccessAction}
+          />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Roster ({members.length})</h3>
           {newuser && pw && (
             <div className="rounded-md border border-primary/50 bg-primary/10 px-3 py-2.5 text-sm">
               Added <b>{newuser}</b> — password{" "}
@@ -225,6 +236,10 @@ export default async function LabDetail({
               <Label>Name</Label>
               <Input name="name" placeholder="Alice A." />
             </div>
+            <div>
+              <Label>Student ID</Label>
+              <Input name="studentId" placeholder="100001" />
+            </div>
             <Button type="submit">Add student</Button>
           </form>
           {members.length === 0 ? (
@@ -236,7 +251,7 @@ export default async function LabDetail({
                   <TableHead>Username</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Name</TableHead>
-                  <TableHead>Installed (container)</TableHead>
+                  <TableHead>Student ID</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
               </TableHeader>
@@ -246,7 +261,7 @@ export default async function LabDetail({
                     <TableCell>{m.username}</TableCell>
                     <TableCell>{m.email ?? "—"}</TableCell>
                     <TableCell>{m.name ?? "—"}</TableCell>
-                    <TableCell>{dockerUsed.has(m.username) ? fmtBytes(dockerUsed.get(m.username)!) : "—"}</TableCell>
+                    <TableCell>{m.student_id ?? "—"}</TableCell>
                     <TableCell className="text-right">
                       <form action={removeMemberAction} className="flex items-center justify-end gap-2">
                         <input type="hidden" name="labId" value={lab.id} />
@@ -257,7 +272,7 @@ export default async function LabDetail({
                         <ConfirmButton
                           variant="secondary"
                           size="sm"
-                          confirm={`Remove ${m.username} from ${lab.name}? If "delete data" is checked, their files are permanently erased.`}
+                          confirm={`Remove ${m.username} from ${lab.name} on every node? If "delete data" is checked, their files are erased (shared cold data once, on the owner).`}
                         >
                           Remove
                         </ConfirmButton>
@@ -272,22 +287,23 @@ export default async function LabDetail({
       </Card>
 
       <Card>
-        <CardContent className="flex flex-wrap gap-3">
-          <form action={recreateContainerAction}>
-            <input type="hidden" name="labId" value={lab.id} />
-            <Button type="submit" variant="secondary">
-              Recreate container
-            </Button>
-          </form>
+        <CardContent className="flex flex-wrap items-center gap-3">
           <form action={destroyLabAction}>
             <input type="hidden" name="labId" value={lab.id} />
             <ConfirmButton
               variant="destructive"
-              confirm={`Destroy lab "${lab.name}"? This removes the container and ALL data (shared + every student), and deletes students that belong only to this lab. This cannot be undone.`}
+              confirm={
+                placements.length > 0
+                  ? `Delete lab "${lab.name}"? Its ${placements.length} placement(s) are torn down first (container + data on each node); the lab is removed once every node confirms.`
+                  : `Delete lab "${lab.name}"? This removes the lab and its roster, and any student left in no lab.`
+              }
             >
-              Destroy lab + data
+              Delete lab
             </ConfirmButton>
           </form>
+          <p className="text-xs text-muted-foreground">
+            Deleting tears down every placement first; storage on each node is destroyed with it.
+          </p>
         </CardContent>
       </Card>
     </div>

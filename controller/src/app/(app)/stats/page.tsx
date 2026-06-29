@@ -34,7 +34,7 @@ function ScanControl({ lab }: { lab: LabStats }) {
   return (
     <div className="flex flex-wrap items-center gap-2 text-xs">
       <form action={usageScanAction}>
-        <input type="hidden" name="labId" value={lab.labId} />
+        <input type="hidden" name="placementId" value={lab.placementId} />
         <SubmitButton variant="outline" size="sm" icon={<RefreshCw />} pendingText="Scanning…">
           Scan now
         </SubmitButton>

@@ -242,24 +242,28 @@ export function scheduleUsageScans(now = Date.now()): string[] {
   // to "no gate" so a misconfiguration never silently disables the scan (the gap guard still bounds it).
   const hour = hourInTimezone(now, getSetting("usageScanTimezone"));
   if (hour !== null && hour !== getSetting("usageScanHour")) return [];
-  const labs = db()
+  // One scan per ACTIVE placement on an online node (a lab may run on several nodes).
+  const placements = db()
     .prepare(
-      `SELECT labs.id AS id, labs.name AS name, nodes.name AS node, labs.last_usage_scan AS last
-       FROM labs JOIN nodes ON nodes.id = labs.node_id WHERE nodes.online = 1`,
+      `SELECT p.id AS id, p.lab_id AS lab_id, labs.name AS lab, nodes.name AS node, p.last_usage_scan AS last
+       FROM lab_placements p
+       JOIN labs ON labs.id = p.lab_id
+       JOIN nodes ON nodes.id = p.node_id
+       WHERE nodes.online = 1 AND p.state = 'active'`,
     )
-    .all() as { id: number; name: string; node: string; last: number | null }[];
+    .all() as { id: number; lab_id: number; lab: string; node: string; last: number | null }[];
   const scheduled: string[] = [];
-  for (const lab of labs) {
-    if (lab.last && now - lab.last < USAGE_SCAN_MIN_GAP_MS) continue;
+  for (const p of placements) {
+    if (p.last && now - p.last < USAGE_SCAN_MIN_GAP_MS) continue;
     const users = (db()
       .prepare(
         `SELECT students.username AS username FROM lab_members
          JOIN students ON students.id = lab_members.student_id WHERE lab_members.lab_id = ?`,
       )
-      .all(lab.id) as { username: string }[]).map((r) => r.username);
-    enqueueTask(lab.node, "usage.scan", { lab: lab.name, users }, "usage-scheduler");
-    db().prepare("UPDATE labs SET last_usage_scan = ? WHERE id = ?").run(now, lab.id);
-    scheduled.push(lab.name);
+      .all(p.lab_id) as { username: string }[]).map((r) => r.username);
+    enqueueTask(p.node, "usage.scan", { lab: p.lab, users }, "usage-scheduler");
+    db().prepare("UPDATE lab_placements SET last_usage_scan = ? WHERE id = ?").run(now, p.id);
+    scheduled.push(`${p.lab}@${p.node}`);
   }
   return scheduled;
 }

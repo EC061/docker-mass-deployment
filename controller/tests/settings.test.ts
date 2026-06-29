@@ -135,31 +135,4 @@ describe("broadcastGpuPolicy", () => {
   });
 });
 
-describe("nextSshPort", () => {
-  it("returns the lowest free port, skipping assigned ones", () => {
-    dbmod.db().prepare("DELETE FROM labs").run();
-    settings.setSetting("sshPortStart", 50000);
-    settings.setSetting("sshPortEnd", 50005);
-    const nodeId = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='n1'").get() as any).id;
-    dbmod
-      .db()
-      .prepare(
-        "INSERT INTO labs (name, node_id, fast_quota_bytes, slow_quota_bytes, image, ssh_port, created_at) VALUES ('l1', ?, 1, 1, 'i', 50000, 0)",
-      )
-      .run(nodeId);
-    expect(settings.nextSshPort()).toBe(50001);
-  });
-
-  it("throws when the whole range is exhausted", () => {
-    settings.setSetting("sshPortStart", 60000);
-    settings.setSetting("sshPortEnd", 60000);
-    const nodeId = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='n1'").get() as any).id;
-    dbmod
-      .db()
-      .prepare(
-        "INSERT INTO labs (name, node_id, fast_quota_bytes, slow_quota_bytes, image, ssh_port, created_at) VALUES ('l2', ?, 1, 1, 'i', 60000, 0)",
-      )
-      .run(nodeId);
-    expect(() => settings.nextSshPort()).toThrow(/No free SSH port/);
-  });
-});
+// SSH-port allocation moved to placements.nextSshPortForNode (per node) — see placements.test.ts.

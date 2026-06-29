@@ -41,8 +41,11 @@ export function db(): Database.Database {
   return conn;
 }
 
-/** Ordered migrations. Append-only — never edit a shipped migration. */
-const MIGRATIONS: { id: string; sql: string }[] = [
+/**
+ * Ordered migrations. Append-only — never edit a shipped migration. Each entry runs either a `sql`
+ * string or a `fn(conn)` (for guards / data-dependent logic), inside a single transaction.
+ */
+const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => void }[] = [
   {
     id: "0001_init",
     sql: `
@@ -263,6 +266,122 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     ALTER TABLE labs RENAME COLUMN last_oldfile_scan TO last_usage_scan;
     `,
   },
+  {
+    // Redesign: split node-pinned labs into node-independent LOGICAL labs + per-node PLACEMENTS +
+    // per-placement student state. This is intentionally NOT backward compatible (pre-release): the
+    // guard refuses to migrate while any legacy labs/nodes/students rows remain, so the operator must
+    // export + delete old labs/placements and delete all nodes (then reprovision) before upgrading.
+    // Admin accounts and controller settings are preserved.
+    id: "0009_redesign_placements",
+    fn: (conn) => {
+      const count = (t: string): number =>
+        (conn.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n;
+      const legacy = count("labs") + count("nodes") + count("students");
+      if (legacy > 0) {
+        throw new Error(
+          "Cannot upgrade: the redesigned schema requires labs, nodes, and students to be empty " +
+            "(legacy node-bound labs and shared-token nodes are not migrated). Export anything you " +
+            "need, then delete every lab/placement and every node (reprovision nodes after upgrade). " +
+            "Admin accounts and controller settings are preserved. See UPGRADING.md.",
+        );
+      }
+      conn.exec(`
+        -- Drop children before parents; all are guaranteed empty by the guard above.
+        DROP TABLE IF EXISTS placement_members;
+        DROP TABLE IF EXISTS lab_placements;
+        DROP TABLE IF EXISTS lab_members;
+        DROP TABLE IF EXISTS storage_samples;
+        DROP TABLE IF EXISTS quota_alerts;
+        DROP TABLE IF EXISTS labs;
+        DROP TABLE IF EXISTS students;
+
+        -- Students: globally reusable, matched by student_id (when present) then username.
+        CREATE TABLE students (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          student_id TEXT UNIQUE,            -- import identity when present
+          username TEXT NOT NULL UNIQUE,     -- normalized; globally unique
+          email TEXT,
+          name TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- Logical lab: node-independent. Operational config lives on placements.
+        CREATE TABLE labs (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT NOT NULL UNIQUE,         -- globally unique, filesystem-safe
+          pi_name TEXT,
+          pi_email TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL DEFAULT 0
+        );
+
+        -- The logical roster. Membership is synced to every placement.
+        CREATE TABLE lab_members (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          lab_id INTEGER NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+          student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+          created_at INTEGER NOT NULL,
+          UNIQUE(lab_id, student_id)
+        );
+
+        -- One lab on one node. Carries the node-specific quotas/image/port/options + lifecycle state.
+        CREATE TABLE lab_placements (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          lab_id INTEGER NOT NULL REFERENCES labs(id) ON DELETE CASCADE,
+          node_id INTEGER NOT NULL REFERENCES nodes(id),
+          fast_quota_bytes INTEGER NOT NULL,
+          cold_quota_bytes INTEGER,          -- NULL on SMB-client placements (owner-managed cold)
+          ssh_port INTEGER NOT NULL,
+          image TEXT NOT NULL,
+          container_options TEXT,            -- JSON; frozen after create (change via recreate)
+          state TEXT NOT NULL DEFAULT 'queued',   -- queued|provisioning|active|failed|deleting
+          last_error TEXT,
+          usage_scanned_at INTEGER,          -- last per-student du scan time, from telemetry
+          last_usage_scan INTEGER,           -- last time controller enqueued a nightly usage.scan
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(lab_id, node_id),
+          UNIQUE(node_id, ssh_port)
+        );
+
+        -- Per-(placement, student) provisioning state, so a per-node failure stays visible+retryable.
+        CREATE TABLE placement_members (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          placement_id INTEGER NOT NULL REFERENCES lab_placements(id) ON DELETE CASCADE,
+          student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+          state TEXT NOT NULL DEFAULT 'queued',  -- queued|provisioning|active|failed|removing
+          last_error TEXT,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(placement_id, student_id)
+        );
+
+        -- Storage samples now carry the placement (a lab can run on several nodes).
+        CREATE TABLE storage_samples (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          placement_id INTEGER REFERENCES lab_placements(id) ON DELETE CASCADE,
+          lab_id INTEGER REFERENCES labs(id) ON DELETE CASCADE,
+          student_id INTEGER REFERENCES students(id) ON DELETE SET NULL,
+          pool TEXT NOT NULL,                -- fast|slow|docker
+          used_bytes INTEGER NOT NULL,
+          quota_bytes INTEGER,
+          ts INTEGER NOT NULL
+        );
+        CREATE INDEX idx_storage_ts ON storage_samples(ts);
+        CREATE INDEX idx_storage_placement ON storage_samples(placement_id);
+
+        CREATE TABLE quota_alerts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          placement_id INTEGER REFERENCES lab_placements(id) ON DELETE CASCADE,
+          lab_id INTEGER REFERENCES labs(id) ON DELETE CASCADE,
+          pool TEXT NOT NULL,
+          pct REAL NOT NULL,
+          ts INTEGER NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 function migrate(conn: Database.Database): void {
@@ -276,7 +395,8 @@ function migrate(conn: Database.Database): void {
   for (const m of MIGRATIONS) {
     if (applied.has(m.id)) continue;
     const tx = conn.transaction(() => {
-      conn.exec(m.sql);
+      if (m.sql) conn.exec(m.sql);
+      if (m.fn) m.fn(conn);
       insert.run(m.id, Date.now());
     });
     tx();
