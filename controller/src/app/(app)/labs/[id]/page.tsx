@@ -18,7 +18,6 @@ import {
   addMemberAction,
   destroyLabAction,
   grantNodeAccessAction,
-  recreatePlacementAction,
   removeMemberAction,
   removePlacementAction,
   setPlacementQuotaAction,
@@ -102,13 +101,12 @@ function PlacementCard({ p }: { p: Placement }) {
           <Button type="submit">Apply (live)</Button>
         </form>
 
-        <div className="flex flex-wrap gap-3">
-          <form action={recreatePlacementAction}>
-            <input type="hidden" name="placementId" value={p.id} />
-            <Button type="submit" variant="secondary" size="sm">
-              Recreate container
+        <div className="flex flex-wrap items-center gap-3">
+          <a href={`/labs/${p.lab_id}/placements/${p.id}/recreate`}>
+            <Button type="button" variant="secondary" size="sm">
+              Recreate container…
             </Button>
-          </form>
+          </a>
           <form action={removePlacementAction}>
             <input type="hidden" name="placementId" value={p.id} />
             <ConfirmButton

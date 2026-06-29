@@ -15,6 +15,7 @@ The container mounts, fixed at creation:
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 
 from .base import CommandResult, run
@@ -145,6 +146,55 @@ def create_container(name: str, opts: ContainerOptions, mounts: Mounts, *, gpus:
     if not res.ok:
         raise DockerError(res.logs)
     return res.stdout.strip()
+
+
+# --------------------------------------------------------------------------- recreate primitives
+
+
+def image_present(image: str) -> bool:
+    """True if the image is already available locally (no registry round-trip)."""
+    return run(["docker", "image", "inspect", image], timeout=60).ok
+
+
+def ensure_image(image: str) -> None:
+    """Make sure the image is usable before we touch the running container: validate it, and if it
+    isn't present locally, try to pull it. Raises if it remains unavailable. Lab base images are
+    typically built locally (no registry), so a present local image is the common success path."""
+    validate_image(image)
+    if image_present(image):
+        return
+    pulled = run(["docker", "pull", image], timeout=600)
+    if not pulled.ok or not image_present(image):
+        raise DockerError(f"image '{image}' unavailable locally and pull failed: {pulled.logs}")
+
+
+def rename_container(old: str, new: str) -> None:
+    res = run(["docker", "rename", old, new], timeout=60)
+    if not res.ok:
+        raise DockerError(res.logs)
+
+
+def stop_container(name: str, *, timeout: float = 60.0) -> None:
+    run(["docker", "stop", name], timeout=timeout + 30)
+
+
+def start_container(name: str) -> None:
+    res = run(["docker", "start", name], timeout=120)
+    if not res.ok:
+        raise DockerError(res.logs)
+
+
+def wait_systemd_ready(name: str, *, timeout: float = 90.0, interval: float = 2.0) -> bool:
+    """Poll until sshd is active under the container's systemd, or the timeout elapses. Verifies a
+    freshly recreated container actually came up before promoting it over the preserved old one."""
+    deadline = time.monotonic() + timeout
+    while True:
+        res = exec_in(name, ["systemctl", "is-active", "ssh"], timeout=15)
+        if res.ok and res.stdout.strip() == "active":
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(interval)
 
 
 def exec_in(name: str, argv: list[str], *, input_text: str | None = None,
