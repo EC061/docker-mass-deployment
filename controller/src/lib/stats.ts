@@ -71,21 +71,55 @@ function latestSamples(): Map<string, Cell> {
   return map;
 }
 
-/** Set of `${node}::${labName}` with an in-flight (queued/sent) usage.scan task. */
-function pendingUsageScans(): Set<string> {
+// After a usage.scan task is marked done we keep treating the lab as "scanning" until the fresh
+// per-student numbers actually land. The agent runs the scan synchronously and marks the task `ok`
+// the instant it returns, but the new du breakdown (and usage_scanned_at) only reach us on the
+// *next* heartbeat — so without this grace the "Scan now" button would pop back while the table is
+// still showing the pre-scan numbers. Bounded so a heartbeat that never arrives can't hide the
+// button forever.
+const SCAN_INGEST_GRACE_MS = 10 * 60 * 1000;
+
+/**
+ * Most-recent usage.scan task per `${node}::${labName}` — its state and when it was requested. We
+ * keep only the latest so a stale ok/failed task never masks a newer in-flight one; `scanPending`
+ * (computed per lab in buildStats, where the scan-freshness timestamp is known) reads off this.
+ */
+function latestUsageScans(): Map<string, { state: string; createdAt: number }> {
   const rows = db()
-    .prepare("SELECT node, params FROM task_log WHERE action = 'usage.scan' AND state IN ('queued', 'sent')")
-    .all() as { node: string; params: string | null }[];
-  const set = new Set<string>();
+    .prepare(
+      "SELECT node, params, state, created_at AS createdAt FROM task_log WHERE action = 'usage.scan' ORDER BY created_at ASC",
+    )
+    .all() as { node: string; params: string | null; state: string; createdAt: number }[];
+  const map = new Map<string, { state: string; createdAt: number }>();
   for (const r of rows) {
     try {
       const lab = (JSON.parse(r.params ?? "{}") as { lab?: string }).lab;
-      if (lab) set.add(`${r.node}::${lab}`);
+      if (lab) map.set(`${r.node}::${lab}`, { state: r.state, createdAt: r.createdAt });
     } catch {
       /* ignore malformed params */
     }
   }
-  return set;
+  return map;
+}
+
+/** Whether a lab should still read as "scanning" given its latest scan task and data freshness. */
+function isScanPending(
+  scan: { state: string; createdAt: number } | undefined,
+  usageScannedAt: number | null,
+  now: number,
+): boolean {
+  if (!scan) return false;
+  // Dispatched and not yet acknowledged done.
+  if (scan.state === "queued" || scan.state === "sent") return true;
+  // Done on the agent, but keep "scanning" until the post-scan heartbeat advances usage_scanned_at
+  // past when we requested it (i.e. the new numbers have been ingested).
+  if (scan.state === "ok") {
+    return (
+      (usageScannedAt === null || usageScannedAt < scan.createdAt) &&
+      now - scan.createdAt < SCAN_INGEST_GRACE_MS
+    );
+  }
+  return false; // failed / unknown
 }
 
 export function buildStats(): NodeStats[] {
@@ -98,7 +132,7 @@ export function buildStats(): NodeStats[] {
   };
 
   const labs = listLabs();
-  const pending = pendingUsageScans();
+  const scans = latestUsageScans();
   const now = Date.now();
   const byNode = new Map<string, NodeStats>();
 
@@ -127,7 +161,7 @@ export function buildStats(): NodeStats[] {
       },
       usageScannedAt,
       scanStale: usageScannedAt === null || now - usageScannedAt > USAGE_STALE_MS,
-      scanPending: pending.has(`${lab.node_name}::${lab.name}`),
+      scanPending: isScanPending(scans.get(`${lab.node_name}::${lab.name}`), usageScannedAt, now),
     };
 
     let node = byNode.get(lab.node_name);
