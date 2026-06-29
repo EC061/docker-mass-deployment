@@ -40,9 +40,10 @@ export interface LabStats {
   scanPending: boolean; // a usage.scan task is queued/sent for this lab and not yet done
 }
 
-// A per-student usage scan older than this warrants offering a manual rescan. Matches the agent's
-// default unprompted docker-scan cadence (docker_scan_interval_s = 1h).
-const USAGE_STALE_MS = 60 * 60 * 1000;
+// A per-student usage scan older than this is tinted "stale" on the page. The scan runs nightly, so
+// during healthy operation data is up to ~a day old; this sits just past a day so only an actually
+// missed night (or a never-scanned lab) reads as stale, not the normal end-of-day age.
+const USAGE_STALE_MS = 25 * 60 * 60 * 1000;
 
 export interface NodeStats {
   node: string;

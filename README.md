@@ -55,8 +55,6 @@ sudo zfs create slow/labs
 ### 1.2 Dataset properties
 
 ```bash
-# atime ON so the old-file scanner can report truly-unused files (NOT relatime/noatime).
-sudo zfs set atime=on fast/labs slow/labs
 sudo zfs set compression=lz4 fast slow
 sudo zfs set xattr=sa fast slow
 # Larger records suit bulk/cold data; default (128K) is fine for fast scratch.
@@ -227,8 +225,8 @@ When two nodes need their containers to see the **same** cold data, one node own
 and the other mounts it over SMB:
 
 - **Owner node** — installed normally (zfs backend). It owns the `slow` pool, creates the cold
-  datasets, enforces quotas, runs old-file scans, scrubs it, and reports its usage. Export the pool
-  over SMB (e.g. Samba) so the other node can mount it.
+  datasets, enforces quotas, scrubs it, and reports its usage. Export the pool over SMB (e.g. Samba)
+  so the other node can mount it.
 - **Client node** — mounts that export (via `/etc/fstab` or `systemd.mount`), then installs the
   agent with the SMB cold-storage backend so its containers bind-mount the shared data:
 
@@ -243,8 +241,8 @@ sudo uvx --locked --from "git+https://github.com/EC061/docker-mass-deployment@v1
 - `--slow-shared` marks the share as mounted on more than one node, so the client only ever touches
   its own labs' sub-directories (guarded deletes).
 - The client is a **pure consumer**: it makes the per-lab/per-student directories its containers
-  bind-mount, but does **no** quota, usage telemetry, old-file scan, or scrub for cold storage — the
-  owner node does all of that for the same data. The fast tier is still a local ZFS pool either way.
+  bind-mount, but does **no** quota, usage telemetry, or scrub for cold storage — the owner node
+  does all of that for the same data. The fast tier is still a local ZFS pool either way.
 
 ---
 
@@ -295,7 +293,9 @@ open **Settings** and configure:
 - **Email (external SMTP)** — host/port/user/pass/from; click *Send test*.
 - **WebDAV backup** — URL/credentials, retention, and backup interval.
 - **GPU idle policy** — enable, thresholds, grace, whitelist; *Save & push to nodes*.
-- **Storage & ports** — default fast/slow quotas, SSH port range, old-file threshold.
+- **Storage & ports** — default fast/slow quotas and SSH port range.
+- **Per-student usage scan** — enable the nightly per-student `du` scan and set its hour/timezone
+  (container-level usage is measured live every heartbeat and is not gated by this).
 - **ZFS scrub** — enable scheduled scrubs and set the interval (days); *Scrub now* runs one
   immediately. Only ZFS-capable nodes are scrubbed; SMB cold storage is skipped.
 - **Alerts & logs** — alert level (WARN/ERROR), dedup window, quota alert %, log retention.
@@ -311,7 +311,7 @@ open **Settings** and configure:
 - **Labs** — create a lab (pick its node, fast/slow quota, base image, and container options). Container
   options (CPU/RAM/shared-memory/image-size quota/restart) are **set once at creation**; changing them
   needs *Recreate container* (data is preserved). All GPUs are always attached. Quotas are editable
-  **live**. The lab detail page shows storage-over-time, members, and old-file counts (*Rescan now*).
+  **live**. The lab detail page shows storage-over-time and members.
 - **Students** — add a student to a lab (a password is generated and emailed; shown once in the UI) or
   bulk-import from CSV with a configurable column mapping. Removing a student optionally deletes their
   data.
