@@ -6,10 +6,10 @@ The fast tier is always ZFS. The slow tier can be either:
   * smb — an SMB/CIFS mount of a slow ZFS pool that lives on **another** node. This node is a pure
           client: it makes the per-lab/per-student directories on the share (so its containers have
           a bind-mount source) and exposes the mount paths, but it does **not** monitor cold storage
-          — no quotas, no usage telemetry, no old-file scans, no scrubs. The node that physically
-          owns the pool runs the zfs backend and does all of that for the same data.
+          — no quotas, no usage telemetry, no scrubs. The node that physically owns the pool runs
+          the zfs backend and does all of that for the same data.
 
-Callers (labops, studentops, containerops, scan, telemetry) go through this module for everything
+Callers (labops, studentops, containerops, telemetry) go through this module for everything
 on the slow tier so the backend choice lives in exactly one place. Usage is always returned as a
 ``zfs.Usage`` so the rest of the agent treats both backends uniformly.
 """
@@ -72,9 +72,9 @@ def users_mount(cfg: AgentConfig, lab: str) -> str:
     return paths.cold_lab_users(cfg, lab)
 
 
-# --------------------------------------------------------------------------- usage + scanning
-# On the SMB backend this node does not monitor cold storage — the owner node (zfs) reports usage,
-# runs old-file scans, and scrubs the same data. So usage/scan helpers return "nothing here".
+# --------------------------------------------------------------------------- usage
+# On the SMB backend this node does not monitor cold storage — the owner node (zfs) reports usage
+# and scrubs the same data. So the usage helpers return "nothing here".
 
 
 def lab_usage(cfg: AgentConfig, lab: str) -> Usage:
@@ -98,38 +98,3 @@ def list_usage(cfg: AgentConfig) -> list[dict[str, Any]]:
         }
         for u in zfs.list_usage(cfg.labs_slow_root)
     ]
-
-
-def shared_scan_dir(cfg: AgentConfig, lab: str) -> str | None:
-    """Existing directory holding a lab's shared cold data, or None (None on the SMB client)."""
-    if not cfg.slow_is_zfs:
-        return None
-    return _zfs_scan_dir(paths.lab_slow_shared(cfg, lab))
-
-
-def user_scan_dir(cfg: AgentConfig, lab: str, user: str) -> str | None:
-    """Existing directory holding a student's cold data, or None (None on the SMB client).
-
-    A student's cold storage is a plain subdir of the lab's single slow `users` dataset (no
-    per-student datasets), so resolve that dataset's mountpoint and join the username under it.
-    """
-    if not cfg.slow_is_zfs:
-        return None
-    import os
-
-    users_mp = _zfs_scan_dir(paths.lab_slow_users(cfg, lab))
-    if users_mp is None:
-        return None
-    d = os.path.join(users_mp, user)
-    return d if os.path.isdir(d) else None
-
-
-def _zfs_scan_dir(dataset: str) -> str | None:
-    import os
-
-    if not zfs.dataset_exists(dataset):
-        return None
-    mp = zfs.get_mountpoint(dataset)
-    if not mp or mp in ("none", "legacy") or not os.path.isdir(mp):
-        return None
-    return mp

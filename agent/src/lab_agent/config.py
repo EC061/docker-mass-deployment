@@ -49,9 +49,11 @@ class AgentConfig:
     heartbeat_interval_s: int = 15
     # How often the per-lab labquota usage snapshot is republished (live ZFS metadata only — cheap).
     usage_publish_interval_s: int = 120
-    # How often the (expensive) docker writable-layer scan runs unprompted, and the freshness gate
-    # below which a student-requested refresh is skipped as "already fresh".
-    docker_scan_interval_s: int = 3600
+    # Fallback cadence for the (expensive) per-student du scan when the agent runs it unprompted,
+    # and the freshness gate below which a student-requested refresh is skipped as "already fresh".
+    # The controller schedules the precise off-peak nightly scan (Settings -> per-student usage
+    # scan); this daily fallback just keeps per-student numbers from going fully stale if disabled.
+    docker_scan_interval_s: int = 86400
     # Weekly in-container security patching (docker exec apt-get update && upgrade), driven by the
     # agent off a persistent local record so the pinned base image never needs rebuilding for CVEs.
     apt_update_enabled: bool = True

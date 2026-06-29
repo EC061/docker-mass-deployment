@@ -266,10 +266,13 @@ class Agent:
                 self.log.warn("usage", f"publish failed for lab '{lab}': {exc}", lab=lab)
 
     async def _docker_scan_loop(self) -> None:
-        """Refresh the (expensive) docker writable-layer breakdown on a slow cadence / on demand.
+        """Refresh the (expensive) per-student du breakdown on a daily fallback cadence / on demand.
 
-        A lab is (re)scanned when its cached data is older than ``docker_scan_interval_s``, or when
-        a student dropped a refresh marker and the cache is older than the forced floor (5 min).
+        A lab is (re)scanned when its cached data is older than ``docker_scan_interval_s`` (a daily
+        safety net; the controller drives the precise off-peak nightly scan), or when a student
+        dropped a refresh marker and the cache is older than the forced floor (5 min). The
+        container-level writable-layer total is NOT scanned here — it is measured live every
+        heartbeat (see ``telemetry`` / ``usagereport.live_docker_dataset``).
         """
         floor_ms = 5 * 60 * 1000
         while True:
