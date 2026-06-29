@@ -1,7 +1,8 @@
 import { takeFlash } from "@/lib/flash";
 import { listLabs } from "@/lib/labs";
-import { createLabAction } from "./actions";
+import { applyLabImportAction, createLabAction, previewLabImportAction } from "./actions";
 import { CreateLabForm, type LabTemplate } from "./_components/CreateLabForm";
+import { LabImportForm } from "./_components/LabImportForm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -40,6 +41,13 @@ export default async function LabsPage({
             </p>
           </div>
           <CreateLabForm labs={templates} action={createLabAction} />
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h3 className="text-base font-semibold">Import labs &amp; rosters from CSV</h3>
+          <LabImportForm preview={previewLabImportAction} apply={applyLabImportAction} />
         </CardContent>
       </Card>
 
