@@ -31,8 +31,7 @@ A_GPU_POLICY_UPDATE = "gpu.policy.update"
 A_NODE_REPORT_STATE = "node.report_state"
 A_NODE_BACKUP = "node.backup"
 A_NODE_SCRUB = "node.scrub"
-A_OLDFILES_SCAN = "oldfiles.scan"
-A_USAGE_SCAN = "usage.scan"  # on-demand per-student storage (du) scan for one lab
+A_USAGE_SCAN = "usage.scan"  # per-student storage (du) scan for one lab (nightly + on-demand)
 
 
 def now_ms() -> int:

@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import coldstore
+from . import coldstore, usagereport
 from .config import AgentConfig
 from .executors import zfs
 from .executors.base import run
@@ -40,6 +40,7 @@ def _pools(cfg: AgentConfig) -> list[dict[str, Any]]:
 
 def _dataset_usage(cfg: AgentConfig, docker_state: Any = None) -> list[dict[str, Any]]:
     out = []
+    labs: set[str] = set()
     for u in zfs.list_usage(cfg.labs_fast_root):
         out.append(
             {
@@ -50,13 +51,23 @@ def _dataset_usage(cfg: AgentConfig, docker_state: Any = None) -> list[dict[str,
                 "available_bytes": u.available_bytes,
             }
         )
+        parsed = usagereport._parse_dataset(u.dataset, cfg.labs_fast_root)
+        if parsed is not None and parsed[1] is None:  # lab-level row -> a lab to measure
+            labs.add(parsed[0])
     out.extend(coldstore.list_usage(cfg))
-    # Cached scan results: the docker writable layer (pool="docker") plus the per-student scratch/
-    # cold ``du`` breakdown (pool="fast"/"slow"), so the controller stores per-student usage that
-    # ZFS metadata can't break down. Computed by the scan loop / on demand, not measured here.
     if docker_state is not None:
-        from . import usagereport
-
+        labs |= set(docker_state.all_docker().keys())
+    # Container-level usage: the whole-container writable layer (pool="docker", lab level), measured
+    # LIVE every heartbeat (one cheap ``docker inspect --size`` per lab) so the Stats page's
+    # whole-image number is always current rather than frozen until the next scan.
+    for lab in sorted(labs):
+        row = usagereport.live_docker_dataset(lab)
+        if row is not None:
+            out.append(row)
+    # Per-student breakdown from the (expensive) scan cache: each student's docker home (installed
+    # software) plus their scratch/cold ``du``. Updated only by the nightly / on-demand scan, so the
+    # heartbeat just re-reports the cached numbers — they change on disk only when a scan reruns.
+    if docker_state is not None:
         for lab, usage in docker_state.all_docker().items():
             out.extend(usagereport.docker_datasets(lab, usage))
             out.extend(usagereport.tier_datasets(lab, usage))
@@ -65,7 +76,7 @@ def _dataset_usage(cfg: AgentConfig, docker_state: Any = None) -> list[dict[str,
 
 def _usage_scans(docker_state: Any = None) -> list[dict[str, Any]]:
     """Per-lab timestamp of the last per-student usage (``du``) scan, so the controller can show
-    data freshness and decide whether an on-demand rescan is warranted."""
+    data freshness and decide whether an on-demand re-scan is warranted."""
     if docker_state is None:
         return []
     return [

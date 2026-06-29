@@ -87,6 +87,8 @@ def test_collect_heartbeat_assembles_all_sections(monkeypatch):
     monkeypatch.setattr(telemetry.zfs, "scrub_status",
                         lambda p: SimpleNamespace(to_dict=lambda: {"pool": p, "healthy": True}))
     monkeypatch.setattr(telemetry, "list_gpu_processes", lambda: [{"pid": 1, "vram_bytes": 1024}])
+    # No container present -> no live container-level docker row.
+    monkeypatch.setattr(telemetry.usagereport, "live_docker_dataset", lambda lab: None)
 
     hb = telemetry.collect_heartbeat(cfg)
     assert {p["name"] for p in hb["pools"]} == {"fast", "slow"}
@@ -99,7 +101,12 @@ def test_collect_heartbeat_assembles_all_sections(monkeypatch):
 
 
 def test_collect_heartbeat_includes_scan_breakdown(monkeypatch):
-    """A populated scan cache contributes per-student docker/fast/slow rows + a scan timestamp."""
+    """Live container total + cached per-student docker/fast/slow rows + a scan timestamp.
+
+    The lab-level docker row is measured live (``live_docker_dataset``); the per-student rows come
+    from the scan cache. A lab present only in the cache (no fast dataset rows this heartbeat) is
+    still measured live, so the whole-image number never disappears between scans.
+    """
     from lab_agent import usagereport
 
     cfg = _cfg()
@@ -110,6 +117,11 @@ def test_collect_heartbeat_includes_scan_breakdown(monkeypatch):
     monkeypatch.setattr(telemetry.zfs, "scrub_status",
                         lambda p: SimpleNamespace(to_dict=lambda: {"pool": p}))
     monkeypatch.setattr(telemetry, "list_gpu_processes", lambda: [])
+    monkeypatch.setattr(
+        telemetry.usagereport, "live_docker_dataset",
+        lambda lab: {"pool": "docker", "dataset": f"docker/labs/{lab}", "used_bytes": 300,
+                     "quota_bytes": None} if lab == "bio" else None,
+    )
 
     state = usagereport.UsageState()
     state.set_docker("bio", usagereport.DockerUsage(
@@ -119,7 +131,7 @@ def test_collect_heartbeat_includes_scan_breakdown(monkeypatch):
 
     hb = telemetry.collect_heartbeat(cfg, state)
     rows = {(d["pool"], d["dataset"]): d["used_bytes"] for d in hb["datasets"]}
-    assert rows[("docker", "docker/labs/bio")] == 300
+    assert rows[("docker", "docker/labs/bio")] == 300  # live container total
     assert rows[("docker", "docker/labs/bio/users/alice")] == 120
     assert rows[("fast", "fast/labs/bio/users/alice")] == 40
     assert rows[("slow", "slow/labs/bio/users/alice")] == 10

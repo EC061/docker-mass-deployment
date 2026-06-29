@@ -2,7 +2,7 @@
 
 Handlers are registered per action. A handler returns ``(result, logs)`` on success or raises;
 any exception is caught and converted to ``ok=False`` so a single bad task never crashes the agent.
-New actions (lab/student/container/scan) are registered here as later phases land.
+New actions (lab/student/container/usage) are registered here as later phases land.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ class Dispatcher:
         self._handlers[action] = handler
 
     def _register_builtin(self) -> None:
-        from . import backup, containerops, labops, maintenance, scan, studentops
+        from . import backup, containerops, labops, maintenance, studentops
         from .gpu import policy as gpu_policy
 
         self.register(P.A_NODE_REPORT_STATE, self._report_state)
@@ -44,7 +44,6 @@ class Dispatcher:
         self.register(P.A_STUDENT_ADD, studentops.add_student)
         self.register(P.A_STUDENT_REMOVE, studentops.remove_student)
         self.register(P.A_GPU_POLICY_UPDATE, gpu_policy.update_policy_handler)
-        self.register(P.A_OLDFILES_SCAN, scan.scan_lab)
 
     def _report_state(self, cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
         caps = detect_capabilities(cfg)

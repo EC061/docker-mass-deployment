@@ -135,17 +135,32 @@ def test_list_lab_students_missing_mount(monkeypatch):
     assert usagereport.list_lab_students(cfg(), "bio") == []
 
 
-def test_docker_datasets_telemetry_rows():
+def test_docker_datasets_are_per_student_only():
+    # The lab-level container total is measured live (live_docker_dataset), not from this cache.
     usage = usagereport.DockerUsage(total_used=300, per_user={"alice": 120})
     rows = usagereport.docker_datasets("bio", usage)
-    assert {"pool": "docker", "dataset": "docker/labs/bio", "used_bytes": 300, "quota_bytes": None} in rows
     assert {"pool": "docker", "dataset": "docker/labs/bio/users/alice", "used_bytes": 120,
             "quota_bytes": None} in rows
-
-
-def test_docker_datasets_omits_total_when_unknown():
-    rows = usagereport.docker_datasets("bio", usagereport.DockerUsage(per_user={"alice": 120}))
     assert all(r["dataset"] != "docker/labs/bio" for r in rows)
+
+
+def test_live_docker_dataset_measures_writable_layer(monkeypatch):
+    monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
+    monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: 4242)
+    assert usagereport.live_docker_dataset("bio") == {
+        "pool": "docker", "dataset": "docker/labs/bio", "used_bytes": 4242, "quota_bytes": None,
+    }
+
+
+def test_live_docker_dataset_none_when_no_container(monkeypatch):
+    monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: False)
+    assert usagereport.live_docker_dataset("bio") is None
+
+
+def test_live_docker_dataset_none_when_measure_fails(monkeypatch):
+    monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
+    monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: None)
+    assert usagereport.live_docker_dataset("bio") is None
 
 
 def test_tier_datasets_per_student_fast_and_cold():

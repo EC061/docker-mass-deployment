@@ -235,23 +235,39 @@ def build_snapshot(
     }
 
 
-def docker_datasets(lab: str, docker_usage: DockerUsage) -> list[dict[str, Any]]:
-    """Telemetry rows for the docker layer (pool="docker"), reusing the controller's ingest path.
+def live_docker_dataset(lab: str) -> dict[str, Any] | None:
+    """The lab-level docker writable-layer (``SizeRw``) telemetry row, measured **live**.
 
-    Dataset names mirror the ZFS layout (``docker/labs/<lab>[/users/<u>]``) so the controller's
-    existing ``parseDataset`` maps them to the right lab/student. quota is omitted (the writable
-    layer's fixed per-container limit is not a per-student quota and should not raise PI alerts).
+    This is the "whole image" / container-level number. Unlike the per-student ``du`` breakdown
+    (expensive, cached, refreshed only by a scan), the container total is cheap enough to re-measure
+    on every heartbeat via ``docker inspect --size``, so the controller's Stats page always shows
+    the current writable-layer size. Returns None when the container is absent or the measurement
+    fails, in which case the heartbeat omits the row and the controller keeps the last known value.
+    """
+    container = docker.container_name(lab)
+    if not docker.container_exists(container):
+        return None
+    total = docker.writable_layer_size(container)
+    if total is None:
+        return None
+    return {
+        "pool": "docker",
+        "dataset": f"docker/labs/{lab}",
+        "used_bytes": total,
+        "quota_bytes": None,
+    }
+
+
+def docker_datasets(lab: str, docker_usage: DockerUsage) -> list[dict[str, Any]]:
+    """Per-student docker-home telemetry rows from the cached scan (installed software per student).
+
+    The lab-level container total is **not** emitted here — it is measured live every heartbeat by
+    ``live_docker_dataset``. These per-student rows come from the (expensive) ``du`` scan cache and
+    only change when a scan runs. Dataset names mirror the ZFS layout
+    (``docker/labs/<lab>/users/<u>``) so the controller's ``parseDataset`` maps them to the right
+    student. quota is omitted (the writable layer is not a per-student quota and must not alert).
     """
     rows: list[dict[str, Any]] = []
-    if docker_usage.total_used is not None:
-        rows.append(
-            {
-                "pool": "docker",
-                "dataset": f"docker/labs/{lab}",
-                "used_bytes": docker_usage.total_used,
-                "quota_bytes": None,
-            }
-        )
     for user, used in docker_usage.per_user.items():
         rows.append(
             {

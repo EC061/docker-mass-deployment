@@ -99,6 +99,6 @@ def test_frame_type_and_action_constants_are_distinct():
         P.A_LAB_CREATE, P.A_LAB_SET_QUOTA, P.A_LAB_DESTROY,
         P.A_STUDENT_ADD, P.A_STUDENT_REMOVE, P.A_CONTAINER_RECREATE,
         P.A_GPU_POLICY_UPDATE, P.A_NODE_REPORT_STATE, P.A_NODE_BACKUP,
-        P.A_NODE_SCRUB, P.A_OLDFILES_SCAN,
+        P.A_NODE_SCRUB, P.A_USAGE_SCAN,
     }
     assert len(actions) == 11

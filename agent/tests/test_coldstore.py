@@ -78,9 +78,3 @@ def test_smb_lab_usage_not_measured_locally():
 def test_smb_list_usage_is_empty():
     # No cold-storage telemetry from the SMB client backend.
     assert coldstore.list_usage(_smb_cfg()) == []
-
-
-def test_smb_scan_dirs_are_skipped():
-    cfg = _smb_cfg()
-    assert coldstore.shared_scan_dir(cfg, "bio") is None
-    assert coldstore.user_scan_dir(cfg, "bio", "alice") is None
