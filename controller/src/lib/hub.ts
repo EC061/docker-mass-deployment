@@ -20,7 +20,7 @@ import {
   markPlacementMemberState,
   markPlacementStateByLabNode,
 } from "./placements";
-import { verifyNodeAuth } from "./nodes";
+import { nodeStillAuthorized, verifyNodeAuth } from "./nodes";
 import { ackTask, claimTask, markTaskState, retryTask } from "./queue";
 import { getSetting } from "./settings";
 
@@ -28,6 +28,11 @@ interface NodeConn {
   ws: WebSocket;
   node: string;
   consumer: NodeJS.Timeout;
+  // The stored token hash this socket authenticated with; re-checked each consumer tick so a revoke
+  // or token rotation in the UI drops the live socket promptly (see nodeStillAuthorized).
+  tokenHash: string;
+  // Liveness: cleared before each ping, set on the matching pong. A missed pong terminates the socket.
+  isAlive: boolean;
 }
 
 const connections = new Map<string, NodeConn>();
@@ -63,6 +68,11 @@ const MAX_FRAME_BYTES = 1024 * 1024; // 1 MiB
 // Per-connection message-rate cap: a token bucket refilling at RATE msgs/sec up to BURST.
 const MSG_RATE_PER_SEC = 50;
 const MSG_BURST = 100;
+// A freshly-opened socket must send a valid hello within this window or it is closed — bounds how
+// long an unauthenticated (scanner / slow-loris) socket can sit on a connection slot.
+const HELLO_DEADLINE_MS = 10_000;
+// Liveness: ping every connection on this cadence and terminate any that missed the previous pong.
+const PING_INTERVAL_MS = 30_000;
 
 export function createHub(): WebSocketServer {
   const wss = new WebSocketServer({ noServer: true, maxPayload: MAX_FRAME_BYTES });
@@ -71,6 +81,11 @@ export function createHub(): WebSocketServer {
     let node: string | null = null;
     let tokens = MSG_BURST;
     let lastRefill = Date.now();
+
+    // Close a socket that connects but never authenticates with a valid hello in time.
+    const helloTimer = setTimeout(() => {
+      if (!node) ws.close(4002, "hello timeout");
+    }, HELLO_DEADLINE_MS);
 
     ws.on("message", (raw) => {
       // Refill the bucket, then spend one token per message; flooding closes the socket.
@@ -92,6 +107,7 @@ export function createHub(): WebSocketServer {
 
       if (frame.type === "hello") {
         node = handleHello(ws, frame);
+        if (node) clearTimeout(helloTimer);
         return;
       }
       if (!node) return; // ignore everything until authenticated
@@ -99,12 +115,38 @@ export function createHub(): WebSocketServer {
     });
 
     ws.on("close", () => {
+      clearTimeout(helloTimer);
       if (node) deregisterNode(node);
     });
     ws.on("error", () => {
+      clearTimeout(helloTimer);
       if (node) deregisterNode(node);
     });
   });
+
+  // Liveness sweep: a half-open controller->agent socket (peer vanished without a TCP FIN) keeps a
+  // node's queue stalled because its slot looks occupied. Ping each connection; if it missed the
+  // previous ping's pong, terminate it so the slot frees and the agent reconnects. (The agent
+  // independently pings the controller via the ws client's own ping_interval, covering the reverse.)
+  const liveness = setInterval(() => {
+    for (const conn of connections.values()) {
+      if (!conn.isAlive) {
+        try {
+          conn.ws.terminate();
+        } catch {
+          /* ignore */
+        }
+        continue;
+      }
+      conn.isAlive = false;
+      try {
+        conn.ws.ping();
+      } catch {
+        /* ignore */
+      }
+    }
+  }, PING_INTERVAL_MS);
+  wss.on("close", () => clearInterval(liveness));
 
   return wss;
 }
@@ -137,12 +179,25 @@ function handleHello(ws: WebSocket, frame: any): string | null {
 
   registerNode(node, frame.capabilities ?? {});
   const consumer = setInterval(() => drainNode(node, ws), 400);
-  connections.set(node, { ws, node, consumer });
+  const conn: NodeConn = { ws, node, consumer, tokenHash: auth.tokenHash ?? "", isAlive: true };
+  ws.on("pong", () => {
+    conn.isAlive = true;
+  });
+  connections.set(node, conn);
   return node;
 }
 
 function drainNode(node: string, ws: WebSocket): void {
   if (ws.readyState !== ws.OPEN) return;
+  const conn = connections.get(node);
+  if (!conn || conn.ws !== ws) return;
+  // Immediate revoke / rotation: if the node was revoked (allowed=0) or its token was rotated since
+  // this socket authenticated, drop it now rather than keep feeding it privileged tasks.
+  if (!nodeStillAuthorized(node, conn.tokenHash)) {
+    ws.close(4001, "revoked");
+    deregisterNode(node);
+    return;
+  }
   const workerId = `${WORKER_PREFIX}-${node}`;
   // Send a small batch per tick to avoid hogging the loop.
   for (let i = 0; i < 20; i++) {

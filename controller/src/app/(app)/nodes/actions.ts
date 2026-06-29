@@ -2,6 +2,7 @@
 
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
+import { putFlash } from "@/lib/flash";
 import {
   type ColdBackend,
   deleteNode,
@@ -14,9 +15,12 @@ import {
 } from "@/lib/nodes";
 
 // The freshly issued token is shown once on the Nodes page so the admin can paste the printed
-// `lab-agent set-token` command onto the node. It is never stored in plaintext.
+// `lab-agent set-token` command onto the node. The cleartext NEVER goes in the redirect URL (it
+// would land in browser history / proxy access logs); instead it is stashed in the one-time
+// server-side flash store and the redirect carries only an opaque id, read+deleted on next render.
 function showToken(name: string, token: string): never {
-  redirect(`/nodes?provisioned=${encodeURIComponent(name)}&token=${encodeURIComponent(token)}`);
+  const flash = putFlash(token);
+  redirect(`/nodes?provisioned=${encodeURIComponent(name)}&token_flash=${flash}`);
 }
 
 export async function provisionNodeAction(formData: FormData) {

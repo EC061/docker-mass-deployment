@@ -396,6 +396,21 @@ const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => 
     ALTER TABLE nodes ADD COLUMN cold_ready INTEGER NOT NULL DEFAULT 0;
     `,
   },
+  {
+    // Phase 7: node tokens move from bcrypt + shared-token fallback to a single per-node HMAC.
+    // token_hash now stores HMAC-SHA256(key=AGENT_TOKEN, msg=name + NUL + plaintext), hex (see
+    // lib/nodes.ts). There is no shared/legacy token and no first-seen pin, so the auth_mode and
+    // token_pinned_at columns are dropped. nodes is empty here (the 0009 guard requires it and nodes
+    // are reprovisioned after upgrade); clear any token_hash anyway so a hash left over from an
+    // intermediate redesign commit (a bcrypt string) fails closed and forces a reprovision rather
+    // than being misread as an HMAC.
+    id: "0011_node_hmac_tokens",
+    sql: `
+    UPDATE nodes SET token_hash = NULL;
+    ALTER TABLE nodes DROP COLUMN auth_mode;
+    ALTER TABLE nodes DROP COLUMN token_pinned_at;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

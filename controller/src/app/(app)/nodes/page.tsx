@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import { takeFlash } from "@/lib/flash";
 import { listLocalZfsNodes } from "@/lib/nodes";
 import { ConfirmButton } from "../_components/ConfirmButton";
 import { ColdStorageForm } from "./_components/ColdStorageForm";
@@ -28,8 +29,6 @@ interface NodeRow {
   pools: string | null;
   scrub_status: string | null;
   allowed: number;
-  auth_mode: string;
-  token_pinned_at: number | null;
   cold_backend: "local_zfs" | "smb";
   owner_name: string | null;
   cold_mount_path: string | null;
@@ -85,9 +84,7 @@ function ago(ts: number | null): string {
 }
 
 function authLabel(n: NodeRow): string {
-  if (n.allowed !== 1) return "revoked";
-  if (n.auth_mode === "pernode") return n.token_pinned_at ? "per-node" : "per-node (pending)";
-  return "legacy token";
+  return n.allowed === 1 ? "per-node" : "revoked";
 }
 
 export default async function NodesPage({
@@ -97,14 +94,15 @@ export default async function NodesPage({
 }) {
   const sp = await searchParams;
   const provisioned = typeof sp.provisioned === "string" ? sp.provisioned : undefined;
-  const token = typeof sp.token === "string" ? sp.token : undefined;
+  // The one-time token is carried only as an opaque flash id (never the cleartext) — read + burn it.
+  const token = typeof sp.token_flash === "string" ? takeFlash(sp.token_flash) : null;
   const error = typeof sp.error === "string" ? sp.error : undefined;
   const deleted = typeof sp.deleted === "string" ? sp.deleted : undefined;
 
   const nodes = db()
     .prepare(
       `SELECT n.name, n.alias, n.online, n.last_seen, n.capabilities, n.pools, n.scrub_status,
-              n.allowed, n.auth_mode, n.token_pinned_at, n.cold_backend, n.cold_mount_path, n.cold_ready,
+              n.allowed, n.cold_backend, n.cold_mount_path, n.cold_ready,
               owner.name AS owner_name,
               (SELECT COUNT(*) FROM lab_placements WHERE node_id = n.id) AS placements
        FROM nodes n LEFT JOIN nodes owner ON owner.id = n.cold_owner_node_id ORDER BY n.name`,

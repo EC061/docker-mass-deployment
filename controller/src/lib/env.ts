@@ -118,11 +118,6 @@ export const env = {
   get isProd(): boolean {
     return process.env.NODE_ENV === "production";
   },
-  // Legacy shared-token auth during the per-node-token rollout. REMOVED in the redesign's Phase 7
-  // (HMAC per-node tokens only); kept here until then so intermediate commits still build.
-  get allowLegacyAgentToken(): boolean {
-    return process.env.ALLOW_LEGACY_AGENT_TOKEN !== "0";
-  },
 };
 
 /**
