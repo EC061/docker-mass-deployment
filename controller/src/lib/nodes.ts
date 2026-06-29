@@ -3,13 +3,17 @@
  *
  * The hub used to trust one shared AGENT_TOKEN plus whatever node name the client claimed, so any
  * token holder could impersonate any node and drain its privileged task queue (C-04). Each node now
- * has its own token (bcrypt-hashed at rest) and must be on the allow-list. A node is provisioned in
- * the UI; first successful per-node auth pins the identity. The shared token still works for nodes
- * left in 'legacy' mode during rollout (gated by env.allowLegacyAgentToken).
+ * has its OWN token and must be on the allow-list. There is no shared/legacy fallback.
+ *
+ *   token_hash = HMAC-SHA256(key = AGENT_TOKEN, message = node_name + NUL + plaintext_token), hex
+ *
+ * Keying the HMAC on the controller's AGENT_TOKEN means the stored hashes are useless without it (a
+ * stolen DB cannot be turned into a working node token), and rotating AGENT_TOKEN invalidates every
+ * node at once. Binding the node name into the message stops a token minted for one node from
+ * authenticating as another. The plaintext token is shown once at provision time and never stored.
  */
 
-import bcrypt from "bcryptjs";
-import { randomBytes } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { safeEqual } from "./auth";
 import { audit } from "./audit";
 import { db } from "./db";
@@ -28,6 +32,8 @@ export function isValidNodeName(name: string): boolean {
 export interface NodeAuthResult {
   ok: boolean;
   reason?: string;
+  /** The matched stored hash, so the hub can notice a later revoke/rotation on the live socket. */
+  tokenHash?: string;
 }
 
 /** Generate a fresh node token (the plaintext is shown once and never stored). */
@@ -35,54 +41,63 @@ export function generateNodeToken(): string {
   return randomBytes(24).toString("hex");
 }
 
+/**
+ * HMAC-SHA256 of (name + NUL + token) keyed on AGENT_TOKEN, hex. The NUL byte is an unambiguous
+ * separator so no two distinct (name, token) pairs can produce the same pre-image.
+ */
+export function nodeTokenHash(name: string, token: string): string {
+  return createHmac("sha256", env.agentToken).update(`${name}\0${token}`).digest("hex");
+}
+
 interface NodeAuthRow {
-  id: number;
   allowed: number;
   token_hash: string | null;
-  auth_mode: string;
-  token_pinned_at: number | null;
 }
 
 /**
- * Verify a hello frame's (name, token) against the node allow-list and credential. Synchronous so
- * it can run inline in the hub's message handler; uses bcrypt.compareSync.
+ * Verify a hello frame's (name, token) against the node allow-list and per-node HMAC. Synchronous
+ * (HMAC + constant-time compare) so it runs inline in the hub's message handler.
  */
 export function verifyNodeAuth(name: string, token: string): NodeAuthResult {
   if (!isValidNodeName(name)) return { ok: false, reason: "invalid node name" };
   if (!token) return { ok: false, reason: "missing token" };
   const row = db()
-    .prepare("SELECT id, allowed, token_hash, auth_mode, token_pinned_at FROM nodes WHERE name = ?")
+    .prepare("SELECT allowed, token_hash FROM nodes WHERE name = ?")
     .get(name) as NodeAuthRow | undefined;
   if (!row || row.allowed !== 1) return { ok: false, reason: "unknown or blocked node" };
-
-  if (row.auth_mode === "pernode") {
-    if (!row.token_hash || !bcrypt.compareSync(token, row.token_hash)) {
-      return { ok: false, reason: "bad node token" };
-    }
-    if (row.token_pinned_at === null) {
-      db().prepare("UPDATE nodes SET token_pinned_at = ? WHERE id = ?").run(Date.now(), row.id);
-    }
-    return { ok: true };
+  if (!row.token_hash) return { ok: false, reason: "node not provisioned" };
+  if (!safeEqual(nodeTokenHash(name, token), row.token_hash)) {
+    return { ok: false, reason: "bad node token" };
   }
+  return { ok: true, tokenHash: row.token_hash };
+}
 
-  // Legacy: shared AGENT_TOKEN, only while the rollout flag permits it.
-  if (!env.allowLegacyAgentToken) return { ok: false, reason: "legacy token disabled" };
-  if (!safeEqual(token, env.agentToken)) return { ok: false, reason: "bad token" };
-  return { ok: true };
+/**
+ * Whether a live connection may stay open: the node is still allow-listed AND its stored token hash
+ * is unchanged since it authenticated. The hub polls this on its consumer tick so a revoke or a
+ * token rotation drops the live socket within ~one tick, instead of lingering until the next
+ * reconnect. (A direct in-memory call from a Server Action can't reach the hub's socket map — the
+ * hub runs in the long-lived server.ts process, separate from Next's bundled action modules — so a
+ * DB-polled check is the reliable cross-process signal.)
+ */
+export function nodeStillAuthorized(name: string, tokenHash: string): boolean {
+  const row = db()
+    .prepare("SELECT allowed, token_hash FROM nodes WHERE name = ?")
+    .get(name) as NodeAuthRow | undefined;
+  return !!row && row.allowed === 1 && row.token_hash === tokenHash;
 }
 
 /** Register (or pre-register) a node and issue it a token. Returns the one-time plaintext token. */
 export function provisionNode(name: string, actor: string): string {
   if (!isValidNodeName(name)) throw new Error(`invalid node name '${name}'`);
   const token = generateNodeToken();
-  const hash = bcrypt.hashSync(token, 10);
+  const hash = nodeTokenHash(name, token);
   const now = Date.now();
   db()
     .prepare(
-      `INSERT INTO nodes (name, allowed, token_hash, auth_mode, token_pinned_at, online, created_at)
-       VALUES (?, 1, ?, 'pernode', NULL, 0, ?)
-       ON CONFLICT(name) DO UPDATE SET
-         allowed = 1, token_hash = excluded.token_hash, auth_mode = 'pernode', token_pinned_at = NULL`,
+      `INSERT INTO nodes (name, allowed, token_hash, online, created_at)
+       VALUES (?, 1, ?, 0, ?)
+       ON CONFLICT(name) DO UPDATE SET allowed = 1, token_hash = excluded.token_hash`,
     )
     .run(name, hash, now);
   audit(actor, "node.provision", name);

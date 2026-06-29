@@ -31,38 +31,34 @@ describe("node name validation (M-03)", () => {
   });
 });
 
-describe("verifyNodeAuth (C-04)", () => {
+describe("verifyNodeAuth (C-04, per-node HMAC)", () => {
   it("rejects an unknown / not-allow-listed node", () => {
     expect(nodes.verifyNodeAuth("ghost", "anything").ok).toBe(false);
   });
 
-  it("accepts the correct per-node token, rejects a wrong one, and pins first-seen", () => {
+  it("accepts the correct per-node token and rejects a wrong one", () => {
     const token = nodes.provisionNode("gpu-a", "admin@uga.edu");
     expect(nodes.verifyNodeAuth("gpu-a", "wrong").ok).toBe(false);
-
-    const before = dbmod.db().prepare("SELECT token_pinned_at FROM nodes WHERE name = ?").get("gpu-a") as any;
-    expect(before.token_pinned_at).toBeNull();
-
-    expect(nodes.verifyNodeAuth("gpu-a", token).ok).toBe(true);
-    const after = dbmod.db().prepare("SELECT token_pinned_at FROM nodes WHERE name = ?").get("gpu-a") as any;
-    expect(typeof after.token_pinned_at).toBe("number");
+    const res = nodes.verifyNodeAuth("gpu-a", token);
+    expect(res.ok).toBe(true);
+    // The stored hash is the HMAC hex (not the plaintext, not a bcrypt string) and is returned so
+    // the hub can detect a later rotation on a live socket.
+    const stored = (dbmod.db().prepare("SELECT token_hash AS h FROM nodes WHERE name=?").get("gpu-a") as any).h;
+    expect(stored).toBe(nodes.nodeTokenHash("gpu-a", token));
+    expect(stored).toMatch(/^[a-f0-9]{64}$/);
+    expect(res.tokenHash).toBe(stored);
   });
 
-  it("does not accept the shared token for a per-node node", () => {
+  it("never accepts the shared AGENT_TOKEN — there is no legacy fallback", () => {
     nodes.provisionNode("gpu-b", "admin@uga.edu");
     expect(nodes.verifyNodeAuth("gpu-b", "shared-agent-token").ok).toBe(false);
   });
 
-  it("accepts the shared token only for an allow-listed legacy node", () => {
-    // Simulate a node backfilled by migration 0004 (allowed=1, auth_mode='legacy').
-    dbmod
-      .db()
-      .prepare(
-        "INSERT INTO nodes (name, allowed, auth_mode, online, created_at) VALUES (?, 1, 'legacy', 0, ?)",
-      )
-      .run("legacy-node", Date.now());
-    expect(nodes.verifyNodeAuth("legacy-node", "shared-agent-token").ok).toBe(true);
-    expect(nodes.verifyNodeAuth("legacy-node", "nope").ok).toBe(false);
+  it("binds the token to the node name (a token minted for A does not work as B)", () => {
+    const tokenA = nodes.provisionNode("node-a", "admin@uga.edu");
+    nodes.provisionNode("node-b", "admin@uga.edu");
+    expect(nodes.verifyNodeAuth("node-a", tokenA).ok).toBe(true);
+    expect(nodes.verifyNodeAuth("node-b", tokenA).ok).toBe(false);
   });
 
   it("revoke removes a node from the allow-list", () => {
@@ -70,6 +66,26 @@ describe("verifyNodeAuth (C-04)", () => {
     expect(nodes.verifyNodeAuth("gpu-c", token).ok).toBe(true);
     nodes.revokeNode("gpu-c", "admin@uga.edu");
     expect(nodes.verifyNodeAuth("gpu-c", token).ok).toBe(false);
+  });
+});
+
+describe("nodeStillAuthorized (live-socket revoke/rotation poll)", () => {
+  it("is true while allowed + hash unchanged, false after revoke or rotation", () => {
+    const token = nodes.provisionNode("live-a", "admin@uga.edu");
+    const hash = nodes.nodeTokenHash("live-a", token);
+    expect(nodes.nodeStillAuthorized("live-a", hash)).toBe(true);
+    // Rotation changes the stored hash -> the old socket's hash no longer matches.
+    nodes.rotateNodeToken("live-a", "admin@uga.edu");
+    expect(nodes.nodeStillAuthorized("live-a", hash)).toBe(false);
+    // Revocation drops authorization regardless of hash.
+    const newHash = (dbmod.db().prepare("SELECT token_hash AS h FROM nodes WHERE name=?").get("live-a") as any).h;
+    expect(nodes.nodeStillAuthorized("live-a", newHash)).toBe(true);
+    nodes.revokeNode("live-a", "admin@uga.edu");
+    expect(nodes.nodeStillAuthorized("live-a", newHash)).toBe(false);
+  });
+
+  it("is false for an unknown node", () => {
+    expect(nodes.nodeStillAuthorized("nobody", "deadbeef")).toBe(false);
   });
 });
 
