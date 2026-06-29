@@ -16,6 +16,7 @@ on the slow tier so the backend choice lives in exactly one place. Usage is alwa
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from . import paths
@@ -82,6 +83,25 @@ def lab_usage(cfg: AgentConfig, lab: str) -> Usage:
         return zfs.get_usage(paths.lab_slow(cfg, lab))
     # SMB client: not measured locally (the owner node reports it).
     return Usage(paths.cold_lab(cfg, lab), 0, None, None)
+
+
+def cold_status(cfg: AgentConfig) -> dict[str, Any]:
+    """Cold-storage backend + mount state for the controller's Nodes page / SMB-assignment checks.
+
+    A local-ZFS owner reports its slow-pool mountpoint and is always "ready" (storage is local). An
+    SMB client reports its mount root and whether it is an ACTIVE mount point (so the controller can
+    block provisioning onto a client whose share is not actually mounted).
+    """
+    if cfg.slow_is_zfs:
+        try:
+            mount = zfs.get_mountpoint(cfg.slow_pool)
+        except Exception:
+            mount = None
+        return {"backend": "zfs", "mount_path": mount, "ready": True}
+    # The share is mounted at slow_path (labs/ live under it); report that mount point + whether it
+    # is an active mount, so the controller can refuse to provision onto an unmounted SMB client.
+    root = cfg.slow_path
+    return {"backend": "smb", "mount_path": root, "ready": bool(root) and os.path.ismount(root)}
 
 
 def list_usage(cfg: AgentConfig) -> list[dict[str, Any]]:

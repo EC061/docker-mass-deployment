@@ -106,6 +106,10 @@ export function ingestTelemetry(node: string, payload: any): void {
     .prepare("UPDATE nodes SET pools = ?, last_seen = ? WHERE name = ?")
     .run(JSON.stringify(payload.pools ?? []), now, node);
 
+  // Node-reported cold-storage mount state: an SMB client reports whether its mount is live; a
+  // local-ZFS owner reports its dataset mountpoint. Used by the Nodes page and SMB-assignment checks.
+  ingestColdStorage(node, payload.cold);
+
   // ZFS scrub status: store the latest, alert admins when a pool newly reports errors.
   ingestScrub(node, payload.scrub, now);
 
@@ -156,6 +160,15 @@ export function ingestTelemetry(node: string, payload: any): void {
     }
   });
   tx();
+}
+
+/** Persist the agent-reported cold mount path + readiness. backend is admin-set, so we don't store it. */
+function ingestColdStorage(node: string, cold: unknown): void {
+  if (!cold || typeof cold !== "object") return;
+  const c = cold as { mount_path?: unknown; ready?: unknown };
+  const mount = typeof c.mount_path === "string" ? c.mount_path.slice(0, 512) : null;
+  const ready = c.ready === true ? 1 : 0;
+  db().prepare("UPDATE nodes SET cold_mount_path = ?, cold_ready = ? WHERE name = ?").run(mount, ready, node);
 }
 
 interface ScrubEntry {

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from . import usagereport
+from . import coldstore, usagereport
 from .config import AgentConfig
 from .executors import zfs
 from .executors.base import run
@@ -79,6 +79,7 @@ def collect_heartbeat(cfg: AgentConfig, docker_state: Any = None) -> dict[str, A
         "pools": _pools(cfg),
         "datasets": _dataset_usage(cfg, docker_state),
         "scrub": [zfs.scrub_status(p).to_dict() for p in cfg.scrub_pools],
+        "cold": coldstore.cold_status(cfg),
         "gpu_processes": list_gpu_processes(),
         "usage_scans": _usage_scans(docker_state),
     }

@@ -11,8 +11,11 @@
 import bcrypt from "bcryptjs";
 import { randomBytes } from "node:crypto";
 import { safeEqual } from "./auth";
+import { audit } from "./audit";
 import { db } from "./db";
 import { env } from "./env";
+
+export type ColdBackend = "local_zfs" | "smb";
 
 // DNS-label-ish: lowercase alphanumeric + hyphen, 1-63 chars, must start alphanumeric. Rejects the
 // literal "undefined", control chars, whitespace, and path/queue separators (M-03).
@@ -129,6 +132,15 @@ export function deleteNode(name: string, actor: string): void {
       `node '${name}' still hosts ${placementCount} lab placement(s); remove them before deleting the node`,
     );
   }
+  // An SMB client node depends on this node as its cold-storage owner — block deletion.
+  const dependents = db()
+    .prepare("SELECT name FROM nodes WHERE cold_owner_node_id = ?")
+    .all(row.id) as { name: string }[];
+  if (dependents.length > 0) {
+    throw new Error(
+      `node '${name}' is the cold-storage owner for: ${dependents.map((d) => d.name).join(", ")}; reassign them first`,
+    );
+  }
   db().transaction(() => {
     db().prepare("DELETE FROM task_log WHERE node = ?").run(name);
     db().prepare("DELETE FROM gpu_snapshot WHERE node = ?").run(name);
@@ -137,8 +149,70 @@ export function deleteNode(name: string, actor: string): void {
   audit(actor, "node.delete", name);
 }
 
-function audit(actor: string, action: string, target: string, detail?: string): void {
+export interface NodeColdInfo {
+  name: string;
+  cold_backend: ColdBackend;
+  cold_owner_node_id: number | null;
+  owner_name: string | null;
+  cold_mount_path: string | null;
+  cold_ready: number;
+}
+
+/** Local-ZFS nodes — the only valid cold-storage owners for an SMB client. */
+export function listLocalZfsNodes(): { id: number; name: string }[] {
+  return db()
+    .prepare("SELECT id, name FROM nodes WHERE cold_backend = 'local_zfs' ORDER BY name")
+    .all() as { id: number; name: string }[];
+}
+
+/**
+ * Configure a node's cold-storage backend. local_zfs: the node owns real ZFS cold storage. smb: cold
+ * is replaced by a mount of an owner node's shared dataset (the owner must be a local-ZFS node).
+ * Refuses while the node hosts any placement (changing the backend would orphan their storage), and
+ * refuses to turn an owner node into an SMB client while other nodes still depend on it.
+ */
+export function setNodeColdStorage(
+  name: string,
+  backend: ColdBackend,
+  ownerName: string | null,
+  actor: string,
+): void {
+  if (backend !== "local_zfs" && backend !== "smb") throw new Error(`invalid cold backend '${backend}'`);
+  const node = db().prepare("SELECT id FROM nodes WHERE name = ?").get(name) as { id: number } | undefined;
+  if (!node) throw new Error(`unknown node '${name}'`);
+
+  const { n: placementCount } = db()
+    .prepare("SELECT COUNT(*) AS n FROM lab_placements WHERE node_id = ?")
+    .get(node.id) as { n: number };
+  if (placementCount > 0) {
+    throw new Error(`node '${name}' hosts ${placementCount} placement(s); remove them before changing cold storage`);
+  }
+
+  let ownerId: number | null = null;
+  if (backend === "smb") {
+    if (!ownerName) throw new Error("an SMB node requires a cold-storage owner node");
+    const owner = db()
+      .prepare("SELECT id, cold_backend FROM nodes WHERE name = ?")
+      .get(ownerName) as { id: number; cold_backend: string } | undefined;
+    if (!owner) throw new Error(`unknown owner node '${ownerName}'`);
+    if (owner.id === node.id) throw new Error("a node cannot be its own cold-storage owner");
+    if (owner.cold_backend !== "local_zfs") throw new Error(`owner '${ownerName}' must use local ZFS cold storage`);
+    ownerId = owner.id;
+  } else {
+    // Becoming local_zfs is fine even if others depend on us; but a node that IS an owner cannot turn
+    // into an SMB client (handled above by the smb branch — only reachable when backend==='smb').
+  }
+
+  // Block turning an owner node into an SMB client while SMB clients still depend on it.
+  if (backend === "smb") {
+    const dependents = db().prepare("SELECT name FROM nodes WHERE cold_owner_node_id = ?").all(node.id) as { name: string }[];
+    if (dependents.length > 0) {
+      throw new Error(`node '${name}' is the cold owner for ${dependents.map((d) => d.name).join(", ")}; reassign them first`);
+    }
+  }
+
   db()
-    .prepare("INSERT INTO audit_log (ts, actor, action, target, detail) VALUES (?, ?, ?, ?, ?)")
-    .run(Date.now(), actor, action, target, detail ?? null);
+    .prepare("UPDATE nodes SET cold_backend = ?, cold_owner_node_id = ? WHERE id = ?")
+    .run(backend, ownerId, node.id);
+  audit(actor, "node.cold_storage", name, ownerName ? `${backend} owner=${ownerName}` : backend);
 }

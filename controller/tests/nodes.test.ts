@@ -108,3 +108,44 @@ describe("deleteNode", () => {
     expect(dbmod.db().prepare("SELECT 1 FROM nodes WHERE name = ?").get("gpu-haslabs")).toBeDefined();
   });
 });
+
+describe("cold storage (Phase 3)", () => {
+  it("defaults nodes to local_zfs and lists them as owner candidates", () => {
+    nodes.provisionNode("cold-owner", "a@x.edu");
+    nodes.provisionNode("cold-client", "a@x.edu");
+    const owners = nodes.listLocalZfsNodes().map((n) => n.name);
+    expect(owners).toEqual(expect.arrayContaining(["cold-owner", "cold-client"]));
+  });
+
+  it("configures an SMB client pointing at a local-ZFS owner", () => {
+    nodes.setNodeColdStorage("cold-client", "smb", "cold-owner", "a@x.edu");
+    const row = dbmod.db().prepare("SELECT cold_backend, cold_owner_node_id FROM nodes WHERE name='cold-client'").get() as any;
+    expect(row.cold_backend).toBe("smb");
+    expect(row.cold_owner_node_id).toBeTruthy();
+    // an SMB client is no longer a valid owner candidate.
+    expect(nodes.listLocalZfsNodes().map((n) => n.name)).not.toContain("cold-client");
+  });
+
+  it("rejects SMB with no owner / a non-local-ZFS owner / self as owner", () => {
+    nodes.provisionNode("c2", "a@x.edu");
+    expect(() => nodes.setNodeColdStorage("c2", "smb", null, "a@x.edu")).toThrow(/requires a cold-storage owner/);
+    expect(() => nodes.setNodeColdStorage("c2", "smb", "cold-client", "a@x.edu")).toThrow(/must use local ZFS/);
+    expect(() => nodes.setNodeColdStorage("c2", "smb", "c2", "a@x.edu")).toThrow(/cannot be its own/);
+  });
+
+  it("refuses to change cold storage while the node hosts a placement", () => {
+    nodes.provisionNode("busy-cold", "a@x.edu");
+    const nid = (dbmod.db().prepare("SELECT id FROM nodes WHERE name='busy-cold'").get() as any).id;
+    dbmod.db().prepare("INSERT INTO labs (name, created_at, updated_at) VALUES ('cl', 0, 0)").run();
+    const lid = (dbmod.db().prepare("SELECT id FROM labs WHERE name='cl'").get() as any).id;
+    dbmod.db()
+      .prepare("INSERT INTO lab_placements (lab_id, node_id, fast_quota_bytes, cold_quota_bytes, ssh_port, image, state, created_at, updated_at) VALUES (?, ?, 1, 1, 41000, 'i', 'active', 0, 0)")
+      .run(lid, nid);
+    expect(() => nodes.setNodeColdStorage("busy-cold", "smb", "cold-owner", "a@x.edu")).toThrow(/placement/);
+  });
+
+  it("blocks deleting an owner node while SMB clients depend on it", () => {
+    // cold-client depends on cold-owner from the test above.
+    expect(() => nodes.deleteNode("cold-owner", "a@x.edu")).toThrow(/cold-storage owner/);
+  });
+});
