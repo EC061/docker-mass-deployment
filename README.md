@@ -183,40 +183,36 @@ Requirements: a recent Ubuntu LTS (22.04/24.04; shiftfs or kernel ≥ 5.19 idmap
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh        # if uv is not present
-# Pin to a released tag (not #main) and install with the shipped uv.lock so every node runs the same
-# audited code + dependency set (I-02). Replace v1.0.0 with the tag you intend to deploy.
-sudo uvx --locked --from "git+https://github.com/EC061/docker-mass-deployment@v1.0.0#subdirectory=agent" \
-    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent
+sudo uvx --from "git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent" \
+    lab-agent install
 ```
 
-`lab-agent install` writes `/etc/lab-agent/config.toml` and a systemd unit (`lab-agent.service`) that
-starts on boot and reconnects automatically.
+`lab-agent install` cleans up any previous install, installs lab-agent **persistently** with `uv tool
+install` (so the systemd unit runs a stable on-disk binary, not the ephemeral `uvx` cache), writes a
+config **template** at `/etc/lab-agent/config.toml` if none exists, and **enables but does NOT start**
+the service. (For a reproducible, pinned deploy (I-02), add `--ref <tag>`, e.g.
+`lab-agent install --ref v1.0.0`.)
 
-**Provision the node's token:** in the controller UI go to **Nodes → Provision token**, then run the
-printed command on the node to apply it and restart the agent:
+Then fill in the config and start it. Get the node's token from the controller UI
+(**Nodes → Provision token**):
 
 ```bash
-sudo lab-agent set-token <TOKEN-FROM-UI>
+sudo lab-agent edit-config     # opens the config in $EDITOR: set controller_url, token,
+                               # node_name, and the cold-storage (slow_*) settings
+sudo lab-agent start           # enable + start the service
+sudo lab-agent doctor          # verify zfs/docker/nvidia/pools + service status
 ```
 
+(`sudo lab-agent set-token <TOKEN-FROM-UI>` is a shortcut that writes just the token and restarts.)
 Each node has its own token; the controller only accepts allow-listed nodes (so a stolen token can't
-impersonate another node). Check readiness any time with `lab-agent doctor`.
+impersonate another node), and changing it takes effect immediately (the live socket is dropped).
 
-**Upgrading the agent:** re-running `uv tool install --force` replaces the installed code in place;
-the existing `/etc/lab-agent/config.toml` and token are left untouched, so you only need to restart
-the service afterwards. From a released tag:
-
-```bash
-sudo uvx --locked --from "git+https://github.com/EC061/docker-mass-deployment@v1.0.0#subdirectory=agent" \
-    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent   # re-runs install with the new code
-sudo systemctl restart lab-agent.service
-```
-
-Or from a local checkout of this repo on the node (e.g. for development builds):
+**Upgrading the agent:** reinstall the newest code and restart in one step — the existing config and
+token are preserved:
 
 ```bash
-sudo UV_TOOL_BIN_DIR=/usr/local/bin uv tool install --force --from ./agent lab-agent
-sudo systemctl restart lab-agent.service
+sudo lab-agent upgrade               # newest
+sudo lab-agent upgrade --ref v1.1.0  # or pin to a released tag
 ```
 
 ### 1.7 Sharing cold storage between two nodes over SMB (optional)
@@ -231,11 +227,16 @@ and the other mounts it over SMB:
   agent with the SMB cold-storage backend so its containers bind-mount the shared data:
 
 ```bash
-sudo uvx --locked --from "git+https://github.com/EC061/docker-mass-deployment@v1.0.0#subdirectory=agent" \
-    lab-agent install --controller wss://CONTROLLER_HOST:8443/agent \
-    --slow-backend smb --slow-path /mnt/cold --slow-shared
-# then provision + apply the token as above: sudo lab-agent set-token <TOKEN-FROM-UI>
+sudo uvx --from "git+https://github.com/EC061/docker-mass-deployment#subdirectory=agent" \
+    lab-agent install
+sudo lab-agent edit-config   # set slow_backend = "smb", slow_path = "/mnt/cold", slow_shared = true
+                             # (plus controller_url / token / node_name)
+sudo lab-agent start
 ```
+
+The cold-storage **owner** node for an SMB client is selected in the controller UI (Nodes → cold
+storage), not in the agent config. (`install` also accepts `--slow-backend smb --slow-path /mnt/cold
+--slow-shared` to pre-seed the template when the config is first written.)
 
 - `--slow-path` is where the share is mounted; labs live under `<slow-path>/labs/...`.
 - `--slow-shared` marks the share as mounted on more than one node, so the client only ever touches
