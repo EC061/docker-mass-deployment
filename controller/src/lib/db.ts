@@ -411,6 +411,18 @@ const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => 
     ALTER TABLE nodes DROP COLUMN token_pinned_at;
     `,
   },
+  {
+    // Phase 8: durable, idempotent task flow. received_at records the agent's durable receipt of a
+    // pushed task (it persisted it locally); attempts counts how many times the hub (re)sent it;
+    // result_cached marks a result the agent replayed from its local cache — a redelivered task it
+    // had already completed — rather than re-executing.
+    id: "0012_task_durability",
+    sql: `
+    ALTER TABLE task_log ADD COLUMN received_at INTEGER;
+    ALTER TABLE task_log ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+    ALTER TABLE task_log ADD COLUMN result_cached INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

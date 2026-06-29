@@ -21,7 +21,8 @@ import {
   markPlacementStateByLabNode,
 } from "./placements";
 import { nodeStillAuthorized, verifyNodeAuth } from "./nodes";
-import { ackTask, claimTask, markTaskState, retryTask } from "./queue";
+import { isProtocolCompatible, parseInboundFrame, PROTOCOL_VERSION } from "./protocol";
+import { ackTask, bumpAttempts, claimTask, markTaskReceived, markTaskState, retryTask } from "./queue";
 import { getSetting } from "./settings";
 
 interface NodeConn {
@@ -98,12 +99,16 @@ export function createHub(): WebSocketServer {
       }
       tokens -= 1;
 
-      let frame: any;
+      let parsed: unknown;
       try {
-        frame = JSON.parse(raw.toString());
+        parsed = JSON.parse(raw.toString());
       } catch {
         return;
       }
+      // Validate every frame against the wire schema before it can touch the DB or fire a side
+      // effect; anything that matches no known frame shape is dropped at the edge.
+      const frame = parseInboundFrame(parsed);
+      if (!frame) return;
 
       if (frame.type === "hello") {
         node = handleHello(ws, frame);
@@ -151,12 +156,18 @@ export function createHub(): WebSocketServer {
   return wss;
 }
 
-function handleHello(ws: WebSocket, frame: any): string | null {
-  const node = String(frame.node ?? "");
+function handleHello(ws: WebSocket, frame: { node: string; token: string; v?: number; capabilities?: unknown }): string | null {
+  const node = frame.node;
   // Per-node identity: name must be on the allow-list AND the credential must verify (C-04, M-03).
-  const auth = verifyNodeAuth(node, String(frame.token ?? ""));
+  const auth = verifyNodeAuth(node, frame.token);
   if (!auth.ok) {
     ws.close(4001, auth.reason ?? "unauthorized");
+    return null;
+  }
+  // Clean-break protocol: refuse an agent speaking an incompatible version (e.g. one not yet
+  // reinstalled for the redesign) with a clear code, instead of letting it misbehave silently.
+  if (!isProtocolCompatible(frame.v)) {
+    ws.close(4009, `incompatible protocol version (need v${PROTOCOL_VERSION}); upgrade the agent`);
     return null;
   }
 
@@ -207,6 +218,7 @@ function drainNode(node: string, ws: WebSocket): void {
       ws.send(JSON.stringify(claimed.frame));
       ackTask(node, claimed.jobId, workerId);
       markTaskState(node, claimed.frame.id, "sent");
+      bumpAttempts(node, claimed.frame.id);
     } catch {
       retryTask(node, claimed.jobId, workerId, "send failed");
       break;
@@ -231,6 +243,10 @@ function ingestFrame(node: string, frame: any): void {
     case "result":
       handleResult(node, frame);
       break;
+    case "receipt":
+      // The agent durably persisted this task locally — record the receipt for the UI.
+      markTaskReceived(node, frame.id);
+      break;
     case "log":
       handleLog(node, frame);
       break;
@@ -254,6 +270,7 @@ function handleResult(node: string, frame: any): void {
     frame.ok ? "ok" : "failed",
     frame.result,
     frame.ok ? undefined : frame.error,
+    frame.cached === true,
   );
   if (!changed) return;
   const t = db()

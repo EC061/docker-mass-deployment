@@ -11,10 +11,15 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+# Wire-protocol version. Bumped on any breaking frame change; the controller refuses a mismatch
+# (this redesign is a clean break — agents are reinstalled, so there is no legacy compatibility).
+PROTOCOL_VERSION = 1
+
 # Frame types (agent <-> controller).
 T_HELLO = "hello"  # agent -> controller: identity + capabilities on connect
 T_TASK = "task"  # controller -> agent: a unit of work
 T_RESULT = "result"  # agent -> controller: outcome of a task
+T_RECEIPT = "receipt"  # agent -> controller: durable receipt of a pushed task (persisted locally)
 T_LOG = "log"  # agent -> controller: a structured log line
 T_EVENT = "event"  # agent -> controller: gpu/quota event
 T_TELEMETRY = "telemetry"  # agent -> controller: heartbeat snapshot
@@ -29,7 +34,6 @@ A_STUDENT_REMOVE = "student.remove"
 A_CONTAINER_RECREATE = "container.recreate"
 A_GPU_POLICY_UPDATE = "gpu.policy.update"
 A_NODE_REPORT_STATE = "node.report_state"
-A_NODE_BACKUP = "node.backup"
 A_NODE_SCRUB = "node.scrub"
 A_USAGE_SCAN = "usage.scan"  # per-student storage (du) scan for one lab (nightly + on-demand)
 
@@ -58,7 +62,7 @@ class Task:
 
 
 def result_frame(task_id: str, ok: bool, result: Any = None, error: str | None = None,
-                 logs: str | None = None) -> dict[str, Any]:
+                 logs: str | None = None, cached: bool = False) -> dict[str, Any]:
     return {
         "type": T_RESULT,
         "id": task_id,
@@ -66,13 +70,20 @@ def result_frame(task_id: str, ok: bool, result: Any = None, error: str | None =
         "result": result,
         "error": error,
         "logs": logs,
+        "cached": cached,
         "ts": now_ms(),
     }
+
+
+def receipt_frame(task_id: str) -> dict[str, Any]:
+    """Durable-receipt ack: the agent persisted this task to its local queue."""
+    return {"type": T_RECEIPT, "id": task_id, "ts": now_ms()}
 
 
 def hello_frame(node_name: str, token: str, capabilities: dict[str, Any]) -> dict[str, Any]:
     return {
         "type": T_HELLO,
+        "v": PROTOCOL_VERSION,
         "node": node_name,
         "token": token,
         "capabilities": capabilities,

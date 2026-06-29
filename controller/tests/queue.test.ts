@@ -112,3 +112,60 @@ describe("markTaskState", () => {
     expect(row.result).toBeNull();
   });
 });
+
+describe("secret handling (Phase 8)", () => {
+  it("redactSecrets masks credential keys but keeps ordinary fields", () => {
+    const out = queue.redactSecrets({
+      lab: "bio",
+      username: "alice",
+      password: "hunter2",
+      nested: { token: "abc", count: 3 },
+    }) as any;
+    expect(out.lab).toBe("bio");
+    expect(out.username).toBe("alice");
+    expect(out.password).not.toBe("hunter2");
+    expect(out.nested.token).not.toBe("abc");
+    expect(out.nested.count).toBe(3);
+  });
+
+  it("stores REDACTED params in task_log but delivers the real password to the node", () => {
+    const frame = queue.enqueueTask("sec-node", "student.add", {
+      username: "bob",
+      password: "s3cret-pw",
+    });
+    // The long-lived (backed-up) task_log must not contain the cleartext password.
+    const row = dbmod.db().prepare("SELECT params FROM task_log WHERE task_uuid = ?").get(frame.id) as any;
+    expect(row.params).not.toContain("s3cret-pw");
+    expect(JSON.parse(row.params).username).toBe("bob");
+    // The queue payload is encrypted at rest, but claim decrypts it so the agent gets the password.
+    const claimed = queue.claimTask("sec-node", "w1")!;
+    expect(claimed.frame.params).toEqual({ username: "bob", password: "s3cret-pw" });
+    queue.ackTask("sec-node", claimed.jobId, "w1");
+  });
+});
+
+describe("durability fields (Phase 8)", () => {
+  it("markTaskReceived sets received_at once; bumpAttempts increments", () => {
+    const frame = queue.enqueueTask("dur-node", "lab.create", { lab: "z" });
+    let row = queue.getTask(frame.id)!;
+    expect(row.received_at).toBeNull();
+    expect(row.attempts).toBe(0);
+
+    queue.bumpAttempts("dur-node", frame.id);
+    queue.markTaskReceived("dur-node", frame.id);
+    row = queue.getTask(frame.id)!;
+    expect(row.attempts).toBe(1);
+    const first = row.received_at;
+    expect(typeof first).toBe("number");
+
+    // received_at is set only once (subsequent receipts don't overwrite it).
+    queue.markTaskReceived("dur-node", frame.id);
+    expect(queue.getTask(frame.id)!.received_at).toBe(first);
+  });
+
+  it("markTaskState records the cached (idempotent replay) flag", () => {
+    const frame = queue.enqueueTask("dur-node", "node.scrub");
+    queue.markTaskState("dur-node", frame.id, "ok", { ok: true }, undefined, true);
+    expect(queue.getTask(frame.id)!.result_cached).toBe(1);
+  });
+});

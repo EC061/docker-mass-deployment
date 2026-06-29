@@ -42,6 +42,14 @@ def test_result_frame_shape():
     assert f["result"] == {"lab": "bio"}
     assert f["error"] is None
     assert f["logs"] == "done"
+    assert f["cached"] is False
+    assert isinstance(f["ts"], int)
+
+
+def test_receipt_frame_shape():
+    f = P.receipt_frame("t9")
+    assert f["type"] == P.T_RECEIPT
+    assert f["id"] == "t9"
     assert isinstance(f["ts"], int)
 
 
@@ -53,12 +61,13 @@ def test_result_frame_error_defaults():
     assert f["logs"] is None
 
 
-def test_hello_frame_carries_identity_and_caps():
+def test_hello_frame_carries_identity_caps_and_version():
     f = P.hello_frame("node-1", "secret", {"zfs": True})
     assert f["type"] == P.T_HELLO
     assert f["node"] == "node-1"
     assert f["token"] == "secret"
     assert f["capabilities"] == {"zfs": True}
+    assert f["v"] == P.PROTOCOL_VERSION
 
 
 def test_log_frame_optional_fields_default_none():
@@ -93,12 +102,12 @@ def test_telemetry_frame_shape():
 
 
 def test_frame_type_and_action_constants_are_distinct():
-    types = {P.T_HELLO, P.T_TASK, P.T_RESULT, P.T_LOG, P.T_EVENT, P.T_TELEMETRY, P.T_ACK}
-    assert len(types) == 7
+    types = {P.T_HELLO, P.T_TASK, P.T_RESULT, P.T_RECEIPT, P.T_LOG, P.T_EVENT, P.T_TELEMETRY, P.T_ACK}
+    assert len(types) == 8
     actions = {
         P.A_LAB_CREATE, P.A_LAB_SET_QUOTA, P.A_LAB_DESTROY,
         P.A_STUDENT_ADD, P.A_STUDENT_REMOVE, P.A_CONTAINER_RECREATE,
-        P.A_GPU_POLICY_UPDATE, P.A_NODE_REPORT_STATE, P.A_NODE_BACKUP,
+        P.A_GPU_POLICY_UPDATE, P.A_NODE_REPORT_STATE,
         P.A_NODE_SCRUB, P.A_USAGE_SCAN,
     }
-    assert len(actions) == 11
+    assert len(actions) == 10
