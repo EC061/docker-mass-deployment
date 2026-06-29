@@ -38,7 +38,7 @@ export interface NodeAuthResult {
 
 /** Generate a fresh node token (the plaintext is shown once and never stored). */
 export function generateNodeToken(): string {
-  return randomBytes(24).toString("hex");
+  return randomBytes(32).toString("hex");
 }
 
 /**

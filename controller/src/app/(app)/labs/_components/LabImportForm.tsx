@@ -87,7 +87,7 @@ export function LabImportForm({ preview, apply }: Props) {
         const r = res.result;
         setDone(
           `Imported: ${r.labsCreated} labs created, ${r.labsUpdated} updated; ${r.studentsCreated} students created, ${r.studentsUpdated} updated; ${r.membershipsAdded} memberships added` +
-            (r.provisioned ? `; ${r.provisioned} provisioned on existing placements (${r.emailed} emailed)` : ""),
+            (r.provisioned ? `; ${r.provisioned} queued on existing placements (credentials follow agent confirmation)` : ""),
         );
         setPlan(null);
         setText("");

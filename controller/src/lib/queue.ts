@@ -162,7 +162,7 @@ export function markTaskState(
   const info = db()
     .prepare(
       `UPDATE task_log SET state = ?, result = ?, error = ?, result_cached = ?, updated_at = ?
-       WHERE task_uuid = ? AND node = ?`,
+       WHERE task_uuid = ? AND node = ? AND state NOT IN ('ok', 'failed')`,
     )
     .run(
       state,

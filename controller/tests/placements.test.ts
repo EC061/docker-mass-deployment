@@ -140,6 +140,34 @@ describe("updatePlacementQuota (live, no recreate)", () => {
   });
 });
 
+describe("retryPlacement", () => {
+  it("requeues a failed placement with its authoritative settings", async () => {
+    const lab = newLab("retry-placement");
+    const p = await grant(lab.id, nodeA);
+    placements.markPlacementState(p.id, "failed", "temporary create failure");
+    enqueueTask.mockClear();
+
+    placements.retryPlacement(p.id, "admin");
+
+    const fresh = placements.getPlacement(p.id)!;
+    expect(fresh.state).toBe("provisioning");
+    expect(fresh.last_error).toBeNull();
+    expect(enqueueTask).toHaveBeenCalledWith(
+      "node-a",
+      "lab.create",
+      expect.objectContaining({
+        lab: "retry-placement",
+        fast_quota_bytes: p.fast_quota_bytes,
+        slow_quota_bytes: p.cold_quota_bytes,
+        image: p.image,
+        ssh_port: p.ssh_port,
+      }),
+      "admin",
+    );
+    expect(() => placements.retryPlacement(p.id, "admin")).toThrow(/Only a failed placement/);
+  });
+});
+
 describe("recreatePlacement", () => {
   it("enqueues container.recreate with the placement's config", async () => {
     const lab = newLab("recreate");

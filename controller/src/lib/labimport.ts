@@ -274,8 +274,7 @@ export interface ImportResult {
   studentsCreated: number;
   studentsUpdated: number;
   membershipsAdded: number;
-  provisioned: number; // memberships provisioned on an existing placement
-  emailed: number;
+  provisioned: number; // memberships queued on an existing placement
 }
 
 /**
@@ -342,19 +341,15 @@ export async function applyLabImport(text: string, actor?: string): Promise<Impo
     studentsUpdated: plan.studentsToUpdate.length,
     membershipsAdded: added.length,
     provisioned: 0,
-    emailed: 0,
   };
   audit(actor, "lab.import", undefined, JSON.stringify(result));
 
   // Provision newly-added members on any placements the lab already has (no-op pre-rollout, when
-  // labs have no placements yet). Best-effort and outside the DB transaction (it enqueues + emails).
+  // labs have no placements yet). Credentials are delivered only after each agent confirms success.
   for (const a of added) {
     for (const p of listPlacements(a.labId)) {
       const res = await provisionMemberOnPlacement(p, a.student, actor);
-      if (res) {
-        result.provisioned += 1;
-        if (res.emailed) result.emailed += 1;
-      }
+      if (res) result.provisioned += 1;
     }
   }
   return result;

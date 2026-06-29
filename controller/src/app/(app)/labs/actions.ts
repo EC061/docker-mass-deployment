@@ -8,6 +8,7 @@ import { applyLabImport, type ImportPlan, type ImportResult, planLabImport } fro
 import { createLab, destroyLab, getLab, updateLabMeta } from "@/lib/labs";
 import {
   type ContainerOptions,
+  consumePlacementCredential,
   createPlacement,
   destroyPlacement,
   getPlacement,
@@ -205,6 +206,25 @@ export async function retryPlacementAction(formData: FormData) {
   redirect(`/labs/${placement!.lab_id}/placements/${placementId}?saved=${fid}`);
 }
 
+export async function revealPlacementCredentialAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const studentId = Number(formData.get("studentId"));
+  const placement = getPlacement(placementId);
+  if (!placement) redirect("/labs");
+  let revealed: { username: string; password: string } | null = null;
+  try {
+    revealed = consumePlacementCredential(placementId, studentId, who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not reveal credential");
+    redirect(`/labs/${placement!.lab_id}/placements/${placementId}?error=${fid}`);
+  }
+  const fid = putFlash(revealed!.password);
+  redirect(
+    `/labs/${placement!.lab_id}/placements/${placementId}?credential=${fid}&username=${encodeURIComponent(revealed!.username)}`,
+  );
+}
+
 export async function removePlacementAction(formData: FormData) {
   const who = await actor();
   const placementId = Number(formData.get("placementId"));
@@ -234,16 +254,10 @@ export async function addMemberAction(formData: FormData) {
   revalidatePath(`/labs/${labId}`);
 
   const n = result.provisioned.length;
-  if (n === 1) {
-    // Show the single generated password once via a one-time server-side flash — never in the URL (M-07).
-    const pwid = putFlash(result.provisioned[0].password);
-    const emailed = result.provisioned[0].emailed ? "&emailed=1" : "";
-    redirect(`/labs/${labId}?newuser=${encodeURIComponent(username)}&pwid=${pwid}${emailed}`);
-  }
   const msg =
     n === 0
       ? `Added ${username} to the roster. They are provisioned automatically when the lab is granted node access.`
-      : `Added ${username} and provisioned on ${n} node(s); credentials emailed where an address exists.`;
+      : `Added ${username}; provisioning queued on ${n} node(s). Credentials are delivered only after each node confirms success.`;
   const fid = putFlash(msg);
   redirect(`/labs/${labId}?saved=${fid}`);
 }

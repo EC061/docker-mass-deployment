@@ -32,6 +32,12 @@ describe("node name validation (M-03)", () => {
 });
 
 describe("verifyNodeAuth (C-04, per-node HMAC)", () => {
+  it("generates a token with at least 32 random bytes", () => {
+    const token = nodes.generateNodeToken();
+    expect(token).toMatch(/^[a-f0-9]{64}$/);
+    expect(Buffer.from(token, "hex")).toHaveLength(32);
+  });
+
   it("rejects an unknown / not-allow-listed node", () => {
     expect(nodes.verifyNodeAuth("ghost", "anything").ok).toBe(false);
   });
