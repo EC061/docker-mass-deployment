@@ -65,10 +65,16 @@ export interface Placement {
   last_usage_scan: number | null;
   created_at: number;
   updated_at: number;
+  // Joined from the node (cold-storage backend matters for quota + safe student-data deletion).
+  node_cold_backend: "local_zfs" | "smb";
+  node_cold_owner_node_id: number | null;
+  node_cold_ready: number;
 }
 
 const PLACEMENT_SELECT = `
-  SELECT p.*, labs.name AS lab_name, nodes.name AS node_name, nodes.online AS online
+  SELECT p.*, labs.name AS lab_name, nodes.name AS node_name, nodes.online AS online,
+         nodes.cold_backend AS node_cold_backend, nodes.cold_owner_node_id AS node_cold_owner_node_id,
+         nodes.cold_ready AS node_cold_ready
   FROM lab_placements p
   JOIN labs ON labs.id = p.lab_id
   JOIN nodes ON nodes.id = p.node_id`;
@@ -141,6 +147,39 @@ export interface CreatePlacementInput {
  * current roster member on it. Returns the new placement.
  */
 export async function createPlacement(input: CreatePlacementInput): Promise<Placement> {
+  const node = db()
+    .prepare("SELECT id, name, cold_backend, cold_owner_node_id, cold_ready FROM nodes WHERE id = ?")
+    .get(input.nodeId) as
+    | { id: number; name: string; cold_backend: string; cold_owner_node_id: number | null; cold_ready: number }
+    | undefined;
+  if (!node) throw new Error("Unknown node");
+
+  // SMB-client assignment rules: cold is the owner node's shared dataset over a mount, so this
+  // placement carries NO local cold quota, and the owner must already host this lab (active) with its
+  // cold dataset created and the SMB mount live before we provision the client.
+  let coldQuota = input.coldQuotaBytes;
+  if (node.cold_backend === "smb") {
+    coldQuota = null;
+    if (!node.cold_owner_node_id) {
+      throw new Error(`node '${node.name}' is an SMB client without a cold-storage owner — configure it on the Nodes page`);
+    }
+    const owner = db().prepare("SELECT name FROM nodes WHERE id = ?").get(node.cold_owner_node_id) as { name: string };
+    const ownerPlacement = db()
+      .prepare("SELECT state FROM lab_placements WHERE lab_id = ? AND node_id = ?")
+      .get(input.labId, node.cold_owner_node_id) as { state: string } | undefined;
+    if (!ownerPlacement) {
+      throw new Error(`grant the cold-storage owner '${owner.name}' access to this lab first (its cold dataset must exist before an SMB client)`);
+    }
+    if (ownerPlacement.state !== "active") {
+      throw new Error(`the owner '${owner.name}' placement is '${ownerPlacement.state}'; wait until it is active before adding the SMB client`);
+    }
+    if (node.cold_ready !== 1) {
+      throw new Error(`the SMB cold-storage mount on '${node.name}' is not an active mount yet`);
+    }
+  } else if (coldQuota === null) {
+    throw new Error("a local-ZFS placement requires a cold quota");
+  }
+
   const now = Date.now();
   const info = db()
     .prepare(
@@ -153,7 +192,7 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
       input.labId,
       input.nodeId,
       input.fastQuotaBytes,
-      input.coldQuotaBytes,
+      coldQuota,
       input.sshPort,
       input.image,
       JSON.stringify(input.containerOptions),
@@ -255,17 +294,23 @@ export async function provisionMemberOnPlacement(
   return { node: placement.node_name, password, emailed };
 }
 
-/** Remove one student from one placement: enqueue student.remove and drop the placement_member. */
+/**
+ * Remove one student from one placement: enqueue student.remove and drop the placement_member.
+ * delete_cold is true only on a local-ZFS placement (which owns its cold dataset); an SMB client is
+ * told delete_cold=false so it can never erase the owner's shared cold data — the owner deletes it
+ * exactly once. delete_data (fast, node-local) is honored on every placement.
+ */
 export function removeMemberFromPlacement(
   placement: Placement,
   student: { id: number; username: string },
   deleteData: boolean,
   actor?: string,
 ): void {
+  const deleteCold = deleteData && placement.node_cold_backend === "local_zfs";
   enqueueTask(
     placement.node_name,
     "student.remove",
-    { lab: placement.lab_name, username: student.username, delete_data: deleteData },
+    { lab: placement.lab_name, username: student.username, delete_data: deleteData, delete_cold: deleteCold },
     actor,
   );
   db()
@@ -334,6 +379,21 @@ export function recreatePlacement(
 export function destroyPlacement(placementId: number, actor?: string): void {
   const p = getPlacement(placementId);
   if (!p) return;
+  // An owner (local-ZFS) placement holds the shared cold data for this lab's SMB clients — its
+  // teardown would pull the rug out from under them, so block it until those clients are gone.
+  if (p.node_cold_backend === "local_zfs") {
+    const dependents = db()
+      .prepare(
+        `SELECT n.name FROM lab_placements lp JOIN nodes n ON n.id = lp.node_id
+         WHERE lp.lab_id = ? AND n.cold_owner_node_id = ?`,
+      )
+      .all(p.lab_id, p.node_id) as { name: string }[];
+    if (dependents.length > 0) {
+      throw new Error(
+        `'${p.lab_name}' on '${p.node_name}' owns the shared cold storage for SMB client(s): ${dependents.map((d) => d.name).join(", ")} — remove those placements first`,
+      );
+    }
+  }
   db().prepare("UPDATE lab_placements SET state = 'deleting', updated_at = ? WHERE id = ?").run(Date.now(), placementId);
   enqueueTask(p.node_name, "lab.destroy", { lab: p.lab_name }, actor);
   audit(actor, "placement.destroy", `${p.lab_name}@${p.node_name}`);

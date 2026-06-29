@@ -156,6 +156,73 @@ describe("recreatePlacement", () => {
   });
 });
 
+describe("SMB placement rules + shared student removal", () => {
+  let ownerId: number;
+  let clientId: number;
+
+  beforeAll(() => {
+    const d = dbmod.db();
+    d.prepare("INSERT INTO nodes (name, online, created_at, cold_backend, cold_ready) VALUES ('own-1', 1, 0, 'local_zfs', 1)").run();
+    ownerId = (d.prepare("SELECT id FROM nodes WHERE name='own-1'").get() as any).id;
+    d.prepare("INSERT INTO nodes (name, online, created_at, cold_backend, cold_owner_node_id, cold_ready) VALUES ('smb-1', 1, 0, 'smb', ?, 1)").run(ownerId);
+    clientId = (d.prepare("SELECT id FROM nodes WHERE name='smb-1'").get() as any).id;
+  });
+
+  it("refuses an SMB client until the owner hosts the lab actively, then allows it with no cold quota", async () => {
+    const lab = newLab("smblab");
+    // No owner placement yet -> refuse.
+    await expect(grant(lab.id, clientId)).rejects.toThrow(/grant the cold-storage owner 'own-1'/);
+
+    const owner = await grant(lab.id, ownerId);
+    // Owner still provisioning -> refuse.
+    await expect(grant(lab.id, clientId)).rejects.toThrow(/wait until it is active/);
+
+    placements.markPlacementState(owner.id, "active");
+    const client = await grant(lab.id, clientId);
+    expect(client.cold_quota_bytes).toBeNull(); // owner-managed cold, no local quota
+    expect(client.node_cold_backend).toBe("smb");
+  });
+
+  it("refuses an SMB client whose mount is not active", async () => {
+    const lab = newLab("smblab2");
+    const owner = await grant(lab.id, ownerId);
+    placements.markPlacementState(owner.id, "active");
+    dbmod.db().prepare("UPDATE nodes SET cold_ready = 0 WHERE id = ?").run(clientId);
+    await expect(grant(lab.id, clientId)).rejects.toThrow(/mount on 'smb-1' is not an active mount/);
+    dbmod.db().prepare("UPDATE nodes SET cold_ready = 1 WHERE id = ?").run(clientId);
+  });
+
+  it("deletes shared cold only on the owner (delete_cold=false on the SMB client)", async () => {
+    const lab = newLab("smblab3");
+    const owner = await grant(lab.id, ownerId);
+    placements.markPlacementState(owner.id, "active");
+    await students.addStudentToLab(lab.id, { username: "alice", email: "a@x.edu" }, "admin");
+    const client = await grant(lab.id, clientId);
+    placements.markPlacementState(client.id, "active");
+
+    const alice = students.listMembers(lab.id).find((m) => m.username === "alice")!;
+    enqueueTask.mockClear();
+    students.removeStudentFromLab(lab.id, alice.id, true, "admin");
+
+    const removes = enqueueTask.mock.calls.filter((c) => c[1] === "student.remove");
+    const byNode = Object.fromEntries(removes.map((c) => [c[0], c[2]]));
+    expect(byNode["own-1"]).toMatchObject({ delete_data: true, delete_cold: true });
+    expect(byNode["smb-1"]).toMatchObject({ delete_data: true, delete_cold: false });
+  });
+
+  it("blocks tearing down the owner placement while an SMB client depends on it", async () => {
+    const lab = newLab("smblab4");
+    const owner = await grant(lab.id, ownerId);
+    placements.markPlacementState(owner.id, "active");
+    const client = await grant(lab.id, clientId);
+    expect(() => placements.destroyPlacement(owner.id, "admin")).toThrow(/owns the shared cold storage/);
+    // Removing the client first unblocks the owner.
+    placements.destroyPlacement(client.id, "admin");
+    placements.confirmPlacementDestroyed("smblab4", "smb-1");
+    expect(() => placements.destroyPlacement(owner.id, "admin")).not.toThrow();
+  });
+});
+
 describe("destroyPlacement keeps the row until the agent confirms", () => {
   it("marks deleting + enqueues lab.destroy; confirm removes the row", async () => {
     const lab = newLab("teardown");

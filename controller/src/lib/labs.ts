@@ -109,7 +109,11 @@ export function destroyLab(labId: number, actor?: string): DestroyLabResult {
   const lab = getLab(labId);
   if (!lab) return { deleted: false, teardownStarted: 0 };
 
-  const placements = listPlacements(labId);
+  // Tear SMB clients down before their local-ZFS owners, so an owner that still has dependents
+  // never blocks the loop (destroyPlacement refuses to remove an owner while clients depend on it).
+  const placements = listPlacements(labId).sort(
+    (a, b) => (a.node_cold_backend === "smb" ? 0 : 1) - (b.node_cold_backend === "smb" ? 0 : 1),
+  );
   for (const p of placements) destroyPlacement(p.id, actor);
   if (placements.length > 0) {
     // Wait for the nodes to confirm destruction before removing the logical lab.

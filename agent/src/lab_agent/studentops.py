@@ -33,9 +33,19 @@ def remove_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     username = params["username"]
     delete_data = bool(params.get("delete_data", False))
+    # delete_cold is sent separately by the controller: True only for the local-ZFS owner of the
+    # cold data (so shared cold is deleted exactly once), False on SMB clients (which must never
+    # touch the owner's share). Defaults to delete_data for a standalone local-ZFS lab / old caller.
+    delete_cold = bool(params.get("delete_cold", delete_data))
 
-    # When delete_data is set, remove_user also wipes the student's /labusers/{fast,slow} subdirs
-    # inside the container. There are no per-student datasets to destroy on the host.
-    users.remove_user(docker.container_name(lab), username, delete_home=delete_data)
+    users.remove_user(
+        docker.container_name(lab), username, delete_fast=delete_data, delete_cold=delete_cold
+    )
     msg = f"removed student '{username}' from lab '{lab}'"
-    return {"lab": lab, "username": username, "data_deleted": delete_data}, msg
+    result = {
+        "lab": lab,
+        "username": username,
+        "data_deleted": delete_data,
+        "cold_deleted": delete_cold,
+    }
+    return result, msg

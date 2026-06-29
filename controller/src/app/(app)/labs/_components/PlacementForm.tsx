@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,6 +10,10 @@ export interface NodeOpt {
   id: number;
   name: string;
   online: number;
+  coldBackend: "local_zfs" | "smb";
+  ownerName: string | null; // for SMB nodes, the cold-storage owner
+  ready: boolean; // can this lab be granted access to this node right now?
+  blockedReason: string | null; // why not (SMB owner missing / not active / mount down)
 }
 
 interface Props {
@@ -21,6 +26,7 @@ interface Props {
 
 /** "Grant node access": create a placement of the lab on a node with its initial container config. */
 export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, action }: Props) {
+  const [nodeId, setNodeId] = useState<number>(0);
   if (nodes.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -28,18 +34,22 @@ export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, acti
       </p>
     );
   }
+  const selected = nodes.find((n) => n.id === nodeId);
+  const isSmb = selected?.coldBackend === "smb";
+  const blocked = !!selected && !selected.ready;
+
   return (
     <form action={action} className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
       <input type="hidden" name="labId" value={labId} />
       <div>
         <Label>Node</Label>
-        <Select name="nodeId" required defaultValue="">
-          <option value="" disabled>
+        <Select name="nodeId" required value={nodeId} onChange={(e) => setNodeId(Number(e.target.value))}>
+          <option value={0} disabled>
             Select node…
           </option>
           {nodes.map((n) => (
             <option key={n.id} value={n.id}>
-              {n.name} {n.online ? "(online)" : "(offline)"}
+              {n.name} {n.online ? "(online)" : "(offline)"} {n.coldBackend === "smb" ? "· SMB" : ""}
             </option>
           ))}
         </Select>
@@ -50,7 +60,13 @@ export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, acti
       </div>
       <div>
         <Label>Cold quota (TB)</Label>
-        <Input name="coldTb" type="number" step="0.5" defaultValue={defaultColdTb} />
+        {isSmb ? (
+          <p className="pt-2 text-sm text-muted-foreground">
+            Managed by owner {selected?.ownerName ?? "—"}
+          </p>
+        ) : (
+          <Input name="coldTb" type="number" step="0.5" defaultValue={defaultColdTb} />
+        )}
       </div>
       <div>
         <Label>Base image</Label>
@@ -77,11 +93,16 @@ export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, acti
         <Input name="restart" defaultValue="unless-stopped" />
       </div>
       <div className="sm:col-span-2 lg:col-span-3">
+        {blocked && (
+          <p className="mb-2 text-sm text-amber-600">{selected?.blockedReason}</p>
+        )}
         <p className="mb-2 text-xs text-muted-foreground">
           The SSH port is allocated automatically on the node. Container options are frozen after
           creation (change them via the placement&apos;s recreate action). All GPUs are always attached.
         </p>
-        <Button type="submit">Grant node access</Button>
+        <Button type="submit" disabled={blocked}>
+          Grant node access
+        </Button>
       </div>
     </form>
   );
