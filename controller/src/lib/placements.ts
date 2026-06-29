@@ -13,6 +13,7 @@ import { db } from "./db";
 import { sendCredentialEmail } from "./mailer";
 import { generatePassword } from "./passwords";
 import { enqueueTask } from "./queue";
+import { decryptSecret, encryptSecret } from "./secrets";
 import { getSetting } from "./settings";
 
 export interface ContainerOptions {
@@ -268,8 +269,6 @@ export interface ProvisionStudent {
 
 export interface MemberProvision {
   node: string;
-  password: string;
-  emailed: boolean;
 }
 
 export interface PlacementMember {
@@ -280,6 +279,7 @@ export interface PlacementMember {
   student_id: string | null;
   state: MemberState;
   last_error: string | null;
+  credential_available: number;
   updated_at: number;
 }
 
@@ -287,7 +287,8 @@ export function listPlacementMembers(placementId: number): PlacementMember[] {
   return db()
     .prepare(
       `SELECT students.id, students.username, students.email, students.name, students.student_id,
-              pm.state, pm.last_error, pm.updated_at
+              pm.state, pm.last_error, CASE WHEN pm.credential_secret IS NULL THEN 0 ELSE 1 END AS credential_available,
+              pm.updated_at
        FROM placement_members pm JOIN students ON students.id = pm.student_id
        WHERE pm.placement_id = ? ORDER BY students.username`,
     )
@@ -295,9 +296,10 @@ export function listPlacementMembers(placementId: number): PlacementMember[] {
 }
 
 /**
- * Provision one student on one placement: record the placement_member, enqueue student.add with a
- * freshly generated per-node password, and email the credentials (best-effort). Idempotent — a
- * student already provisioned on the placement is skipped (no duplicate account/email).
+ * Provision one student on one placement: record the placement_member and enqueue student.add with
+ * a freshly generated per-node password. The encrypted credential stays controller-side until the
+ * agent reports success; only then is it emailed or made available for a one-time admin reveal.
+ * Idempotent — a student already provisioned on the placement is skipped.
  */
 export async function provisionMemberOnPlacement(
   placement: Placement,
@@ -310,14 +312,15 @@ export async function provisionMemberOnPlacement(
   if (existing) return null;
 
   const now = Date.now();
+  const password = generatePassword();
   db()
     .prepare(
-      `INSERT INTO placement_members (placement_id, student_id, state, created_at, updated_at)
-       VALUES (?, ?, 'provisioning', ?, ?)`,
+      `INSERT INTO placement_members
+         (placement_id, student_id, state, credential_secret, created_at, updated_at)
+       VALUES (?, ?, 'provisioning', ?, ?, ?)`,
     )
-    .run(placement.id, student.id, now, now);
+    .run(placement.id, student.id, encryptSecret(password), now, now);
 
-  const password = generatePassword();
   enqueueTask(
     placement.node_name,
     "student.add",
@@ -325,23 +328,98 @@ export async function provisionMemberOnPlacement(
     actor,
   );
 
-  let emailed = false;
-  if (student.email) {
-    const host = getSetting("sshHostOverride").trim() || placement.node_name;
-    const res = await sendCredentialEmail({
-      to: student.email,
-      name: student.name ?? undefined,
-      username: student.username,
-      password,
-      host,
-      port: placement.ssh_port,
-      lab: placement.lab_name,
-      node: placement.node_name,
-      studentId: student.student_id,
-    });
-    emailed = res.sent;
-  }
-  return { node: placement.node_name, password, emailed };
+  return { node: placement.node_name };
+}
+
+interface PendingCredential {
+  member_id: number;
+  state: MemberState;
+  credential_secret: string | null;
+  email: string | null;
+  name: string | null;
+  username: string;
+  student_id: string | null;
+  lab_name: string;
+  node_name: string;
+  ssh_port: number;
+}
+
+function pendingCredential(labName: string, nodeName: string, username: string): PendingCredential | null {
+  const row = db()
+    .prepare(
+      `SELECT pm.id AS member_id, pm.state, pm.credential_secret,
+              students.email, students.name, students.username, students.student_id,
+              labs.name AS lab_name, nodes.name AS node_name, p.ssh_port
+       FROM placement_members pm
+       JOIN students ON students.id = pm.student_id
+       JOIN lab_placements p ON p.id = pm.placement_id
+       JOIN labs ON labs.id = p.lab_id
+       JOIN nodes ON nodes.id = p.node_id
+       WHERE labs.name = ? AND nodes.name = ? AND students.username = ?`,
+    )
+    .get(labName, nodeName, username) as PendingCredential | undefined;
+  return row ?? null;
+}
+
+/** Deliver a credential only after the placement member is active. Successful email burns the
+ * encrypted copy; skipped/failed email leaves it available for a one-time admin reveal. */
+export async function deliverPlacementCredential(
+  labName: string,
+  nodeName: string,
+  username: string,
+): Promise<boolean> {
+  const pending = pendingCredential(labName, nodeName, username);
+  if (!pending || pending.state !== "active" || !pending.credential_secret || !pending.email) return false;
+  const password = decryptSecret(pending.credential_secret);
+  if (!password) return false;
+  const host = getSetting("sshHostOverride").trim() || pending.node_name;
+  const result = await sendCredentialEmail({
+    to: pending.email,
+    name: pending.name ?? undefined,
+    username: pending.username,
+    password,
+    host,
+    port: pending.ssh_port,
+    lab: pending.lab_name,
+    node: pending.node_name,
+    studentId: pending.student_id,
+  });
+  if (!result.sent) return false;
+  db()
+    .prepare("UPDATE placement_members SET credential_secret = NULL, credential_delivered_at = ? WHERE id = ?")
+    .run(Date.now(), pending.member_id);
+  return true;
+}
+
+/** Burn and return a successfully-provisioned member's password for a one-time admin reveal. */
+export function consumePlacementCredential(
+  placementId: number,
+  studentId: number,
+  actor?: string,
+): { username: string; password: string } {
+  const row = db()
+    .prepare(
+      `SELECT pm.id AS member_id, pm.state, pm.credential_secret, students.username,
+              labs.name AS lab_name, nodes.name AS node_name
+       FROM placement_members pm
+       JOIN students ON students.id = pm.student_id
+       JOIN lab_placements p ON p.id = pm.placement_id
+       JOIN labs ON labs.id = p.lab_id
+       JOIN nodes ON nodes.id = p.node_id
+       WHERE pm.placement_id = ? AND pm.student_id = ?`,
+    )
+    .get(placementId, studentId) as
+    | { member_id: number; state: MemberState; credential_secret: string | null; username: string; lab_name: string; node_name: string }
+    | undefined;
+  if (!row || row.state !== "active") throw new Error("Credentials are available only after provisioning succeeds");
+  if (!row.credential_secret) throw new Error("Credential was already delivered or revealed");
+  const password = decryptSecret(row.credential_secret);
+  if (!password) throw new Error("Credential could not be decrypted");
+  db()
+    .prepare("UPDATE placement_members SET credential_secret = NULL, credential_delivered_at = ? WHERE id = ?")
+    .run(Date.now(), row.member_id);
+  audit(actor, "placement.credential_reveal", `${row.lab_name}/${row.username}@${row.node_name}`);
+  return { username: row.username, password };
 }
 
 /**

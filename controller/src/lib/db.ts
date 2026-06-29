@@ -445,6 +445,16 @@ const MIGRATIONS: { id: string; sql?: string; fn?: (conn: Database.Database) => 
       WHERE email IS NOT NULL AND email <> lower(trim(email));
     `,
   },
+  {
+    // Phase 12 security closeout: a generated student password stays encrypted until the agent
+    // confirms student.add. Successful SMTP delivery clears it; otherwise an admin may reveal it
+    // once from the active placement page. It is never exposed while provisioning is incomplete.
+    id: "0015_deferred_student_credentials",
+    sql: `
+    ALTER TABLE placement_members ADD COLUMN credential_secret TEXT;
+    ALTER TABLE placement_members ADD COLUMN credential_delivered_at INTEGER;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

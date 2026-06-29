@@ -1,7 +1,7 @@
 /**
  * Email via an external SMTP server configured in the UI Settings (never bundled, never env).
- * If SMTP is not configured, send() is a no-op that returns {skipped:true} so callers (e.g. adding a
- * student) still succeed — the credential is shown in the UI regardless.
+ * If SMTP is not configured, send() is a no-op that returns {skipped:true}. Successfully provisioned
+ * student credentials then remain encrypted until an admin reveals them once on the placement page.
  */
 
 import nodemailer from "nodemailer";

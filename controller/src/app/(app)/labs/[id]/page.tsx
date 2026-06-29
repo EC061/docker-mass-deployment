@@ -67,13 +67,12 @@ export default async function LabDetail({
   searchParams,
 }: {
   params: Promise<{ id: string }>;
-  searchParams: Promise<{ newuser?: string; pwid?: string; emailed?: string; saved?: string; error?: string }>;
+  searchParams: Promise<{ saved?: string; error?: string }>;
 }) {
   const { id } = await params;
-  const { newuser, pwid, emailed, saved, error } = await searchParams;
+  const { saved, error } = await searchParams;
   const savedMsg = saved ? takeFlash(saved) : null;
   const errorMsg = error ? takeFlash(error) : null;
-  const pw = pwid ? takeFlash(pwid) : null;
   const labId = Number(id);
   const lab = getLab(labId);
   if (!lab) notFound();
@@ -198,15 +197,6 @@ export default async function LabDetail({
       <Card>
         <CardContent className="space-y-3">
           <h3 className="text-base font-semibold">Roster ({members.length})</h3>
-          {newuser && pw && (
-            <div className="rounded-md border border-primary/50 bg-primary/10 px-3 py-2.5 text-sm">
-              Added <b>{newuser}</b> — password{" "}
-              <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs">{pw}</code>{" "}
-              <span className="text-muted-foreground">
-                (shown once{emailed ? "; also emailed" : "; SMTP not configured, not emailed"})
-              </span>
-            </div>
-          )}
           <form action={addMemberAction} className="flex flex-wrap items-end gap-3">
             <input type="hidden" name="labId" value={lab.id} />
             <div>

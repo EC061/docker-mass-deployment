@@ -20,6 +20,7 @@ import {
 import { getSetting, TIB } from "@/lib/settings";
 import {
   removePlacementAction,
+  revealPlacementCredentialAction,
   retryPlacementAction,
   setPlacementQuotaAction,
 } from "../../../actions";
@@ -90,15 +91,16 @@ export default async function PlacementPage({
   searchParams,
 }: {
   params: Promise<{ id: string; placementId: string }>;
-  searchParams: Promise<{ saved?: string; error?: string }>;
+  searchParams: Promise<{ saved?: string; error?: string; credential?: string; username?: string }>;
 }) {
   const { id, placementId } = await params;
-  const { saved, error } = await searchParams;
+  const { saved, error, credential, username } = await searchParams;
   const placement = getPlacement(Number(placementId));
   if (!placement || placement.lab_id !== Number(id)) notFound();
 
   const savedMsg = saved ? takeFlash(saved) : null;
   const errorMsg = error ? takeFlash(error) : null;
+  const revealedCredential = credential ? takeFlash(credential) : null;
   const members = listPlacementMembers(placement.id);
   const labPlacements = listPlacements(placement.lab_id);
   const ownerPlacement = placement.node_cold_owner_node_id
@@ -134,6 +136,14 @@ export default async function PlacementPage({
       ) : null}
       {errorMsg ? (
         <Card className="border-destructive/50"><CardContent><p className="text-sm text-destructive">{errorMsg}</p></CardContent></Card>
+      ) : null}
+      {revealedCredential && username ? (
+        <Card className="border-primary/50">
+          <CardContent className="space-y-1">
+            <p className="text-sm">One-time password for <b>{username}</b>:</p>
+            <code className="inline-block rounded bg-muted px-2 py-1 font-mono text-sm">{revealedCredential}</code>
+          </CardContent>
+        </Card>
       ) : null}
       {placement.last_error ? (
         <Card className="border-destructive/50"><CardContent><p className="text-sm text-destructive">{placement.last_error}</p></CardContent></Card>
@@ -230,7 +240,7 @@ export default async function PlacementPage({
           <h2 className="mb-3 text-base font-semibold">Placement roster ({members.length})</h2>
           {members.length === 0 ? <p className="text-sm text-muted-foreground">No students in this placement.</p> : (
             <Table>
-              <TableHeader><TableRow><TableHead>Username</TableHead><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Error</TableHead></TableRow></TableHeader>
+              <TableHeader><TableRow><TableHead>Username</TableHead><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Error</TableHead><TableHead>Credential</TableHead></TableRow></TableHeader>
               <TableBody>
                 {members.map((member) => (
                   <TableRow key={member.id}>
@@ -238,6 +248,15 @@ export default async function PlacementPage({
                     <TableCell>{member.name ?? "—"}</TableCell>
                     <TableCell><Badge variant={STATE_VARIANT[member.state] ?? "warn"}>{member.state}</Badge></TableCell>
                     <TableCell className="text-destructive">{member.last_error ?? "—"}</TableCell>
+                    <TableCell>
+                      {member.state === "active" && member.credential_available ? (
+                        <form action={revealPlacementCredentialAction}>
+                          <input type="hidden" name="placementId" value={placement.id} />
+                          <input type="hidden" name="studentId" value={member.id} />
+                          <Button type="submit" variant="secondary" size="sm">Reveal once</Button>
+                        </form>
+                      ) : member.state === "active" ? "Delivered or revealed" : "Available after success"}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>

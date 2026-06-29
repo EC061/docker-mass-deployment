@@ -1,7 +1,7 @@
 /**
  * Students + logical lab membership. A student is global (reusable across labs). Adding a student to
  * a lab records the membership and provisions them on EVERY placement of that lab (one account per
- * node, each with its own emailed credential); removing them reverses it across all placements.
+ * node, with credentials delivered only after agent confirmation); removal reverses every placement.
  */
 
 import { audit } from "./audit";

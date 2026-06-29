@@ -111,6 +111,15 @@ describe("markTaskState", () => {
     expect(row.state).toBe("queued"); // untouched
     expect(row.result).toBeNull();
   });
+
+  it("never moves a terminal task back to another terminal state", () => {
+    const frame = queue.enqueueTask("terminal-node", "lab.create", { lab: "stable" });
+    expect(queue.markTaskState("terminal-node", frame.id, "ok", { done: true })).toBe(true);
+    expect(queue.markTaskState("terminal-node", frame.id, "failed", undefined, "late failure")).toBe(false);
+    const row = queue.getTask(frame.id)!;
+    expect(row.state).toBe("ok");
+    expect(row.error).toBeNull();
+  });
 });
 
 describe("secret handling (Phase 8)", () => {

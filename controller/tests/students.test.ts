@@ -80,12 +80,11 @@ describe("findOrCreateStudent", () => {
 });
 
 describe("addStudentToLab (provisions on every placement)", () => {
-  it("creates membership, enqueues student.add, and emails credentials", async () => {
+  it("queues student.add but withholds credentials until the agent confirms success", async () => {
     const res = await students.addStudentToLab(labId, { username: "alice", email: "a@uga.edu" }, "admin");
     expect(res.student.username).toBe("alice");
     expect(res.provisioned).toHaveLength(1);
-    expect(res.provisioned[0].emailed).toBe(true);
-    expect(res.provisioned[0].password.length).toBeGreaterThanOrEqual(12);
+    expect(res.provisioned[0].node).toBe("gpu-1");
 
     expect(dbmod.db().prepare(
       "SELECT 1 FROM lab_members WHERE lab_id=? AND student_id=(SELECT id FROM students WHERE username='alice')",
@@ -93,17 +92,38 @@ describe("addStudentToLab (provisions on every placement)", () => {
     expect(enqueueTask).toHaveBeenCalledWith(
       "gpu-1",
       "student.add",
-      expect.objectContaining({ lab: "bio", username: "alice", password: res.provisioned[0].password }),
+      expect.objectContaining({ lab: "bio", username: "alice", password: expect.any(String) }),
       "admin",
     );
+    expect(sendCredentialEmail).not.toHaveBeenCalled();
+    const pending = dbmod.db().prepare(
+      `SELECT pm.credential_secret AS secret FROM placement_members pm
+       JOIN students ON students.id = pm.student_id WHERE students.username = 'alice'`,
+    ).get() as any;
+    expect(pending.secret).toMatch(/^enc:v1:/);
+
+    placements.markPlacementMemberState("bio", "gpu-1", "alice", "active");
+    expect(await placements.deliverPlacementCredential("bio", "gpu-1", "alice")).toBe(true);
     const cred = sendCredentialEmail.mock.calls[0][0] as any;
     expect(cred).toMatchObject({ to: "a@uga.edu", username: "alice", port: 2222, lab: "bio", node: "gpu-1" });
+    expect(dbmod.db().prepare(
+      `SELECT pm.credential_secret AS secret FROM placement_members pm
+       JOIN students ON students.id = pm.student_id WHERE students.username = 'alice'`,
+    ).get()).toMatchObject({ secret: null });
   });
 
-  it("does not email when the student has no address", async () => {
+  it("allows a one-time admin reveal after success when no email was delivered", async () => {
     const res = await students.addStudentToLab(labId, { username: "bob" });
-    expect(res.provisioned[0].emailed).toBe(false);
+    expect(res.provisioned[0].node).toBe("gpu-1");
     expect(sendCredentialEmail).not.toHaveBeenCalled();
+    placements.markPlacementMemberState("bio", "gpu-1", "bob", "active");
+    expect(await placements.deliverPlacementCredential("bio", "gpu-1", "bob")).toBe(false);
+    const bob = students.listMembers(labId).find((member) => member.username === "bob")!;
+    const placement = placements.listPlacements(labId)[0];
+    const revealed = placements.consumePlacementCredential(placement.id, bob.id, "admin");
+    expect(revealed.username).toBe("bob");
+    expect(revealed.password.length).toBeGreaterThanOrEqual(12);
+    expect(() => placements.consumePlacementCredential(placement.id, bob.id, "admin")).toThrow(/already delivered or revealed/);
   });
 
   it("adds to the roster only (no provisioning) when the lab has no placement", async () => {

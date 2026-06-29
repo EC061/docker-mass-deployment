@@ -46,6 +46,8 @@ describe("Server Actions reject unauthenticated callers", () => {
       labs.grantNodeAccessAction(fd()),
       labs.setPlacementQuotaAction(fd()),
       labs.recreatePlacementAction(fd()),
+      labs.retryPlacementAction(fd()),
+      labs.revealPlacementCredentialAction(fd()),
       labs.removePlacementAction(fd()),
       labs.addMemberAction(fd()),
       labs.removeMemberAction(fd()),

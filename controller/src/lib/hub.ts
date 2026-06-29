@@ -17,6 +17,7 @@ import { env } from "./env";
 import { ingestTelemetry } from "./ingest";
 import {
   confirmPlacementDestroyed,
+  deliverPlacementCredential,
   getPlacementByLabNode,
   markPlacementMemberState,
   markPlacementStateByLabNode,
@@ -303,6 +304,22 @@ function handleResult(node: string, frame: any): void {
         frame.ok ? "active" : "failed",
         frame.ok ? undefined : (frame.error ?? "student.add failed"),
       );
+      if (frame.ok) {
+        void deliverPlacementCredential(labName, node, params.username).catch((error: unknown) => {
+          db()
+            .prepare(
+              `INSERT INTO logs (ts, node, level, source, lab, user, msg, detail)
+               VALUES (?, ?, 'ERROR', 'credential', ?, ?, 'credential delivery failed', ?)`,
+            )
+            .run(
+              Date.now(),
+              node,
+              labName,
+              params.username,
+              error instanceof Error ? error.message : String(error),
+            );
+        });
+      }
     }
   }
   if (frame.logs) {

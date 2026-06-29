@@ -94,6 +94,11 @@ describe("getters", () => {
     expect(summary.placement_count).toBe(1);
     expect(summary.active_placements).toBe(0); // still 'provisioning' until the agent confirms
     expect(summary.student_count).toBe(0);
+    expect(labs.listLabPlacementSummaries()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ lab_id: chem.id, node_name: "gpu-1", state: "provisioning" }),
+      ]),
+    );
 
     const names = labs.listLabs().map((l) => l.name);
     expect([...names]).toEqual([...names].sort());
