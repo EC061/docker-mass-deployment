@@ -10,7 +10,7 @@ import "./src/lib/node-env";
 import { createServer } from "node:http";
 import next from "next";
 import { attachHub } from "./src/lib/hub";
-import { env } from "./src/lib/env";
+import { assertEnv, env } from "./src/lib/env";
 import { db } from "./src/lib/db";
 import { startMaintenance } from "./src/lib/maintenance";
 
@@ -19,6 +19,9 @@ const app = next({ dev });
 const handle = app.getRequestHandler();
 
 async function main() {
+  // Validate bootstrap env eagerly so a misconfigured deploy fails closed with a precise message
+  // (missing/placeholder/weak secrets, bad PORT, malformed CONTROLLER_DOMAIN) before serving anything.
+  assertEnv();
   // Open + migrate the DB at boot so the first request isn't slowed and schema errors surface early.
   db();
   await app.prepare();

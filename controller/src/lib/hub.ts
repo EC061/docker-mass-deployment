@@ -13,6 +13,7 @@ import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import { alertNodeOffline, alertTaskFailed, maybeAlertOnLog } from "./alerts";
 import { db } from "./db";
+import { env } from "./env";
 import { ingestTelemetry } from "./ingest";
 import { markLabStatus } from "./labs";
 import { verifyNodeAuth } from "./nodes";
@@ -374,6 +375,16 @@ function deregisterNode(node: string): void {
   }
 }
 
+/**
+ * Extract the request's host (forwarded host wins behind a proxy), lower-cased and port-stripped.
+ * Returns "" when no host header is present.
+ */
+function requestHost(req: IncomingMessage): string {
+  const fwd = req.headers["x-forwarded-host"];
+  const raw = (Array.isArray(fwd) ? fwd[0] : fwd) || req.headers.host || "";
+  return raw.split(",")[0].trim().split(":")[0].toLowerCase();
+}
+
 /** Wire the hub to the HTTP server's upgrade event for a given path. */
 export function attachHub(server: import("node:http").Server, path = "/agent"): WebSocketServer {
   const wss = createHub();
@@ -381,6 +392,14 @@ export function attachHub(server: import("node:http").Server, path = "/agent"): 
     const { url } = req;
     if (!url || new URL(url, "http://localhost").pathname !== path) {
       return; // let Next/HMR handle other upgrade paths
+    }
+    // When a public domain is configured, the agent connects through the reverse proxy, which sets
+    // X-Forwarded-Host to that domain. Reject upgrades whose (forwarded) host isn't the controller
+    // domain so the agent endpoint can't be reached via an unexpected vhost. Unset → dev, skip.
+    const domain = env.controllerDomain;
+    if (domain && requestHost(req) !== domain) {
+      socket.destroy();
+      return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
