@@ -85,7 +85,7 @@ async function WebdavStatusBadge() {
 }
 
 /** The available-backups table, gated on actual reachability so failures aren't shown as "empty". */
-async function BackupsList() {
+async function BackupsList({ tz }: { tz: string }) {
   const st = await loadStatus();
   if (!st.configured) {
     return (
@@ -112,7 +112,7 @@ async function BackupsList() {
           <TableRow key={b.name}>
             <TableCell className="font-mono text-xs">{b.name}</TableCell>
             <TableCell className="text-sm">
-              <ClientTime ts={b.stamp} />
+              <ClientTime ts={b.stamp} tz={tz} />
             </TableCell>
             <TableCell className="text-right">
               <form action={restoreAction}>
@@ -173,7 +173,7 @@ export default async function BackupsPage({
           </p>
           <p className="text-sm">
             <span className="font-medium">Last run: </span>
-            <ClientTime ts={s.backupLastRun} />
+            <ClientTime ts={s.backupLastRun} tz={s.backupTimezone} />
             {s.backupLastStatus && (
               <span className={failed ? "text-destructive" : "text-emerald-500"}>
                 {" "}
@@ -183,7 +183,11 @@ export default async function BackupsPage({
           </p>
           <p className="text-sm">
             <span className="font-medium">Next run: </span>
-            {nextRun ? <ClientTime ts={nextRun} /> : <span className="text-muted-foreground">disabled</span>}
+            {nextRun ? (
+              <ClientTime ts={nextRun} tz={s.backupTimezone} />
+            ) : (
+              <span className="text-muted-foreground">disabled</span>
+            )}
           </p>
           {failed && s.backupLastError && (
             <p className="text-sm text-destructive">Last error: {s.backupLastError}</p>
@@ -323,7 +327,7 @@ export default async function BackupsPage({
             </SubmitButton>
           </form>
           <Suspense fallback={<Checking label="Loading backups…" />}>
-            <BackupsList />
+            <BackupsList tz={s.backupTimezone} />
           </Suspense>
           <p className="text-xs text-muted-foreground">
             Restoring stages the backup; it replaces the live database on the next service restart.
