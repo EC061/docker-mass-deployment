@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { putFlash } from "@/lib/flash";
+import { applyLabImport, type ImportPlan, type ImportResult, planLabImport } from "@/lib/labimport";
 import { createLab, destroyLab, getLab, updateLabMeta } from "@/lib/labs";
 import {
   type ContainerOptions,
@@ -180,6 +181,25 @@ export async function addMemberAction(formData: FormData) {
       : `Added ${username} and provisioned on ${n} node(s); credentials emailed where an address exists.`;
   const fid = putFlash(msg);
   redirect(`/labs/${labId}?saved=${fid}`);
+}
+
+/** Preview a lab+roster CSV import: validate the whole file against the DB without writing anything. */
+export async function previewLabImportAction(text: string): Promise<ImportPlan> {
+  await requireAdmin();
+  return planLabImport(String(text ?? ""));
+}
+
+/** Apply a previewed lab+roster CSV import in one transaction. */
+export async function applyLabImportAction(text: string): Promise<{ result?: ImportResult; error?: string }> {
+  const who = await actor();
+  try {
+    const result = await applyLabImport(String(text ?? ""), who);
+    revalidatePath("/labs");
+    revalidatePath("/students");
+    return { result };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "import failed" };
+  }
 }
 
 export async function removeMemberAction(formData: FormData) {
