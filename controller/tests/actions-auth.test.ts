@@ -25,6 +25,7 @@ describe("Server Actions reject unauthenticated callers", () => {
   let labs: typeof import("../src/app/(app)/labs/actions.js");
   let students: typeof import("../src/app/(app)/students/actions.js");
   let settings: typeof import("../src/app/(app)/settings/actions.js");
+  let templates: typeof import("../src/app/(app)/email-templates/actions.js");
   let backups: typeof import("../src/app/(app)/backups/actions.js");
   let stats: typeof import("../src/app/(app)/stats/actions.js");
 
@@ -32,6 +33,7 @@ describe("Server Actions reject unauthenticated callers", () => {
     labs = await import("../src/app/(app)/labs/actions.js");
     students = await import("../src/app/(app)/students/actions.js");
     settings = await import("../src/app/(app)/settings/actions.js");
+    templates = await import("../src/app/(app)/email-templates/actions.js");
     backups = await import("../src/app/(app)/backups/actions.js");
     stats = await import("../src/app/(app)/stats/actions.js");
   });
@@ -56,12 +58,20 @@ describe("Server Actions reject unauthenticated callers", () => {
       settings.saveStorageSettingsAction(fd()),
       settings.saveUsageScanSettingsAction(fd()),
       settings.saveSmtpSettingsAction(fd()),
-      settings.saveWelcomeEmailAction(fd()),
       settings.saveAlertSettingsAction(fd()),
       settings.saveGpuPolicyAction(fd()),
       settings.saveScrubSettingsAction(fd()),
       settings.scrubNowAction(),
       settings.testEmailAction(fd()),
+      templates.saveWelcomeEmailAction(fd()),
+      templates.saveGpuWarnEmailAction(fd()),
+      templates.saveGpuKillEmailAction(fd()),
+      templates.saveRemovalEmailAction(fd()),
+      templates.saveQuotaEmailAction(fd()),
+      templates.saveTestEmailAction(fd()),
+      templates.createAnnouncementTemplateAction(fd()),
+      templates.updateAnnouncementTemplateAction(fd()),
+      templates.deleteAnnouncementTemplateAction(fd()),
       backups.saveWebdavSettingsAction(fd()),
       backups.saveScheduleAction(fd()),
       backups.testConnectionAction(),

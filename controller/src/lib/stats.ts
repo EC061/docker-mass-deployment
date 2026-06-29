@@ -179,10 +179,12 @@ export function buildStats(): NodeStats[] {
   return nodes;
 }
 
-/** Per-node total storage usage, summed across the node's placements. Includes every node (even ones
- * with no placements yet) so node groups can reference the whole fleet. A normal (local_zfs) node
- * reports both fast and cold; an SMB-client node reports fast only — its cold lives on, and is counted
- * against, its linked owner node, named in `coldOwnerName`. */
+/** Per-node storage usage, read from the node's live ZFS pools (the `pools` telemetry the agent
+ * reports every heartbeat), so it reflects real on-disk usage even before any lab is placed. Includes
+ * every node so node groups can reference the whole fleet. `fastUsed`/`coldUsed` are the pool's
+ * allocated bytes and `fastQuota`/`coldQuota` are the pool's total capacity (used vs. size, not a lab
+ * quota). A normal (local_zfs) node reports both fast and cold pools; an SMB-client node reports its
+ * fast pool only — its cold lives on, and is counted against, its linked owner node (`coldOwnerName`). */
 export interface NodeUsage {
   nodeId: number;
   name: string;
@@ -190,18 +192,39 @@ export interface NodeUsage {
   online: number;
   coldBackend: "local_zfs" | "smb";
   coldOwnerName: string | null; // for SMB nodes: the linked normal node hosting their cold storage
-  fastUsed: number | null;
-  fastQuota: number | null;
-  coldUsed: number | null; // null on SMB nodes (cold is counted on the owner)
-  coldQuota: number | null;
+  fastUsed: number | null; // fast pool allocated bytes
+  fastQuota: number | null; // fast pool total capacity
+  coldUsed: number | null; // cold pool allocated bytes (null on SMB nodes; cold is counted on the owner)
+  coldQuota: number | null; // cold pool total capacity
+}
+
+interface PoolInfo {
+  name: string;
+  size: number; // total pool capacity
+  alloc: number; // allocated (used)
+  free: number;
+}
+
+/** Parse the node's `pools` telemetry JSON, keeping only well-formed entries. */
+function parsePools(raw: string | null): PoolInfo[] {
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw) as unknown;
+    if (!Array.isArray(arr)) return [];
+    return arr.filter(
+      (p): p is PoolInfo =>
+        !!p && typeof p === "object" && typeof (p as PoolInfo).alloc === "number" && typeof (p as PoolInfo).size === "number",
+    );
+  } catch {
+    return [];
+  }
 }
 
 export function buildNodeUsage(): NodeUsage[] {
-  const samples = latestSamples();
   const rows = db()
     .prepare(
       `SELECT n.id AS id, n.name AS name, n.alias AS alias, n.online AS online,
-              n.cold_backend AS cold_backend, owner.name AS owner_name
+              n.cold_backend AS cold_backend, n.pools AS pools, owner.name AS owner_name
        FROM nodes n LEFT JOIN nodes owner ON owner.id = n.cold_owner_node_id
        ORDER BY n.name`,
     )
@@ -211,30 +234,18 @@ export function buildNodeUsage(): NodeUsage[] {
     alias: string | null;
     online: number;
     cold_backend: "local_zfs" | "smb";
+    pools: string | null;
     owner_name: string | null;
   }[];
 
-  // node_id -> running totals (used summed only over placements that have a sample; quota over those
-  // that report one). `null` stays null until at least one sample contributes.
-  interface Acc { fastUsed: number | null; fastQuota: number | null; coldUsed: number | null; coldQuota: number | null }
-  const acc = new Map<number, Acc>();
-  const add = (cur: number | null, v: number | null | undefined) =>
-    v === null || v === undefined ? cur : (cur ?? 0) + v;
-
-  for (const p of listAllPlacements()) {
-    const a = acc.get(p.node_id) ?? { fastUsed: null, fastQuota: null, coldUsed: null, coldQuota: null };
-    const fast = samples.get(`${p.id}:L:fast`);
-    const slow = samples.get(`${p.id}:L:slow`);
-    a.fastUsed = add(a.fastUsed, fast?.used);
-    a.fastQuota = add(a.fastQuota, fast?.quota);
-    a.coldUsed = add(a.coldUsed, slow?.used);
-    a.coldQuota = add(a.coldQuota, slow?.quota);
-    acc.set(p.node_id, a);
-  }
-
   return rows.map((r) => {
-    const a = acc.get(r.id);
+    const pools = parsePools(r.pools);
     const isSmb = r.cold_backend === "smb";
+    // The agent reports its ZFS pools fast-first (and slow second, only on a local-ZFS node), so the
+    // fast pool is pools[0] and cold is pools[1]. An SMB node has no local cold pool — its cold lives
+    // on the linked owner node, which counts it against its own slow pool.
+    const fast = pools[0] ?? null;
+    const cold = isSmb ? null : (pools[1] ?? null);
     return {
       nodeId: r.id,
       name: r.name,
@@ -242,10 +253,10 @@ export function buildNodeUsage(): NodeUsage[] {
       online: r.online,
       coldBackend: r.cold_backend,
       coldOwnerName: isSmb ? r.owner_name : null,
-      fastUsed: a?.fastUsed ?? null,
-      fastQuota: a?.fastQuota ?? null,
-      coldUsed: isSmb ? null : (a?.coldUsed ?? null),
-      coldQuota: isSmb ? null : (a?.coldQuota ?? null),
+      fastUsed: fast ? fast.alloc : null,
+      fastQuota: fast ? fast.size : null,
+      coldUsed: cold ? cold.alloc : null,
+      coldQuota: cold ? cold.size : null,
     };
   });
 }

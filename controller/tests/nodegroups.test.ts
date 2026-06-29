@@ -34,23 +34,26 @@ beforeAll(async () => {
      VALUES (2, 1, 2, 1000, NULL, 50002, 'img', 'active', 0, 0)`,
   ).run();
 
-  const sample = (pid: number, pool: string, used: number, quota: number | null) =>
-    d.prepare(
-      "INSERT INTO storage_samples (placement_id, student_id, pool, used_bytes, quota_bytes, ts) VALUES (?, NULL, ?, ?, ?, 100)",
-    ).run(pid, pool, used, quota);
-  sample(1, "fast", 500, 2000);
-  sample(1, "slow", 200, 3000);
-  sample(2, "fast", 300, 1000);
-  sample(2, "slow", 999, null); // SMB cold — must be ignored (counted on the owner instead)
+  // Per-node usage comes from the agent's live `pools` telemetry (fast pool first, cold pool second
+  // on a local-ZFS node; an SMB client reports its fast pool only). `node-empty` reports none.
+  const setPools = (name: string, pools: { name: string; size: number; alloc: number; free: number }[]) =>
+    d.prepare("UPDATE nodes SET pools = ? WHERE name = ?").run(JSON.stringify(pools), name);
+  setPools("node-a", [
+    { name: "fast", size: 2000, alloc: 500, free: 1500 },
+    { name: "cold", size: 3000, alloc: 200, free: 2800 },
+  ]);
+  setPools("node-smb", [{ name: "fast", size: 1000, alloc: 300, free: 700 }]);
 });
 
 describe("buildNodeUsage", () => {
-  it("sums fast + cold for a normal node and fast-only for an SMB node", () => {
+  it("reports fast + cold pool usage for a normal node and fast-only for an SMB node", () => {
     const usage = stats.buildNodeUsage();
     const a = usage.find((n) => n.name === "node-a")!;
     expect(a.coldBackend).toBe("local_zfs");
     expect(a.fastUsed).toBe(500);
+    expect(a.fastQuota).toBe(2000);
     expect(a.coldUsed).toBe(200);
+    expect(a.coldQuota).toBe(3000);
     expect(a.coldOwnerName).toBeNull();
 
     const smb = usage.find((n) => n.name === "node-smb")!;
@@ -60,7 +63,7 @@ describe("buildNodeUsage", () => {
     expect(smb.coldOwnerName).toBe("node-a");
   });
 
-  it("lists nodes with no placements with null totals", () => {
+  it("lists nodes that report no pools with null usage", () => {
     const empty = stats.buildNodeUsage().find((n) => n.name === "node-empty")!;
     expect(empty.fastUsed).toBeNull();
     expect(empty.coldUsed).toBeNull();

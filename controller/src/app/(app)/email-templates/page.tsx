@@ -1,32 +1,36 @@
 import Link from "next/link";
-import {
-  ANNOUNCEMENT_TEMPLATES,
-  ANNOUNCEMENT_VARS,
-} from "@/lib/announcements";
+import { ANNOUNCEMENT_VARS, listAnnouncementTemplates, type AnnouncementTemplate } from "@/lib/announcements";
 import {
   GPU_EMAIL_VARS,
+  QUOTA_EMAIL_VARS,
+  REMOVAL_EMAIL_VARS,
   WELCOME_EMAIL_VARS,
   getSettings,
 } from "@/lib/settings";
-import { Badge } from "@/components/ui/badge";
+import { takeFlash } from "@/lib/flash";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { ConfirmButton } from "../_components/ConfirmButton";
+import {
+  createAnnouncementTemplateAction,
+  deleteAnnouncementTemplateAction,
+  saveGpuKillEmailAction,
+  saveGpuWarnEmailAction,
+  saveQuotaEmailAction,
+  saveRemovalEmailAction,
+  saveTestEmailAction,
+  saveWelcomeEmailAction,
+  updateAnnouncementTemplateAction,
+} from "./actions";
 
 export const dynamic = "force-dynamic";
 
 interface Variable {
   key: string;
   desc: string;
-}
-
-interface TemplateDoc {
-  name: string;
-  trigger: string;
-  /** Where the admin edits this template, or null if it is fixed in code. */
-  editable: { href: string; label: string } | null;
-  vars: Variable[];
-  subject: string;
-  body: string;
-  note?: string;
 }
 
 function VarList({ vars }: { vars: Variable[] }) {
@@ -45,134 +49,111 @@ function VarList({ vars }: { vars: Variable[] }) {
   );
 }
 
-function TemplateCard({ tpl }: { tpl: TemplateDoc }) {
+interface EditableTemplateProps {
+  name: string;
+  trigger: string;
+  /** Server action the subject/body form submits to. */
+  action: (formData: FormData) => void | Promise<void>;
+  subject: string;
+  body: string;
+  vars: Variable[];
+  bodyRows?: number;
+  note?: string;
+}
+
+/** A card with an inline form to edit one email's subject + body, plus its variable reference. */
+function EditableTemplate({ name, trigger, action, subject, body, vars, bodyRows = 10, note }: EditableTemplateProps) {
   return (
     <Card>
       <CardContent className="space-y-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="text-base font-semibold">{tpl.name}</h3>
-          {tpl.editable ? (
-            <Badge variant="ok">editable</Badge>
-          ) : (
-            <Badge variant="warn">fixed</Badge>
-          )}
+        <div className="space-y-1">
+          <h3 className="text-base font-semibold">{name}</h3>
+          <p className="text-sm text-muted-foreground">{trigger}</p>
         </div>
-        <p className="text-sm text-muted-foreground">{tpl.trigger}</p>
-        {tpl.editable && (
-          <p className="text-sm">
-            Edit at{" "}
-            <Link href={tpl.editable.href} className="text-primary hover:underline">
-              {tpl.editable.label}
-            </Link>
-            .
-          </p>
-        )}
-
-        <div className="space-y-1.5">
-          <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-            Available variables
-          </div>
-          <VarList vars={tpl.vars} />
-        </div>
-
-        <div className="space-y-2">
+        <form action={action} className="grid max-w-2xl gap-3">
           <div>
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Subject</div>
-            <div className="mt-1 overflow-x-auto rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-xs">
-              {tpl.subject}
+            <Label>Subject</Label>
+            <Input name="subject" defaultValue={subject} />
+          </div>
+          <div>
+            <Label>Body</Label>
+            <Textarea name="body" rows={bodyRows} defaultValue={body} className="font-mono text-xs" />
+          </div>
+          <div className="space-y-1.5">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Available variables
             </div>
+            <VarList vars={vars} />
           </div>
+          {note && <p className="text-xs text-muted-foreground">{note}</p>}
           <div>
-            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Body</div>
-            <pre className="mt-1 overflow-x-auto whitespace-pre-wrap break-words rounded-md border border-border/60 bg-muted/30 px-3 py-2 font-mono text-xs">
-              {tpl.body}
-            </pre>
+            <Button type="submit">Save template</Button>
           </div>
-        </div>
-
-        {tpl.note && <p className="text-xs text-muted-foreground">{tpl.note}</p>}
+        </form>
       </CardContent>
     </Card>
   );
 }
 
-export default async function EmailTemplatesPage() {
+/** One editable prebuilt announcement template (name + subject + body), with a delete control. */
+function AnnouncementTemplateCard({ tpl }: { tpl: AnnouncementTemplate }) {
+  return (
+    <div className="space-y-3 rounded-md border border-border/60 p-3">
+      <form action={updateAnnouncementTemplateAction} className="grid gap-3">
+        <input type="hidden" name="id" value={tpl.id} />
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div>
+            <Label>Template name</Label>
+            <Input name="name" defaultValue={tpl.name} maxLength={80} required />
+          </div>
+          <div>
+            <Label>Subject</Label>
+            <Input name="subject" defaultValue={tpl.subject} maxLength={200} />
+          </div>
+        </div>
+        <div>
+          <Label>Body</Label>
+          <Textarea name="body" rows={8} defaultValue={tpl.body} required className="font-mono text-xs" />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button type="submit" size="sm">Save</Button>
+        </div>
+      </form>
+      <form action={deleteAnnouncementTemplateAction}>
+        <input type="hidden" name="id" value={tpl.id} />
+        <ConfirmButton
+          size="sm"
+          variant="ghost"
+          title={`Delete template "${tpl.name}"?`}
+          confirmLabel="Delete template"
+          confirm={`Delete the announcement template "${tpl.name}"? This only removes the prebuilt starting point; it does not affect any announcement already sent.`}
+        >
+          Delete
+        </ConfirmButton>
+      </form>
+    </div>
+  );
+}
+
+export default async function EmailTemplatesPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string }>;
+}) {
+  const { error } = await searchParams;
+  const errorMsg = error ? takeFlash(error) : null;
   const s = getSettings();
   const gpuKillVars = GPU_EMAIL_VARS.filter((v) => v.key !== "grace_minutes");
-
-  const templates: TemplateDoc[] = [
-    {
-      name: "Welcome / credentials",
-      trigger: "Sent to a student once they are successfully provisioned on a node — carries their login and SSH connection details.",
-      editable: { href: "/settings", label: "Settings → Email" },
-      vars: WELCOME_EMAIL_VARS,
-      subject: s.welcomeEmailSubject,
-      body: s.welcomeEmailBody,
-    },
-    {
-      name: "GPU idle warning",
-      trigger: "Sent to a user whose process is holding GPU memory while idle, before it is terminated.",
-      editable: { href: "/settings", label: "Settings → GPU policy" },
-      vars: GPU_EMAIL_VARS,
-      subject: s.gpuWarnEmailSubject,
-      body: s.gpuWarnEmailBody,
-    },
-    {
-      name: "GPU process terminated",
-      trigger: "Sent to a user after their idle GPU process has been terminated to free the GPU.",
-      editable: { href: "/settings", label: "Settings → GPU policy" },
-      vars: gpuKillVars,
-      subject: s.gpuKillEmailSubject,
-      body: s.gpuKillEmailBody,
-    },
-    {
-      name: "Service announcement",
-      trigger: "Composed by an admin and broadcast to all students and/or all PIs.",
-      editable: { href: "/announcements", label: "Announcements" },
-      vars: ANNOUNCEMENT_VARS,
-      subject: "(composed per send)",
-      body: `(composed per send — ${ANNOUNCEMENT_TEMPLATES.length} prebuilt starting points are offered on the Announcements page)\n\nPrebuilt templates:\n${ANNOUNCEMENT_TEMPLATES.map((t) => `  • ${t.name}`).join("\n")}`,
-      note: "A fixed “— Lab Manager” signature is appended to every announcement.",
-    },
-    {
-      name: "Removed from lab",
-      trigger: "Sent to a student when they are removed from a lab (notes whether their data was deleted).",
-      editable: null,
-      vars: [{ key: "lab", desc: "lab name (substituted into the fixed text)" }],
-      subject: "Removed from lab {lab}",
-      body: `You have been removed from the lab "{lab}". <your data was deleted | your data has been retained for now>.\n\n— Lab Manager`,
-    },
-    {
-      name: "Storage quota alert",
-      trigger: "Sent to a lab's PI when one of its pools crosses the quota-alert threshold (Settings → Alerts).",
-      editable: null,
-      vars: [
-        { key: "lab", desc: "lab name" },
-        { key: "pool", desc: "pool that crossed the threshold (fast/cold)" },
-        { key: "pct", desc: "percent of quota used" },
-        { key: "used / quota", desc: "human-readable used and total" },
-      ],
-      subject: "Lab {lab} is at {pct}% of its {pool} quota",
-      body: `Lab "{lab}" has reached {pct}% of its {pool} storage quota ({used} of {quota}).\n\nPer-student usage on the {pool} pool:\n  <username>  <used>\n  …\n\n— Lab Manager`,
-    },
-    {
-      name: "Test email",
-      trigger: "Sent when an admin clicks “Send test” under Settings → Email to verify SMTP.",
-      editable: null,
-      vars: [],
-      subject: "Lab Manager test email",
-      body: "This is a test email from the Lab Manager controller. SMTP is configured correctly.",
-    },
-  ];
+  const announcementTemplates = listAnnouncementTemplates();
 
   return (
     <div className="space-y-4">
       <div className="space-y-2">
         <h1 className="text-2xl font-semibold tracking-tight">Email templates</h1>
         <p className="text-sm text-muted-foreground">
-          Every email the controller can send, with the <code>{"{variables}"}</code> each one
-          understands. Editable templates fall back to the built-in default when left blank; an unknown{" "}
-          <code>{"{token}"}</code> is left in the text as-is so typos are visible. All email requires SMTP
+          Every email the controller sends is edited here. Use the <code>{"{variables}"}</code> listed
+          under each one; an unknown <code>{"{token}"}</code> is left in the text as-is so typos are
+          visible, and a blank subject falls back to the built-in default. All email requires SMTP
           configured under{" "}
           <Link href="/settings" className="text-primary hover:underline">
             Settings → Email
@@ -181,9 +162,122 @@ export default async function EmailTemplatesPage() {
         </p>
       </div>
 
-      {templates.map((tpl) => (
-        <TemplateCard key={tpl.name} tpl={tpl} />
-      ))}
+      <EditableTemplate
+        name="Welcome / credentials"
+        trigger="Sent to a student once they are provisioned on a node — carries their login and SSH connection details."
+        action={saveWelcomeEmailAction}
+        subject={s.welcomeEmailSubject}
+        body={s.welcomeEmailBody}
+        vars={WELCOME_EMAIL_VARS}
+        bodyRows={16}
+      />
+
+      <EditableTemplate
+        name="GPU idle warning"
+        trigger="Sent to a user whose process is holding GPU memory while idle, before it is terminated."
+        action={saveGpuWarnEmailAction}
+        subject={s.gpuWarnEmailSubject}
+        body={s.gpuWarnEmailBody}
+        vars={GPU_EMAIL_VARS}
+        bodyRows={8}
+      />
+
+      <EditableTemplate
+        name="GPU process terminated"
+        trigger="Sent to a user after their idle GPU process has been terminated to free the GPU."
+        action={saveGpuKillEmailAction}
+        subject={s.gpuKillEmailSubject}
+        body={s.gpuKillEmailBody}
+        vars={gpuKillVars}
+        bodyRows={8}
+      />
+
+      <EditableTemplate
+        name="Removed from lab"
+        trigger="Sent to a student when they are removed from a lab. {data_status} resolves to a sentence noting whether their data was deleted or retained."
+        action={saveRemovalEmailAction}
+        subject={s.removalEmailSubject}
+        body={s.removalEmailBody}
+        vars={REMOVAL_EMAIL_VARS}
+        bodyRows={6}
+      />
+
+      <EditableTemplate
+        name="Storage quota alert"
+        trigger="Sent to a lab's PI when one of its pools crosses the quota-alert threshold (Settings → Alerts)."
+        action={saveQuotaEmailAction}
+        subject={s.quotaEmailSubject}
+        body={s.quotaEmailBody}
+        vars={QUOTA_EMAIL_VARS}
+        bodyRows={12}
+      />
+
+      <EditableTemplate
+        name="Test email"
+        trigger="Sent when an admin clicks “Send test” under Settings → Email to verify SMTP."
+        action={saveTestEmailAction}
+        subject={s.testEmailSubject}
+        body={s.testEmailBody}
+        vars={[]}
+        bodyRows={4}
+      />
+
+      <Card>
+        <CardContent className="space-y-4">
+          <div className="space-y-1">
+            <h3 className="text-base font-semibold">Announcement templates</h3>
+            <p className="text-sm text-muted-foreground">
+              Prebuilt starting points offered in the{" "}
+              <Link href="/announcements" className="text-primary hover:underline">
+                Announcements
+              </Link>{" "}
+              compose form. Picking one fills the subject/body, which the admin edits before sending. A
+              fixed “— Lab Manager” signature is appended to every announcement on send.
+            </p>
+            <div className="space-y-1.5 pt-1">
+              <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Variables (rendered per recipient)
+              </div>
+              <VarList vars={ANNOUNCEMENT_VARS} />
+              <p className="text-xs text-muted-foreground">
+                ALL-CAPS spans in <code>[BRACKETS]</code> are placeholders for the admin to fill in by
+                hand before sending.
+              </p>
+            </div>
+          </div>
+
+          {errorMsg && <p className="text-sm text-destructive">{errorMsg}</p>}
+
+          {announcementTemplates.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No templates yet — add one below.</p>
+          ) : (
+            announcementTemplates.map((tpl) => <AnnouncementTemplateCard key={tpl.id} tpl={tpl} />)
+          )}
+
+          <form action={createAnnouncementTemplateAction} className="grid gap-3 border-t border-border pt-4">
+            <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Add a template
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <Label>Template name</Label>
+                <Input name="name" placeholder="e.g. Holiday closure" maxLength={80} required />
+              </div>
+              <div>
+                <Label>Subject</Label>
+                <Input name="subject" placeholder="e.g. Cluster closed [DATE]–[DATE]" maxLength={200} />
+              </div>
+            </div>
+            <div>
+              <Label>Body</Label>
+              <Textarea name="body" rows={6} required className="font-mono text-xs" placeholder="Hello {name}, …" />
+            </div>
+            <div>
+              <Button type="submit" size="sm">Add template</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }

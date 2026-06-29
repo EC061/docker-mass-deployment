@@ -55,6 +55,17 @@ export interface Settings {
   gpuWarnEmailBody: string;
   gpuKillEmailSubject: string;
   gpuKillEmailBody: string;
+  // Email sent to a student when they are removed from a lab. Supports {placeholder} substitution
+  // (see REMOVAL_EMAIL_VARS / renderRemovalEmail in lib/mailer.ts). Empty falls back to the default.
+  removalEmailSubject: string;
+  removalEmailBody: string;
+  // Email sent to a lab's PI when one of its pools crosses the quota-alert threshold. Supports
+  // {placeholder} substitution (see QUOTA_EMAIL_VARS / renderQuotaEmail in lib/mailer.ts).
+  quotaEmailSubject: string;
+  quotaEmailBody: string;
+  // The "Send test" email under Settings → Email. No variables. Empty falls back to the default.
+  testEmailSubject: string;
+  testEmailBody: string;
   // Alerting + logs.
   alertsEnabled: boolean;
   alertLevel: "WARN" | "ERROR"; // minimum log level that triggers an admin alert
@@ -159,6 +170,48 @@ Please checkpoint long-running work and keep the GPU active, or ask an admin to 
 
 — Lab Manager`;
 
+/** Placeholders the removal email understands, shown to the admin in the Templates UI. */
+export const REMOVAL_EMAIL_VARS: { key: string; desc: string }[] = [
+  { key: "lab", desc: "lab name the student was removed from" },
+  { key: "data_status", desc: "sentence noting whether their data was deleted or retained" },
+];
+
+export const DEFAULT_REMOVAL_SUBJECT = "Removed from lab {lab}";
+
+export const DEFAULT_REMOVAL_BODY = `You have been removed from the lab "{lab}". {data_status}
+
+— Lab Manager`;
+
+/** The two fixed sentences {data_status} resolves to (chosen by whether the data was deleted). */
+export const REMOVAL_DATA_DELETED = "Your scratch and cold-storage data in this lab has been deleted.";
+export const REMOVAL_DATA_RETAINED = "Your data has been retained for now; contact an admin if you need it.";
+
+/** Placeholders the quota-alert email understands, shown to the admin in the Templates UI. */
+export const QUOTA_EMAIL_VARS: { key: string; desc: string }[] = [
+  { key: "lab", desc: "lab name" },
+  { key: "pool", desc: "pool that crossed the threshold (fast/cold)" },
+  { key: "pct", desc: "percent of quota used" },
+  { key: "used", desc: "human-readable amount used" },
+  { key: "quota", desc: "human-readable quota total" },
+  { key: "breakdown", desc: "indented per-student usage lines for the pool" },
+];
+
+export const DEFAULT_QUOTA_SUBJECT = "Lab {lab} is at {pct}% of its {pool} quota";
+
+export const DEFAULT_QUOTA_BODY = `Lab "{lab}" has reached {pct}% of its {pool} storage quota ({used} of {quota}).
+
+Per-student usage on the {pool} pool:
+{breakdown}
+
+You may want to ask students to clean up unneeded data, or request a larger quota.
+
+— Lab Manager`;
+
+export const DEFAULT_TEST_SUBJECT = "Lab Manager test email";
+
+export const DEFAULT_TEST_BODY =
+  "This is a test email from the Lab Manager controller. SMTP is configured correctly.";
+
 export const DEFAULT_SETTINGS: Settings = {
   fastQuotaDefaultBytes: 2 * TIB,
   slowQuotaDefaultBytes: 3 * TIB,
@@ -187,6 +240,12 @@ export const DEFAULT_SETTINGS: Settings = {
   gpuWarnEmailBody: DEFAULT_GPU_WARN_BODY,
   gpuKillEmailSubject: DEFAULT_GPU_KILL_SUBJECT,
   gpuKillEmailBody: DEFAULT_GPU_KILL_BODY,
+  removalEmailSubject: DEFAULT_REMOVAL_SUBJECT,
+  removalEmailBody: DEFAULT_REMOVAL_BODY,
+  quotaEmailSubject: DEFAULT_QUOTA_SUBJECT,
+  quotaEmailBody: DEFAULT_QUOTA_BODY,
+  testEmailSubject: DEFAULT_TEST_SUBJECT,
+  testEmailBody: DEFAULT_TEST_BODY,
   alertsEnabled: true,
   alertLevel: "ERROR",
   alertDedupMinutes: 15,

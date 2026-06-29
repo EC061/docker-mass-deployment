@@ -11,8 +11,16 @@ import {
   DEFAULT_GPU_KILL_SUBJECT,
   DEFAULT_GPU_WARN_BODY,
   DEFAULT_GPU_WARN_SUBJECT,
+  DEFAULT_QUOTA_BODY,
+  DEFAULT_QUOTA_SUBJECT,
+  DEFAULT_REMOVAL_BODY,
+  DEFAULT_REMOVAL_SUBJECT,
+  DEFAULT_TEST_BODY,
+  DEFAULT_TEST_SUBJECT,
   DEFAULT_WELCOME_BODY,
   DEFAULT_WELCOME_SUBJECT,
+  REMOVAL_DATA_DELETED,
+  REMOVAL_DATA_RETAINED,
   getSetting,
   isSmtpConfigured,
 } from "./settings";
@@ -49,23 +57,25 @@ export async function sendMail(to: string, subject: string, text: string): Promi
 }
 
 export async function sendTestEmail(to: string): Promise<SendResult> {
-  return sendMail(
-    to,
-    "Lab Manager test email",
-    "This is a test email from the Lab Manager controller. SMTP is configured correctly.",
-  );
+  const subject = getSetting("testEmailSubject").trim() || DEFAULT_TEST_SUBJECT;
+  const body = getSetting("testEmailBody").trim() || DEFAULT_TEST_BODY;
+  return sendMail(to, subject, body);
+}
+
+/** Render the removal email from the admin-editable template (or its default). */
+export function renderRemovalEmail(lab: string, dataDeleted: boolean): { subject: string; body: string } {
+  const vars = {
+    lab,
+    data_status: dataDeleted ? REMOVAL_DATA_DELETED : REMOVAL_DATA_RETAINED,
+  };
+  const subject = getSetting("removalEmailSubject").trim() || DEFAULT_REMOVAL_SUBJECT;
+  const body = getSetting("removalEmailBody").trim() || DEFAULT_REMOVAL_BODY;
+  return { subject: renderTemplate(subject, vars), body: renderTemplate(body, vars) };
 }
 
 export async function sendRemovalEmail(to: string, lab: string, dataDeleted: boolean): Promise<SendResult> {
-  return sendMail(
-    to,
-    `Removed from lab ${lab}`,
-    `You have been removed from the lab "${lab}". ` +
-      (dataDeleted
-        ? "Your scratch and cold-storage data in this lab has been deleted."
-        : "Your data has been retained for now; contact an admin if you need it.") +
-      "\n\n— Lab Manager",
-  );
+  const { subject, body } = renderRemovalEmail(lab, dataDeleted);
+  return sendMail(to, subject, body);
 }
 
 export interface CredentialEmail {
@@ -135,20 +145,32 @@ export interface QuotaEmail {
   breakdown: { username: string; usedHuman: string }[];
 }
 
-export async function sendQuotaEmail(info: QuotaEmail): Promise<SendResult> {
-  const lines = info.breakdown.length
+/** Build the {placeholder} substitution map for the quota-alert email. */
+export function quotaEmailVars(info: Omit<QuotaEmail, "to">): Record<string, string | number> {
+  const breakdown = info.breakdown.length
     ? info.breakdown.map((b) => `  ${b.username.padEnd(20)} ${b.usedHuman}`).join("\n")
     : "  (no per-student usage reported yet)";
-  const text = `Lab "${info.lab}" has reached ${info.pct}% of its ${info.pool} storage quota` +
-    ` (${info.usedHuman} of ${info.quotaHuman}).
+  return {
+    lab: info.lab,
+    pool: info.pool,
+    pct: info.pct,
+    used: info.usedHuman,
+    quota: info.quotaHuman,
+    breakdown,
+  };
+}
 
-Per-student usage on the ${info.pool} pool:
-${lines}
+/** Render the quota-alert email's subject + body from the admin-editable template (or its default). */
+export function renderQuotaEmail(info: Omit<QuotaEmail, "to">): { subject: string; body: string } {
+  const vars = quotaEmailVars(info);
+  const subject = getSetting("quotaEmailSubject").trim() || DEFAULT_QUOTA_SUBJECT;
+  const body = getSetting("quotaEmailBody").trim() || DEFAULT_QUOTA_BODY;
+  return { subject: renderTemplate(subject, vars), body: renderTemplate(body, vars) };
+}
 
-You may want to ask students to clean up unneeded data, or request a larger quota.
-
-— Lab Manager`;
-  return sendMail(info.to, `Lab ${info.lab} is at ${info.pct}% of its ${info.pool} quota`, text);
+export async function sendQuotaEmail(info: QuotaEmail): Promise<SendResult> {
+  const { subject, body } = renderQuotaEmail(info);
+  return sendMail(info.to, subject, body);
 }
 
 /** Build the {placeholder} substitution map for the welcome email from a credential payload. */

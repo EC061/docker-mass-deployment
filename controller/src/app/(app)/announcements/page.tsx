@@ -1,4 +1,4 @@
-import { ANNOUNCEMENT_TEMPLATES, ANNOUNCEMENT_VARS, audienceCounts, recentAnnouncements } from "@/lib/announcements";
+import { ANNOUNCEMENT_VARS, audienceCounts, listAnnouncementTemplates, recentAnnouncements } from "@/lib/announcements";
 import { isSmtpConfigured } from "@/lib/settings";
 import { ago } from "@/lib/format";
 import { sendAnnouncementAction } from "./actions";
@@ -17,6 +17,7 @@ export default async function AnnouncementsPage({
   const msg = typeof sp.msg === "string" ? sp.msg : undefined;
   const counts = audienceCounts();
   const history = recentAnnouncements();
+  const templates = listAnnouncementTemplates();
   const smtpOk = isSmtpConfigured();
 
   return (
@@ -49,7 +50,7 @@ export default async function AnnouncementsPage({
         <CardContent className="space-y-3">
           <h3 className="text-base font-semibold">Send a service announcement</h3>
           <AnnouncementComposer
-            templates={ANNOUNCEMENT_TEMPLATES}
+            templates={templates}
             vars={ANNOUNCEMENT_VARS}
             counts={counts}
             action={sendAnnouncementAction}
@@ -57,7 +58,7 @@ export default async function AnnouncementsPage({
           <p className="text-xs text-muted-foreground">
             Sent by email to the distinct addresses in the selected audiences (a PI who is also a user
             is mailed once). <code>{"{name}"}</code> and <code>{"{email}"}</code> are filled in per
-            recipient. See all templates and variables under{" "}
+            recipient. Manage the prebuilt templates and see every email variable under{" "}
             <a href="/email-templates" className="underline">Email templates</a>.
           </p>
         </CardContent>
