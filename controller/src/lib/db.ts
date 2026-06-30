@@ -13,7 +13,7 @@ import Database from "better-sqlite3";
 const { existsSync, mkdirSync, renameSync, rmSync } = process.getBuiltinModule("node:fs");
 const { dirname } = process.getBuiltinModule("node:path");
 import { env } from "./env";
-import { stripLegacyEmailSignature } from "./template";
+import { legacySignatureHtmlToText, stripLegacyEmailSignature } from "./template";
 
 /** If a WebDAV restore was staged as <dbPath>.restore, swap it in before opening. */
 function applyStagedRestore(dbPath: string): void {
@@ -548,6 +548,32 @@ Thanks for helping keep the cluster healthy.`,
           // Invalid setting JSON already falls back safely in getSetting; leave it untouched here.
         }
       }
+    },
+  },
+  {
+    // Replace the HTML signature setting with plain text. Preserve a customized signature by
+    // converting it once, then remove the obsolete setting so it cannot be used accidentally.
+    id: "0019_plain_text_email_signature",
+    fn: (conn) => {
+      const row = conn
+        .prepare("SELECT value FROM settings WHERE key = 'emailSignatureHtml'")
+        .get() as { value: string } | undefined;
+      if (row) {
+        try {
+          const html = JSON.parse(row.value);
+          if (typeof html === "string") {
+            conn
+              .prepare(
+                `INSERT INTO settings (key, value) VALUES ('emailSignatureText', ?)
+                 ON CONFLICT(key) DO NOTHING`,
+              )
+              .run(JSON.stringify(legacySignatureHtmlToText(html)));
+          }
+        } catch {
+          // Invalid setting JSON was already ignored by getSetting; do not migrate it.
+        }
+      }
+      conn.prepare("DELETE FROM settings WHERE key = 'emailSignatureHtml'").run();
     },
   },
 ];

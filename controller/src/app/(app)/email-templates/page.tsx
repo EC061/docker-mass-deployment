@@ -164,7 +164,7 @@ export default async function EmailTemplatesPage({
         </p>
       </div>
 
-      <SignatureEditor html={s.emailSignatureHtml} action={saveUniversalSignatureAction} />
+      <SignatureEditor text={s.emailSignatureText} action={saveUniversalSignatureAction} />
 
       <EditableTemplate
         name="Welcome / credentials"
@@ -236,7 +236,7 @@ export default async function EmailTemplatesPage({
                 Announcements
               </Link>{" "}
               compose form. Picking one fills the subject/body, which the admin edits before sending. A
-              universal signature above is appended to every announcement on send.
+              plain-text signature above is appended to every announcement on send.
             </p>
             <div className="space-y-1.5 pt-1">
               <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">

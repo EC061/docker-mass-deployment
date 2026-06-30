@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { legacySignatureHtmlToText } from "../src/lib/template";
 
 const tmp = mkdtempSync(join(tmpdir(), "lab-ctl-mailer-"));
 process.env.DB_PATH = join(tmp, "controller.db");
@@ -64,7 +65,7 @@ describe("sendMail gating", () => {
     expect(res).toEqual({ sent: true });
     expect(sent[0]).toMatchObject({ from: "labs@uga.edu", to: "a@uga.edu", subject: "Subject" });
     expect(sent[0].text).toContain("Body\n\nNingxi Cheng, Graduate Research Assistant");
-    expect(sent[0].html).toContain("uga-logo@2x.png");
+    expect(sent[0]).not.toHaveProperty("html");
   });
 
   it("returns the error message when the transport throws", async () => {
@@ -73,6 +74,14 @@ describe("sendMail gating", () => {
     const res = await mailer.sendMail("a@uga.edu", "s", "b");
     expect(res.sent).toBe(false);
     expect(res.error).toBe("smtp down");
+  });
+});
+
+describe("legacy signature migration", () => {
+  it("converts saved HTML into readable plain text", () => {
+    const html =
+      '<div><strong>Research &amp; Compute</strong><br><a href="mailto:team@uga.edu">team@uga.edu</a><img src="logo.png" alt="UGA"></div>';
+    expect(legacySignatureHtmlToText(html)).toBe("Research & Compute\nteam@uga.edu\nUGA");
   });
 });
 
@@ -181,18 +190,13 @@ describe("templated emails", () => {
     }
   });
 
-  it("uses one editable signature for both HTML and plain-text email alternatives", async () => {
-    settings.setSetting(
-      "emailSignatureHtml",
-      '<div><strong>Research Team</strong><br><a href="mailto:team@uga.edu">team@uga.edu</a></div>',
-    );
+  it("preserves body formatting and appends the editable plain-text signature", async () => {
+    settings.setSetting("emailSignatureText", "Research Team\nteam@uga.edu");
 
     await mailer.sendMail("a@uga.edu", "Signed", "Message body\nsecond line\n\n— Lab Manager");
 
     expect(sent[0].text).toBe("Message body\nsecond line\n\nResearch Team\nteam@uga.edu");
-    expect(sent[0].html).toContain("Message body\nsecond line");
-    expect(sent[0].html).toContain("<strong>Research Team</strong>");
-    expect(sent[0].html).not.toContain("— Lab Manager");
-    settings.setSetting("emailSignatureHtml", settings.DEFAULT_EMAIL_SIGNATURE_HTML);
+    expect(sent[0]).not.toHaveProperty("html");
+    settings.setSetting("emailSignatureText", settings.DEFAULT_EMAIL_SIGNATURE_TEXT);
   });
 });

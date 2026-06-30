@@ -19,3 +19,35 @@ export function renderTemplate(template: string, vars: Record<string, string | n
 export function stripLegacyEmailSignature(text: string): string {
   return text.replace(/\n*\s*—\s*Lab Manager\s*$/i, "").trimEnd();
 }
+
+/** Convert a legacy HTML signature to plain text during the settings migration. */
+export function legacySignatureHtmlToText(html: string): string {
+  const namedEntities: Record<string, string> = {
+    amp: "&",
+    apos: "'",
+    gt: ">",
+    lt: "<",
+    nbsp: " ",
+    quot: '"',
+  };
+  const text = html
+    .replace(/<(script|style)\b[^>]*>[\s\S]*?<\/\1>/gi, "")
+    .replace(/<img\b[^>]*\balt\s*=\s*(["'])(.*?)\1[^>]*>/gi, "\n$2\n")
+    .replace(/<br\s*\/?\s*>/gi, "\n")
+    .replace(/<\/(div|p|li|tr|h[1-6])\s*>/gi, "\n")
+    .replace(/<[^>]+>/g, "");
+
+  return text
+    .replace(/&(#x[\da-f]+|#\d+|\w+);/gi, (whole, entity: string) => {
+      if (entity[0] !== "#") return namedEntities[entity.toLowerCase()] ?? whole;
+      const hex = entity[1]?.toLowerCase() === "x";
+      const codePoint = Number.parseInt(entity.slice(hex ? 2 : 1), hex ? 16 : 10);
+      return Number.isFinite(codePoint) && codePoint >= 0 && codePoint <= 0x10ffff
+        ? String.fromCodePoint(codePoint)
+        : whole;
+    })
+    .replace(/[ \t]+\n/g, "\n")
+    .replace(/\n[ \t]+/g, "\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
