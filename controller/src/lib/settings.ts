@@ -33,9 +33,8 @@ export interface Settings {
   smtpPass: string;
   smtpFrom: string;
   smtpSecure: boolean; // true = implicit TLS (465); false = STARTTLS/none
-  // HTML signature appended by the mailer to every outbound email. It is edited as copy/paste HTML
-  // on the Templates page; the mailer also derives a plain-text fallback for text-only clients.
-  emailSignatureHtml: string;
+  // Plain-text signature appended by the mailer to every outbound email.
+  emailSignatureText: string;
   // Optional public hostname students SSH to (falls back to the node name).
   sshHostOverride: string;
   // Welcome email sent to a student when added to a lab. Both fields support {placeholder}
@@ -205,18 +204,11 @@ export const DEFAULT_TEST_SUBJECT = "Lab Manager test email";
 export const DEFAULT_TEST_BODY =
   "This is a test email from the Lab Manager controller. SMTP is configured correctly.";
 
-/** UGA-branded signature used by every email unless an admin replaces it on the Templates page. */
-export const DEFAULT_EMAIL_SIGNATURE_HTML = `<div id="template2" class="signature">
-  <p style="margin-bottom: 1em; font: 12px 'Georgia', 'Times', 'sans-serif';">
-    <span style="font-weight: 900;">Ningxi Cheng</span><span style="font-weight: 900;">, Graduate Research Assistant</span>
-    <br>
-    <span>School of Computing | <span style="font-style: italic;">Ph.D. Student</span></span>
-  </p>
-  <p style="margin-bottom: 1em; font: 12px 'Georgia', 'Times', 'sans-serif';">
-    <span><a href="mailto:edwardcheng@uga.edu">edwardcheng@uga.edu</a></span>
-  </p>
-  <div class="logo"><img width="160" src="https://brand.uga.edu/email-signature-builder/assets/images/uga-logo@2x.png" alt="University of Georgia"></div>
-</div>`;
+/** Default plain-text signature used unless an admin replaces it on the Templates page. */
+export const DEFAULT_EMAIL_SIGNATURE_TEXT = `Ningxi Cheng, Graduate Research Assistant
+School of Computing | Ph.D. Student
+edwardcheng@uga.edu
+University of Georgia`;
 
 export const DEFAULT_SETTINGS: Settings = {
   fastQuotaDefaultBytes: 2 * TIB,
@@ -232,7 +224,7 @@ export const DEFAULT_SETTINGS: Settings = {
   smtpPass: "",
   smtpFrom: "",
   smtpSecure: false,
-  emailSignatureHtml: DEFAULT_EMAIL_SIGNATURE_HTML,
+  emailSignatureText: DEFAULT_EMAIL_SIGNATURE_TEXT,
   sshHostOverride: "",
   welcomeEmailSubject: DEFAULT_WELCOME_SUBJECT,
   welcomeEmailBody: DEFAULT_WELCOME_BODY,

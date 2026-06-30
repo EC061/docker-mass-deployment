@@ -17,7 +17,7 @@ import { putFlash } from "@/lib/flash";
 
 export async function saveUniversalSignatureAction(formData: FormData) {
   await requireAdmin();
-  setSetting("emailSignatureHtml", String(formData.get("signatureHtml") ?? "").trim());
+  setSetting("emailSignatureText", String(formData.get("signatureText") ?? "").trim());
   revalidatePath("/email-templates");
 }
 
