@@ -10,7 +10,7 @@ network channel and without the agent ever writing into a student-writable mount
 
 Because the directory is root-only and the bind is read-only, students can read these files but
 cannot modify, delete, or replace them with symlinks, and root never follows a student-planted link.
-There is **no** shared writable directory: a student requests a fresh docker scan by touching
+There is **no** shared writable directory: a student requests a fresh usage scan by touching
 ``.labquota-refresh`` in their *own* scratch dataset (see ``marker_path``), which the agent stats
 with lstat and only honors if it is a regular file. Every student-writable surface stays inside that
 student's own quota and out of anything the agent parses.
@@ -20,12 +20,12 @@ The snapshot has two kinds of numbers:
 * **Live tiers** — scratch (fast) and cold-storage (slow) `used`/`quota`. ZFS *metadata*, read for
   every lab/student in a single ``zfs list -r`` per pool (see ``collect_zfs_usage``), so a publish
   is cheap regardless of scale.
-* **Docker layer** — bytes a student installed into their container home (envs/software). This is
+* **Container layer** — bytes a student installed into their container home (envs/software). This is
   the one expensive measurement (``du`` per home via ``docker exec``); it is computed on a slow
-  cadence / on demand and cached in ``DockerUsage``, never per publish.
+  cadence / on demand and cached in ``ContainerUsage``, never per publish.
 
 This module is import-safe and its parsing/build helpers are pure so they unit-test without ZFS or
-Docker. Only the ``collect_*``/``run_docker_scan`` and the ``*_dir``/publish helpers touch the host.
+Docker. Only ``collect_*``/``run_container_scan`` and ``*_dir``/publish helpers touch the host.
 """
 
 from __future__ import annotations
@@ -38,13 +38,13 @@ from typing import Any
 
 from .config import AgentConfig
 from .executors import docker, users, zfs
-from .paths import lab_fast_users
+from .paths import lab_fast
 from .protocol import now_ms
 
 USAGE_FILE = "usage.json"
 STATUS_FILE = "status.json"
-# A student asks for a fresh docker scan by touching this file in their OWN scratch dataset
-# (/labusers/fast/<u>/.labquota-refresh). Keeping the marker inside the student's own quota-limited
+# A student asks for a fresh scan by touching this file in their own /fast/<u> directory. Keeping
+# the marker inside the student's own quota-limited
 # dataset — instead of a shared world-writable directory — means a flood of markers only ever costs
 # the student their own space, and the agent stats exactly one fixed path per known user (never an
 # unbounded directory). The marker's contents are never read; only a regular file is honored, and it
@@ -52,23 +52,23 @@ STATUS_FILE = "status.json"
 REFRESH_MARKER = ".labquota-refresh"
 
 
-# --------------------------------------------------------------------------- docker-layer cache
+# --------------------------------------------------------------------------- container-layer cache
 
 
 @dataclass
-class DockerUsage:
+class ContainerUsage:
     """Cached per-student usage from the expensive ``du`` scan (updated only by a scan).
 
     Holds the container writable layer total plus, for each student, the three numbers the cheap
-    publish loop cannot get from ZFS metadata: their docker home (installed software), and — since
-    there are no per-student ZFS datasets — their scratch (fast) and cold (slow) directory sizes
+    publish loop cannot get from ZFS metadata: their container home (installed software), and —
+    since there are no per-student ZFS datasets — their scratch and cold directory sizes
     measured with ``du``.
     """
 
     scanned_at: int | None = None  # epoch ms of the last successful scan
     status: str = "idle"  # "idle" | "running"
     total_used: int | None = None  # container writable layer (SizeRw)
-    per_user: dict[str, int] = field(default_factory=dict)  # username -> docker-home du bytes
+    per_user: dict[str, int] = field(default_factory=dict)  # username -> home du bytes
     per_user_fast: dict[str, int] = field(default_factory=dict)  # username -> scratch du bytes
     per_user_slow: dict[str, int] = field(default_factory=dict)  # username -> cold-storage du bytes
     unattributed: int | None = None  # total - sum(per_user), files outside any home (/tmp, etc.)
@@ -92,34 +92,34 @@ class LabLevelUsage:
     Holds the ready-to-emit telemetry rows for one lab's lab-level usage: the fast/slow ZFS
     used/quota rows plus the container writable-layer ("image") total. The agent recomputes these on
     its lab-usage cadence (``lab_usage_interval_s``) — or immediately on an on-demand scan — and
-    caches them here; the heartbeat just re-reports the cached ``datasets`` every cycle, so the
+    caches them here; the heartbeat just re-reports the cached ``storage`` every cycle, so the
     expensive ``zfs list`` / ``docker inspect`` work no longer runs on every 15s heartbeat.
     """
 
     computed_at: int | None = None  # epoch ms of the last refresh
-    datasets: list[dict[str, Any]] = field(default_factory=list)  # lab-level telemetry rows
+    storage: list[dict[str, Any]] = field(default_factory=list)  # lab-level telemetry rows
 
 
 class UsageState:
     """Per-lab usage cache shared between the publish loop, the scan loop, and telemetry.
 
-    Two independently-cadenced caches: ``_docker`` is the expensive per-student ``du`` breakdown
+    Two independently-cadenced caches: ``_container`` is the expensive per-student ``du`` breakdown
     (refreshed by the nightly / on-demand scan) and ``_lab`` is the lab-level totals (fast/slow ZFS
     + container writable layer, refreshed every ``lab_usage_interval_s`` / on demand).
     """
 
     def __init__(self) -> None:
-        self._docker: dict[str, DockerUsage] = {}
+        self._container: dict[str, ContainerUsage] = {}
         self._lab: dict[str, LabLevelUsage] = {}
 
-    def docker_for(self, lab: str) -> DockerUsage:
-        return self._docker.get(lab, DockerUsage())
+    def container_for(self, lab: str) -> ContainerUsage:
+        return self._container.get(lab, ContainerUsage())
 
-    def set_docker(self, lab: str, usage: DockerUsage) -> None:
-        self._docker[lab] = usage
+    def set_container(self, lab: str, usage: ContainerUsage) -> None:
+        self._container[lab] = usage
 
-    def all_docker(self) -> dict[str, DockerUsage]:
-        return dict(self._docker)
+    def all_container(self) -> dict[str, ContainerUsage]:
+        return dict(self._container)
 
     def lab_level_for(self, lab: str) -> LabLevelUsage:
         return self._lab.get(lab, LabLevelUsage())
@@ -140,7 +140,7 @@ class UsageState:
 
 @dataclass
 class LabUsage:
-    """Live ZFS usage for one lab: lab-level totals + per-student fast/slow datasets."""
+    """Live ZFS usage for one lab. Per-student values come from directory scans."""
 
     fast: zfs.Usage | None = None
     slow: zfs.Usage | None = None
@@ -148,11 +148,7 @@ class LabUsage:
 
 
 def _parse_dataset(dataset: str, root: str) -> tuple[str, str | None] | None:
-    """Map a dataset under ``root`` to (lab, user|None). Returns None for shared/users/other rows.
-
-    root is e.g. ``fast/labs``; ``fast/labs/<lab>`` is lab-level (user None),
-    ``fast/labs/<lab>/users/<u>`` is a student. Anything else (shared, the users parent) is skipped.
-    """
+    """Map exactly ``<root>/<lab>`` to a lab-level row; descendants are ignored."""
     prefix = root.rstrip("/") + "/"
     if not dataset.startswith(prefix):
         return None
@@ -162,8 +158,6 @@ def _parse_dataset(dataset: str, root: str) -> tuple[str, str | None] | None:
         return None
     if len(rest) == 1:
         return lab, None
-    if len(rest) == 3 and rest[1] == "users":
-        return lab, rest[2]
     return None
 
 
@@ -172,12 +166,9 @@ def _ingest_rows(out: dict[str, LabUsage], rows: list[zfs.Usage], root: str, tie
         parsed = _parse_dataset(u.dataset, root)
         if parsed is None:
             continue
-        lab, user = parsed
+        lab, _user = parsed
         entry = out.setdefault(lab, LabUsage())
-        if user is None:
-            setattr(entry, tier, u)
-        else:
-            entry.users.setdefault(user, {})[tier] = u
+        setattr(entry, tier, u)
 
 
 def collect_zfs_usage(cfg: AgentConfig) -> dict[str, LabUsage]:
@@ -190,17 +181,9 @@ def collect_zfs_usage(cfg: AgentConfig) -> dict[str, LabUsage]:
 
 
 def list_lab_students(cfg: AgentConfig, lab: str) -> list[str]:
-    """Enumerate a lab's provisioned students by listing its fast ``users`` mountpoint subdirs.
-
-    With no per-student ZFS datasets, the only durable host-side record of who is provisioned is the
-    set of per-student scratch subdirs that ``users.add_user`` creates (``/labusers/fast/<u>``). We
-    list that directory and keep only entries that are valid usernames — this skips the root-owned
-    ``.labquota`` dir and any stray files — so the roster reflects exactly the students added to the
-    lab, independent of whether per-student ZFS datasets exist. This is the roster source the
-    snapshot and docker scan need (``lab_usage.users`` is empty without per-student datasets).
-    """
+    """Enumerate provisioned students from direct children of the lab's fast mount."""
     try:
-        entries = os.listdir(_fast_users_mp(cfg, lab))
+        entries = os.listdir(_fast_lab_mp(cfg, lab))
     except OSError:
         return []
     return sorted(e for e in entries if users.USERNAME_RE.match(e))
@@ -219,38 +202,37 @@ def build_snapshot(
     cfg: AgentConfig,
     lab: str,
     lab_usage: LabUsage,
-    docker_usage: DockerUsage,
+    container_usage: ContainerUsage,
     *,
     roster: list[str] | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
-    """Pure builder: assemble the JSON snapshot for one lab from live ZFS + cached docker usage."""
+    """Assemble one lab snapshot from live ZFS metadata and cached container usage."""
     now = now if now is not None else now_ms()
     # With no per-student ZFS datasets, scratch/cold no longer have cheap per-student metadata (the
-    # lab quota covers everyone), so a student may appear only in the docker-layer measurement — or,
-    # before any docker scan has run, in neither. Union the explicit ``roster`` (provisioned scratch
+    # lab quota covers everyone), so a student may appear only in the container-layer measurement,
+    # or before any scan has run, in neither. Union the explicit ``roster`` (provisioned scratch
     # subdirs) with both usage sources so every provisioned student is listed even without numbers.
-    names = set(lab_usage.users.keys()) | set(docker_usage.per_user.keys())
+    names = set(lab_usage.users.keys()) | set(container_usage.per_user.keys())
     if roster:
         names |= set(roster)
     usernames = sorted(names)
     students = []
     for name in usernames:
         tiers = lab_usage.users.get(name, {})
-        # Prefer ZFS metadata when per-student datasets exist; otherwise fall back to the docker
-        # scan's ``du`` measurement (used-only, no per-student quota — the lab quota covers all).
+        # Use a scan's ``du`` measurement (used-only; the lab quota covers every student).
         scratch = _usage_pair(tiers.get("fast"))
-        if scratch is None and name in docker_usage.per_user_fast:
-            scratch = {"used": docker_usage.per_user_fast[name], "quota": None}
+        if scratch is None and name in container_usage.per_user_fast:
+            scratch = {"used": container_usage.per_user_fast[name], "quota": None}
         cold = _usage_pair(tiers.get("slow"))
-        if cold is None and name in docker_usage.per_user_slow:
-            cold = {"used": docker_usage.per_user_slow[name], "quota": None}
+        if cold is None and name in container_usage.per_user_slow:
+            cold = {"used": container_usage.per_user_slow[name], "quota": None}
         students.append(
             {
                 "username": name,
                 "scratch": scratch,
                 "cold": cold,
-                "docker_home_used": docker_usage.per_user.get(name),
+                "home_used": container_usage.per_user.get(name),
             }
         )
     return {
@@ -259,20 +241,20 @@ def build_snapshot(
         "lab": lab,
         "totals": {
             "fast": _usage_pair(lab_usage.fast),
-            "slow": _usage_pair(lab_usage.slow),
-            "docker_used": docker_usage.total_used,
+            "cold": _usage_pair(lab_usage.slow),
+            "rootfs_used": container_usage.total_used,
         },
-        "docker_scanned_at": docker_usage.scanned_at,
-        "docker_scan": docker_usage.status,
-        "docker_unattributed": docker_usage.unattributed,
+        "usage_scanned_at": container_usage.scanned_at,
+        "usage_scan": container_usage.status,
+        "rootfs_unattributed": container_usage.unattributed,
         "students": students,
     }
 
 
-def live_docker_dataset(lab: str) -> dict[str, Any] | None:
-    """The lab-level docker writable-layer (``SizeRw``) telemetry row.
+def live_container_storage(lab: str) -> dict[str, Any] | None:
+    """The lab-level outer-container writable-layer (``SizeRw``) telemetry row.
 
-    This is the "whole image" / container-level number, measured with one ``docker inspect --size``.
+    This is the rootfs number, measured with one ``docker inspect --size``.
     It is recomputed on the agent's lab-usage cadence (``lab_usage_interval_s``) and cached in
     ``LabLevelUsage`` — not measured on every heartbeat — alongside the lab-level ZFS rows (see
     ``lab_level_for``). Returns None when the container is absent or the measurement fails, in which
@@ -285,17 +267,20 @@ def live_docker_dataset(lab: str) -> dict[str, Any] | None:
     if total is None:
         return None
     return {
-        "pool": "docker",
-        "dataset": f"docker/labs/{lab}",
+        "lab": lab,
+        "user": None,
+        "tier": "rootfs",
         "used_bytes": total,
         "quota_bytes": None,
+        "available_bytes": None,
     }
 
 
-def _zfs_row(pool: str, u: zfs.Usage) -> dict[str, Any]:
+def _zfs_row(lab: str, tier: str, u: zfs.Usage) -> dict[str, Any]:
     return {
-        "pool": pool,
-        "dataset": u.dataset,
+        "lab": lab,
+        "user": None,
+        "tier": tier,
         "used_bytes": u.used_bytes,
         "quota_bytes": u.quota_bytes,
         "available_bytes": u.available_bytes,
@@ -313,82 +298,74 @@ def lab_level_for(
         lab_usage = collect_zfs_usage(cfg).get(lab, LabUsage())
     rows: list[dict[str, Any]] = []
     if lab_usage.fast is not None:
-        rows.append(_zfs_row("fast", lab_usage.fast))
+        rows.append(_zfs_row(lab, "fast", lab_usage.fast))
     if lab_usage.slow is not None:
-        rows.append(_zfs_row("slow", lab_usage.slow))
-    # Per-student ZFS rows only exist if per-student datasets are in use; normally empty (scratch
-    # and cold come from the du scan's tier_datasets instead). Included so both layouts work.
-    for tiers in lab_usage.users.values():
-        if "fast" in tiers:
-            rows.append(_zfs_row("fast", tiers["fast"]))
-        if "slow" in tiers:
-            rows.append(_zfs_row("slow", tiers["slow"]))
-    image = live_docker_dataset(lab)
+        rows.append(_zfs_row(lab, "cold", lab_usage.slow))
+    image = live_container_storage(lab)
     if image is not None:
         rows.append(image)
-    return LabLevelUsage(computed_at=now, datasets=rows)
+    return LabLevelUsage(computed_at=now, storage=rows)
 
 
 def collect_lab_level(
-    cfg: AgentConfig, docker_state: UsageState | None = None, *, now: int | None = None
+    cfg: AgentConfig, usage_state: UsageState | None = None, *, now: int | None = None
 ) -> dict[str, LabLevelUsage]:
     """Recompute lab-level usage for every lab: one ``zfs list`` per pool + one ``docker inspect
     --size`` per lab. This is the work that used to run on every 15s heartbeat; it now runs on the
     agent's lab-usage cadence and is cached. Labs are enumerated from ZFS (every lab has a fast
-    dataset), unioned with any lab present only in the docker-scan cache."""
+    dataset), unioned with any lab present only in the container-scan cache."""
     now = now if now is not None else now_ms()
     grouped = collect_zfs_usage(cfg)
     labs = set(grouped.keys())
-    if docker_state is not None:
-        labs |= set(docker_state.all_docker().keys())
+    if usage_state is not None:
+        labs |= set(usage_state.all_container().keys())
     return {
         lab: lab_level_for(cfg, lab, grouped.get(lab, LabUsage()), now=now) for lab in sorted(labs)
     }
 
 
-def docker_datasets(lab: str, docker_usage: DockerUsage) -> list[dict[str, Any]]:
-    """Per-student docker-home telemetry rows from the cached scan (installed software per student).
+def rootfs_storage(lab: str, container_usage: ContainerUsage) -> list[dict[str, Any]]:
+    """Per-student container-home telemetry rows from the cached usage scan.
 
     The lab-level container total is **not** emitted here — it lives in the lab-level cache
-    (``lab_level_for`` / ``live_docker_dataset``), refreshed on the lab-usage cadence. These
-    per-student rows come from the (expensive) ``du`` scan cache and only change when a scan runs.
-    Dataset names mirror the ZFS layout
-    (``docker/labs/<lab>/users/<u>``) so the controller's ``parseDataset`` maps them to the right
-    student. quota is omitted (the writable layer is not a per-student quota and must not alert).
+    (``lab_level_for`` / ``live_container_dataset``), refreshed on the lab-usage cadence. These
+    per-student rows come from the ``du`` scan cache and only change when a scan runs. Quota is
+    omitted because the writable layer is not a per-student quota and must not alert.
     """
     rows: list[dict[str, Any]] = []
-    for user, used in docker_usage.per_user.items():
+    for user, used in container_usage.per_user.items():
         rows.append(
             {
-                "pool": "docker",
-                "dataset": f"docker/labs/{lab}/users/{user}",
+                "lab": lab,
+                "user": user,
+                "tier": "rootfs",
                 "used_bytes": used,
                 "quota_bytes": None,
+                "available_bytes": None,
             }
         )
     return rows
 
 
-def tier_datasets(lab: str, docker_usage: DockerUsage) -> list[dict[str, Any]]:
+def tier_storage(lab: str, container_usage: ContainerUsage) -> list[dict[str, Any]]:
     """Telemetry rows for the per-student scratch (fast) / cold (slow) ``du`` breakdown.
 
-    With no per-student ZFS datasets, scratch/cold have no cheap per-student metadata, so the scan
-    measures each student's directory with ``du`` instead (the lab-level fast/slow rows still come
-    from ZFS metadata in the heartbeat). Dataset names mirror the ZFS layout
-    (``<pool>/labs/<lab>/users/<u>``) so the controller's ``parseDataset`` maps them to the right
-    lab/student. quota is omitted — the per-student number is a breakdown, not a quota (the lab
-    quota covers everyone), so it must never raise a PI quota alert.
+    With no per-student ZFS datasets, the scan measures each student's directory with ``du``. Quota
+    is omitted because the per-student number is a breakdown, not a quota, so it must never raise a
+    PI quota alert.
     """
     rows: list[dict[str, Any]] = []
-    tiers = (("fast", docker_usage.per_user_fast), ("slow", docker_usage.per_user_slow))
-    for pool, per_user in tiers:
+    tiers = (("fast", container_usage.per_user_fast), ("cold", container_usage.per_user_slow))
+    for tier, per_user in tiers:
         for user, used in per_user.items():
             rows.append(
                 {
-                    "pool": pool,
-                    "dataset": f"{pool}/labs/{lab}/users/{user}",
+                    "lab": lab,
+                    "user": user,
+                    "tier": tier,
                     "used_bytes": used,
                     "quota_bytes": None,
+                    "available_bytes": None,
                 }
             )
     return rows
@@ -397,9 +374,8 @@ def tier_datasets(lab: str, docker_usage: DockerUsage) -> list[dict[str, Any]]:
 # --------------------------------------------------------------------------- on-host I/O
 
 
-def _fast_users_mp(cfg: AgentConfig, lab: str) -> str:
-    """Host mountpoint of the lab's fast `users` dataset (bind-mounted to /labusers/fast)."""
-    return zfs.get_mountpoint(lab_fast_users(cfg, lab))
+def _fast_lab_mp(cfg: AgentConfig, lab: str) -> str:
+    return zfs.get_mountpoint(lab_fast(cfg, lab))
 
 
 # Container path the labquota status dir is bind-mounted read-only at (see docker.build_run_args).
@@ -416,7 +392,7 @@ def labquota_dir(cfg: AgentConfig, lab: str) -> str:
 
 def marker_path(cfg: AgentConfig, lab: str, user: str) -> str:
     """A student's refresh marker, in their own scratch dataset (their quota, not a shared dir)."""
-    return os.path.join(_fast_users_mp(cfg, lab), user, REFRESH_MARKER)
+    return os.path.join(_fast_lab_mp(cfg, lab), user, REFRESH_MARKER)
 
 
 def ensure_labquota_dirs(cfg: AgentConfig, lab: str) -> str:
@@ -490,32 +466,32 @@ def clear_requests(cfg: AgentConfig, lab: str, users: list[str]) -> None:
             continue
 
 
-# --------------------------------------------------------------------------- docker-layer scan
+# --------------------------------------------------------------------------- container-layer scan
 
 ProgressCb = Callable[[int, int, str], None]
 
 
-def run_docker_scan(
+def run_container_scan(
     cfg: AgentConfig,
     lab: str,
     usernames: list[str],
     *,
     progress: ProgressCb | None = None,
     now: int | None = None,
-) -> DockerUsage:
+) -> ContainerUsage:
     """Measure the container writable layer + per-student usage. The expensive path (`du` per dir).
 
-    For each student we ``du`` three directories inside the container: their docker home (installed
-    software), their scratch (``/labusers/fast/<u>``) and — only when this node owns cold storage
+    For each student we ``du`` three directories inside the container: their container home
+    (installed software), their scratch (``/fast/<u>``) and — only when this node owns cold storage
     (local ZFS; on the SMB client the owner node reports it) — their cold-storage
-    (``/labusers/slow/<u>``). Returns an idle DockerUsage with whatever was measured. Missing
+    (``/cold/<u>``). Returns an idle ContainerUsage with whatever was measured. Missing
     container / failed ``du`` degrade to None/omitted entries rather than raising, so one bad lab
     never breaks the loop.
     """
     now = now if now is not None else now_ms()
     container = docker.container_name(lab)
     if not docker.container_exists(container):
-        return DockerUsage(scanned_at=now, status="idle")
+        return ContainerUsage(scanned_at=now, status="idle")
     total = docker.writable_layer_size(container)
     per_user: dict[str, int] = {}
     per_user_fast: dict[str, int] = {}
@@ -528,17 +504,17 @@ def run_docker_scan(
         home = docker.du_home(container, user)
         if home is not None:
             per_user[user] = home
-        fast = docker.du_path(container, f"/labusers/fast/{user}")
+        fast = docker.du_path(container, f"/fast/{user}")
         if fast is not None:
             per_user_fast[user] = fast
         if measure_cold:
-            cold = docker.du_path(container, f"/labusers/slow/{user}")
+            cold = docker.du_path(container, f"/cold/{user}")
             if cold is not None:
                 per_user_slow[user] = cold
     unattributed = None
     if total is not None:
         unattributed = max(0, total - sum(per_user.values()))
-    return DockerUsage(
+    return ContainerUsage(
         scanned_at=now,
         status="idle",
         total_used=total,

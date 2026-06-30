@@ -20,7 +20,7 @@ export interface ContainerOptions {
   cpus: string;
   memory: string;
   shm_size: string;
-  image_quota: string;
+  rootfs_quota: string;
   restart: string;
 }
 
@@ -28,7 +28,7 @@ export const DEFAULT_CONTAINER_OPTIONS: ContainerOptions = {
   cpus: "4",
   memory: "8g",
   shm_size: "1g",
-  image_quota: "300g",
+  rootfs_quota: "300g",
   restart: "unless-stopped",
 };
 
@@ -47,7 +47,7 @@ export function validateContainerConfig(image: string, opts: ContainerOptions): 
   if (!/^\d+(\.\d+)?$/.test(opts.cpus)) throw new Error("CPUs must be a number (e.g. 4 or 2.5)");
   if (!SIZE_RE.test(opts.memory)) throw new Error("Invalid memory size (e.g. 8g, 512m)");
   if (!SIZE_RE.test(opts.shm_size)) throw new Error("Invalid shared-memory size (e.g. 1g)");
-  if (!SIZE_RE.test(opts.image_quota)) throw new Error("Invalid image-size quota (e.g. 300g)");
+  if (!SIZE_RE.test(opts.rootfs_quota)) throw new Error("Invalid rootfs quota (e.g. 300g)");
   if (!RESTART_POLICIES.has(opts.restart)) {
     throw new Error("Restart policy must be one of: no, on-failure, always, unless-stopped");
   }
@@ -249,7 +249,8 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
   const roster = db()
     .prepare(
       `SELECT students.id AS id, students.username AS username, students.email AS email,
-              students.name AS name, students.student_id AS student_id
+              students.name AS name, students.student_id AS student_id,
+              students.linux_uid AS linux_uid
        FROM lab_members JOIN students ON students.id = lab_members.student_id
        WHERE lab_members.lab_id = ? ORDER BY students.username`,
     )
@@ -265,6 +266,7 @@ export interface ProvisionStudent {
   email: string | null;
   name: string | null;
   student_id: string | null;
+  linux_uid: number;
 }
 
 export interface MemberProvision {
@@ -324,7 +326,13 @@ export async function provisionMemberOnPlacement(
   enqueueTask(
     placement.node_name,
     "student.add",
-    { lab: placement.lab_name, username: student.username, password },
+    {
+      lab: placement.lab_name,
+      username: student.username,
+      password,
+      uid: student.linux_uid,
+      gid: student.linux_uid,
+    },
     actor,
   );
 

@@ -38,5 +38,6 @@ def test_report_state_returns_capabilities():
     disp, _ = _dispatcher()
     frame = disp.handle(P.Task(id="3", action=P.A_NODE_REPORT_STATE))
     assert frame["ok"] is True
-    assert "zfs" in frame["result"]
-    assert "gpu_count" in frame["result"]
+    assert "runtime" in frame["result"]
+    assert "nvidia" in frame["result"]
+    assert "health" in frame["result"]

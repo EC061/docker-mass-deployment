@@ -160,7 +160,6 @@ def render_config_template(cfg: AgentConfig) -> str:
         "# Cold storage (slow tier):\n"
         '#   slow_backend    "zfs" (local ZFS slow pool) or "smb" (an external CIFS/SMB mount)\n'
         '#   slow_path       "smb" backend: mount path of the cold share (labs live under it)\n'
-        "#   slow_shared     true if that SMB share is mounted on more than one node\n"
         "# (The cold-storage OWNER for an SMB client is chosen in the controller UI, not here.)\n"
     )
     # Default an empty controller_url to an obvious placeholder so the operator sees what to edit.

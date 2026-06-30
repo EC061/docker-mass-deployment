@@ -12,7 +12,7 @@ from . import coldstore, maintenance_state, usagereport
 from .config import AgentConfig
 from .executors import docker, zfs
 from .executors.docker import ContainerOptions, Mounts
-from .paths import lab_fast_shared, lab_fast_users
+from .paths import lab_fast
 from .system import detect_capabilities
 
 
@@ -31,12 +31,24 @@ def _mounts(cfg: AgentConfig, lab: str) -> Mounts:
     # ensure_labquota_dirs creates the root-owned status dir on the host before container start,
     # so the read-only /run/labquota bind has a source.
     return Mounts(
-        fast_shared=zfs.get_mountpoint(lab_fast_shared(cfg, lab)),
-        slow_shared=coldstore.shared_mount(cfg, lab),
-        fast_users=zfs.get_mountpoint(lab_fast_users(cfg, lab)),
-        slow_users=coldstore.users_mount(cfg, lab),
+        fast=zfs.get_mountpoint(lab_fast(cfg, lab)),
+        cold=coldstore.lab_mount(cfg, lab),
         labquota=usagereport.ensure_labquota_dirs(cfg, lab),
+        seccomp_profile=cfg.seccomp_profile,
+        apparmor_profile=cfg.apparmor_profile,
     )
+
+
+def assert_node_ready(cfg: AgentConfig) -> Any:
+    caps = detect_capabilities(cfg, deep=False)
+    runtime_ok = (
+        caps.runtime.docker_ok and caps.runtime.userns_ok and caps.runtime.nested_userns_ok
+    )
+    if not runtime_ok or caps.health.status == "critical":
+        raise docker.DockerError(
+            "node runtime/storage is unhealthy; run `lab-agent doctor` before changing labs"
+        )
+    return caps
 
 
 def ensure_container(cfg: AgentConfig, lab: str, params: dict[str, Any]) -> str:
@@ -44,11 +56,9 @@ def ensure_container(cfg: AgentConfig, lab: str, params: dict[str, Any]) -> str:
     name = docker.container_name(lab)
     opts = ContainerOptions.from_params(params)
     mounts = _mounts(cfg, lab)
-    caps = detect_capabilities(cfg)
+    caps = assert_node_ready(cfg)
     docker.remove_container(name)
-    # GPUs are attached via CDI under the sysbox runtime, so a node needs both a GPU and a generated
-    # CDI spec; without the spec we launch GPU-less rather than fall back to an incompatible runtime
-    # (the missing spec is surfaced as a capability issue in the hello frame / `lab-agent doctor`).
+    # GPUs are attached directly to the outer runc container through CDI.
     return docker.create_container(
         name,
         opts,
@@ -74,7 +84,7 @@ def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, s
     old = f"{name}-old"
     opts = ContainerOptions.from_params(params)
     mounts = _mounts(cfg, lab)
-    caps = detect_capabilities(cfg)
+    caps = assert_node_ready(cfg)
     gpus = caps.nvidia_gpu and caps.nvidia_cdi
 
     # 1. Fail early if the image is bad/unavailable — the working container is still untouched.

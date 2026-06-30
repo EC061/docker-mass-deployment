@@ -35,6 +35,10 @@ class Dispatcher:
         from .gpu import policy as gpu_policy
 
         self.register(P.A_NODE_REPORT_STATE, self._report_state)
+        self.register(P.A_NODE_CHECK, maintenance.run_check)
+        self.register(P.A_NODE_REPAIR, maintenance.run_repair)
+        self.register(P.A_NODE_PATCH, maintenance.run_node_patch)
+        self.register(P.A_NODE_REBOOT, maintenance.run_reboot)
         self.register(P.A_NODE_SCRUB, maintenance.run_scrub)
         self.register(P.A_LAB_CREATE, labops.create_lab)
         self.register(P.A_LAB_SET_QUOTA, labops.set_lab_quota)

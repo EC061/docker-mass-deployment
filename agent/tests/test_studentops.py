@@ -2,56 +2,43 @@ from lab_agent import studentops
 from lab_agent.config import AgentConfig
 
 
-def _cfg():
-    return AgentConfig(controller_url="ws://x", token="t", fast_pool="fast", slow_pool="slow")
+def cfg():
+    return AgentConfig(controller_url="ws://x", token="t", userns_start=231072)
 
 
-def _patch(monkeypatch):
-    """Capture user add/remove calls. The new storage model has no per-student datasets, so
-    studentops only drives the in-container user executor."""
-    user_calls = []
+def patch_storage(monkeypatch):
+    dirs = []
+    removed = []
+    users = []
+    monkeypatch.setattr(studentops.zfs, "get_mountpoint", lambda ds: "/fast/bio")
+    monkeypatch.setattr(studentops.coldstore, "lab_mount", lambda c, lab: "/cold/bio")
+    monkeypatch.setattr(studentops.coldfs, "ensure_owned_dir",
+                        lambda path, uid, gid: dirs.append((path, uid, gid)))
+    monkeypatch.setattr(studentops.coldfs, "remove_child",
+                        lambda root, name: removed.append((root, name)))
     monkeypatch.setattr(studentops.users, "add_user",
-                        lambda c, u, p: user_calls.append(("add", c, u, p)))
+                        lambda container, user, password, uid, gid:
+                        users.append(("add", container, user, uid, gid)))
     monkeypatch.setattr(studentops.users, "remove_user",
-                        lambda c, u, *, delete_fast=False, delete_cold=False: user_calls.append(("remove", c, u, delete_fast, delete_cold)))
-    return user_calls
+                        lambda container, user: users.append(("remove", container, user)))
+    return dirs, removed, users
 
 
-def test_add_student_only_creates_the_user(monkeypatch):
-    calls = _patch(monkeypatch)
-    studentops.add_student(_cfg(), {"lab": "bio", "username": "alice", "password": "pw"})
-    assert ("add", "lab-bio", "alice", "pw") in calls
+def test_add_student_uses_mapped_host_ownership(monkeypatch):
+    dirs, _, calls = patch_storage(monkeypatch)
+    result, _ = studentops.add_student(cfg(), {
+        "lab": "bio", "username": "alice", "password": "pw", "uid": 10042, "gid": 10042,
+    })
+    assert result["uid"] == 10042
+    assert dirs == [("/fast/bio/alice", 241114, 241114),
+                    ("/cold/bio/alice", 241114, 241114)]
+    assert calls == [("add", "lab-bio", "alice", 10042, 10042)]
 
 
-def test_add_student_ignores_legacy_quota_params(monkeypatch):
-    # scratch_quota_bytes / cold_quota_bytes are no longer honored (lab quota only); passing them is
-    # a no-op beyond creating the user.
-    calls = _patch(monkeypatch)
-    result, _msg = studentops.add_student(
-        _cfg(),
-        {"lab": "bio", "username": "alice", "password": "pw", "scratch_quota_bytes": 100},
-    )
-    assert result == {"lab": "bio", "username": "alice"}
-    assert ("add", "lab-bio", "alice", "pw") in calls
-
-
-def test_remove_student_keeps_data_by_default(monkeypatch):
-    calls = _patch(monkeypatch)
-    studentops.remove_student(_cfg(), {"lab": "bio", "username": "alice"})
-    assert ("remove", "lab-bio", "alice", False, False) in calls
-
-
-def test_remove_student_deletes_fast_and_cold_for_a_local_zfs_node(monkeypatch):
-    # On a standalone / owner (local-ZFS) node delete_data wipes both fast and cold (default).
-    calls = _patch(monkeypatch)
-    studentops.remove_student(_cfg(), {"lab": "bio", "username": "alice", "delete_data": True})
-    assert ("remove", "lab-bio", "alice", True, True) in calls
-
-
-def test_remove_student_on_smb_client_never_deletes_cold(monkeypatch):
-    # The controller sends delete_cold=False to an SMB client so the owner's shared cold is untouched.
-    calls = _patch(monkeypatch)
-    studentops.remove_student(
-        _cfg(), {"lab": "bio", "username": "alice", "delete_data": True, "delete_cold": False}
-    )
-    assert ("remove", "lab-bio", "alice", True, False) in calls
+def test_remove_data_is_host_side_and_cold_is_independent(monkeypatch):
+    _, removed, calls = patch_storage(monkeypatch)
+    studentops.remove_student(cfg(), {
+        "lab": "bio", "username": "alice", "delete_data": True, "delete_cold": False,
+    })
+    assert calls == [("remove", "lab-bio", "alice")]
+    assert removed == [("/fast/bio", "alice")]

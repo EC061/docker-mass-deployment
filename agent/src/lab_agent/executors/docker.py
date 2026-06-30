@@ -1,15 +1,13 @@
-"""Docker executor for lab containers.
+"""Docker executor for the single, non-nested lab container.
 
 One shared container per lab (name ``lab-<lab>``). Creation-time options (cpu/ram/shm/image-quota/
 port/restart) are baked into ``docker run`` and frozen for the container's life; changing them means
 ``recreate`` (which preserves the ZFS data, since data lives in bind-mounted datasets, not the
 container layer). All NVIDIA GPUs are always passed.
 
-The container mounts, fixed at creation:
-    <fast>/labs/<lab>/shared -> /labdata/fast
-    <slow>/labs/<lab>/shared -> /labdata/slow
-    <fast>/labs/<lab>/users  -> /labusers/fast   (rshared: new per-student datasets appear live)
-    <slow>/labs/<lab>/users  -> /labusers/slow   (rshared)
+The only persistent data mounts are the flattened lab roots at ``/fast`` and ``/cold``, plus the
+read-only agent-published quota snapshot at ``/run/labquota``. There is no lab-side engine or
+host Docker socket.
 """
 
 from __future__ import annotations
@@ -60,7 +58,7 @@ class ContainerOptions:
     cpus: str = "4"
     memory: str = "8g"
     shm_size: str = "1g"
-    image_quota: str = "300g"  # writable layer quota via zfs storage driver
+    rootfs_quota: str = "300g"  # outer container writable-layer quota
     ssh_port: int = 0
     restart: str = "unless-stopped"
     extra_env: dict[str, str] = field(default_factory=dict)
@@ -73,7 +71,7 @@ class ContainerOptions:
             cpus=str(opts.get("cpus", cls.cpus)),
             memory=str(opts.get("memory", cls.memory)),
             shm_size=str(opts.get("shm_size", cls.shm_size)),
-            image_quota=str(opts.get("image_quota", cls.image_quota)),
+            rootfs_quota=str(opts.get("rootfs_quota", cls.rootfs_quota)),
             ssh_port=int(params.get("ssh_port", opts.get("ssh_port", 0)) or 0),
             restart=str(opts.get("restart", cls.restart)),
             extra_env=dict(opts.get("extra_env", {})),
@@ -82,12 +80,12 @@ class ContainerOptions:
 
 @dataclass
 class Mounts:
-    fast_shared: str
-    slow_shared: str
-    fast_users: str
-    slow_users: str
+    fast: str
+    cold: str
     # Root-owned host dir holding usage.json/status.json, bind-mounted READ-ONLY at /run/labquota.
     labquota: str = ""
+    seccomp_profile: str = "/etc/lab-agent/security/lab-codex-seccomp.json"
+    apparmor_profile: str = "lab-codex"
 
 
 def build_run_args(
@@ -104,26 +102,20 @@ def build_run_args(
     if opts.ssh_port:
         args += ["-p", f"{opts.ssh_port}:22"]
     args += ["--cpus", opts.cpus, "--memory", opts.memory, "--shm-size", opts.shm_size]
-    # Every lab container runs under Sysbox: nested Docker without --privileged, plus a mandatory
-    # user-namespace remap so container-root (even via a user's sudo) maps to an unprivileged host
-    # UID and cannot reach host root. GPUs are injected via the NVIDIA Container Device Interface
-    # (CDI), which docker applies independently of the OCI runtime, so it composes with sysbox-runc.
-    # (--runtime=nvidia cannot be combined with sysbox-runc, and is no longer needed.)
-    args += ["--runtime=sysbox-runc"]
+    # Standard runc + daemon-wide userns-remap provide the outer boundary. The custom profiles keep
+    # outer boundary while allowing unprivileged bubblewrap to create nested namespaces.
+    args += ["--runtime=runc", "--cgroupns=private", "--stop-signal", "SIGRTMIN+3"]
+    args += ["--tmpfs", "/run:rw,nosuid,nodev", "--tmpfs", "/run/lock:rw,nosuid,nodev"]
+    args += ["--security-opt", f"seccomp={mounts.seccomp_profile}"]
+    args += ["--security-opt", f"apparmor={mounts.apparmor_profile}"]
     if gpus:
         args += ["--device", "nvidia.com/gpu=all"]
-    if storage_quota_supported and opts.image_quota:
-        args += ["--storage-opt", f"size={opts.image_quota}"]
+    if storage_quota_supported and opts.rootfs_quota:
+        args += ["--storage-opt", f"size={opts.rootfs_quota}"]
     args += ["--restart", opts.restart]
     validate_image(opts.image)
-    # Shared lab data.
-    args += ["-v", f"{mounts.fast_shared}:/labdata/fast"]
-    args += ["-v", f"{mounts.slow_shared}:/labdata/slow"]
-    # Per-student parents, rshared so datasets created later propagate into the container.
-    args += ["--mount",
-             f"type=bind,source={mounts.fast_users},target=/labusers/fast,bind-propagation=rshared"]
-    args += ["--mount",
-             f"type=bind,source={mounts.slow_users},target=/labusers/slow,bind-propagation=rshared"]
+    args += ["--mount", f"type=bind,source={mounts.fast},target=/fast"]
+    args += ["--mount", f"type=bind,source={mounts.cold},target=/cold"]
     # labquota status dir, READ-ONLY: the agent publishes usage.json/status.json here (root-owned,
     # off any student-writable mount); students read it via the `labquota` command at /run/labquota.
     if mounts.labquota:

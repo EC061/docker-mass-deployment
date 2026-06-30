@@ -33,7 +33,6 @@ def test_derived_dataset_paths():
     cfg = AgentConfig(controller_url="ws://x", token="t", fast_pool="nvme", slow_pool="bulk")
     assert cfg.labs_fast_root == "nvme/labs"
     assert cfg.labs_slow_root == "bulk/labs"
-    assert cfg.docker_dataset == "nvme/docker"
 
 
 def test_missing_config_raises(tmp_path: Path):
@@ -59,12 +58,10 @@ def test_smb_backend_roundtrip_and_scrub_pools(tmp_path: Path):
         token="t",
         slow_backend="smb",
         slow_path="/mnt/cold/",
-        slow_shared=True,
     )
     path = save_config(cfg, tmp_path / "c.toml")
     loaded = load_config(path)
     assert loaded.slow_backend == "smb"
-    assert loaded.slow_shared is True
     assert loaded.slow_is_zfs is False
     # SMB cold storage is never scrubbed -> only the fast pool is scrubbable.
     assert loaded.scrub_pools == ["fast"]

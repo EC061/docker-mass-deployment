@@ -40,8 +40,6 @@ def _cmd_install(args: argparse.Namespace) -> int:
         cfg.slow_backend = args.slow_backend
     if args.slow_path:
         cfg.slow_path = args.slow_path
-    if args.slow_shared:
-        cfg.slow_shared = True
     if args.no_verify_tls:
         cfg.tls_verify = False
     config_path = _config_path(args)
@@ -145,14 +143,12 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     from . import maintenance_state
     from .installer import service_status
 
-    caps = detect_capabilities(cfg)
+    caps = detect_capabilities(cfg, deep=True)
     print(f"node: {cfg.node_name}")
     # Service state (best-effort; works before/after install).
     status = service_status()
     print(f"  service: {status['active']} ({status['enabled']})")
     for field, value in caps.to_dict().items():
-        if field == "issues":
-            continue
         print(f"  {field}: {value}")
     # Persistent weekly-patch bookkeeping: when each lab's container was last apt-upgraded.
     patched = maintenance_state.all_apt_upgrades(cfg)
@@ -160,12 +156,30 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
         print("last apt upgrade (epoch ms):")
         for lab, ts in sorted(patched.items()):
             print(f"  {lab}: {ts}")
-    if caps.issues:
+    if caps.health.issues:
         print("issues:")
-        for issue in caps.issues:
-            print(f"  - {issue}")
+        for issue in caps.health.issues:
+            print(f"  - [{issue.severity}] {issue.code}: {issue.message}")
         return 1
     print("all checks passed")
+    return 0
+
+
+def _cmd_host_prepare(args: argparse.Namespace) -> int:
+    from .hostprep import prepare_host
+
+    try:
+        cfg = load_config(Path(args.config) if args.config else None)
+    except FileNotFoundError:
+        cfg = AgentConfig(controller_url="", token="")
+    try:
+        result = prepare_host(cfg)
+    except (PermissionError, RuntimeError, ValueError) as exc:
+        print(f"host preparation failed: {exc}", file=sys.stderr)
+        return 1
+    for key, value in result.items():
+        print(f"{key}: {value}")
+    print("host preparation complete; run `lab-agent doctor` with a provisioned lab")
     return 0
 
 
@@ -192,8 +206,6 @@ def build_parser() -> argparse.ArgumentParser:
                            help="cold-storage backend (default: zfs)")
     p_install.add_argument("--slow-path",
                            help="cold-storage mount path for smb backend (default: /mnt/cold)")
-    p_install.add_argument("--slow-shared", action="store_true",
-                           help="cold-storage SMB share is mounted on more than one node")
     p_install.add_argument("--no-verify-tls", action="store_true",
                            help="skip TLS verification (self-signed controller)")
     p_install.add_argument("--no-enable", action="store_true",
@@ -222,6 +234,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_doctor = sub.add_parser("doctor", help="check service + zfs/docker/nvidia/pools")
     p_doctor.set_defaults(func=_cmd_doctor)
+
+    p_prepare = sub.add_parser(
+        "host-prepare", help="configure Docker userns, sysctls, AppArmor, seccomp, and CDI"
+    )
+    p_prepare.set_defaults(func=_cmd_host_prepare)
 
     return parser
 

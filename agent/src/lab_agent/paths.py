@@ -1,19 +1,12 @@
-"""ZFS dataset / path naming for labs and students.
+"""Flattened ZFS dataset and filesystem paths.
 
-Datasets (per node), rooted on the configured pools — one fast + one slow per lab, each with a
-`shared` and a `users` child. There are **no per-student datasets**: every student is a plain subdir
-of the lab's single `users` dataset, so the whole lab (shared + all students) is bounded by the one
-lab quota and per-student subdirs need no host-side setup.
+Each lab has exactly one quota-bearing dataset per storage tier. Student storage is a directory
+directly below that lab root; there are no ``shared`` or ``users`` child datasets.
 
-    <fast>/labs/<lab>            (quota = lab fast quota)
-    <fast>/labs/<lab>/shared       -> mounted /labdata/fast
-    <fast>/labs/<lab>/users        -> mounted /labusers/fast   (each student: a /<u> subdir here)
-    <slow>/labs/<lab>            (quota = lab slow quota)
-    <slow>/labs/<lab>/shared       -> mounted /labdata/slow
-    <slow>/labs/<lab>/users        -> mounted /labusers/slow   (each student: a /<u> subdir here)
-
-``user_scratch``/``user_cold`` return the filesystem path of a student's subdir under those `users`
-datasets (``<...>/users/<u>``) — a directory, not a dataset of its own.
+    fast/labs/<lab> -> host /fast/<lab> -> container /fast
+    slow/labs/<lab> -> its ZFS mount     -> container /cold
+    /fast/<user>    -> /home/<user>/scratch
+    /cold/<user>    -> /home/<user>/cold-storage
 """
 
 from __future__ import annotations
@@ -42,48 +35,17 @@ def lab_slow(cfg: AgentConfig, lab: str) -> str:
     return f"{cfg.labs_slow_root}/{validate_lab_name(lab)}"
 
 
-def lab_fast_shared(cfg: AgentConfig, lab: str) -> str:
-    return f"{lab_fast(cfg, lab)}/shared"
-
-
-def lab_slow_shared(cfg: AgentConfig, lab: str) -> str:
-    return f"{lab_slow(cfg, lab)}/shared"
-
-
-def lab_fast_users(cfg: AgentConfig, lab: str) -> str:
-    """Parent dataset holding every student's scratch; bind-mounted into the container once."""
-    return f"{lab_fast(cfg, lab)}/users"
-
-
-def lab_slow_users(cfg: AgentConfig, lab: str) -> str:
-    """Parent dataset holding every student's cold-storage; bind-mounted into the container once."""
-    return f"{lab_slow(cfg, lab)}/users"
-
-
-def user_scratch(cfg: AgentConfig, lab: str, user: str) -> str:
-    return f"{lab_fast(cfg, lab)}/users/{user}"
-
-
-def user_cold(cfg: AgentConfig, lab: str, user: str) -> str:
-    return f"{lab_slow(cfg, lab)}/users/{user}"
+def fast_mount(cfg: AgentConfig, lab: str) -> str:
+    return f"{cfg.fast_mount_root.rstrip('/')}/{validate_lab_name(lab)}"
 
 
 # --- Cold storage as a filesystem path (SMB backend) -----------------------------------------
-# When cold storage is an SMB mount there are no datasets, only directories. The layout mirrors
-# the ZFS one so the controller's dataset-name parser ("…/labs/<lab>[/users/<u>]") works for both.
+# When cold storage is SMB there are no datasets, only one directory per lab.
 
 
 def cold_lab(cfg: AgentConfig, lab: str) -> str:
     return f"{cfg.cold_root}/{validate_lab_name(lab)}"
 
 
-def cold_lab_shared(cfg: AgentConfig, lab: str) -> str:
-    return f"{cold_lab(cfg, lab)}/shared"
-
-
-def cold_lab_users(cfg: AgentConfig, lab: str) -> str:
-    return f"{cold_lab(cfg, lab)}/users"
-
-
 def cold_user(cfg: AgentConfig, lab: str, user: str) -> str:
-    return f"{cold_lab(cfg, lab)}/users/{user}"
+    return f"{cold_lab(cfg, lab)}/{user}"

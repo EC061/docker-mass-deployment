@@ -19,11 +19,21 @@ DEFAULT_CONFIG_PATH = Path(os.environ.get("LAB_AGENT_CONFIG", "/etc/lab-agent/co
 DEFAULT_FAST_POOL = "fast"
 DEFAULT_SLOW_POOL = "slow"
 
+# Docker's native user-namespace mapping uses the same range on every node so numeric
+# ownership survives when cold storage is shared over SMB.
+DEFAULT_USERNS_USER = "labdockremap"
+DEFAULT_USERNS_START = 231_072
+DEFAULT_USERNS_SIZE = 65_536
+DEFAULT_FAST_MOUNT_ROOT = "/fast"
+DEFAULT_DOCKER_DATA_ROOT = "/var/lib/docker"
+DEFAULT_SECCOMP_PROFILE = "/etc/lab-agent/security/lab-codex-seccomp.json"
+DEFAULT_APPARMOR_PROFILE = "lab-codex"
+
 # Cold-storage (slow tier) backends:
 #   "zfs" — a local ZFS pool on this node; full dataset/quota/scrub control (default).
 #   "smb" — an externally-managed SMB/CIFS mount. No ZFS control: directories instead of
 #           datasets, no enforceable quota, usage measured with du/statvfs, never scrubbed.
-#           The same SMB share may be mounted on more than one node (set slow_shared).
+#           The same SMB share may be mounted on more than one node.
 SLOW_BACKEND_ZFS = "zfs"
 SLOW_BACKEND_SMB = "smb"
 
@@ -40,10 +50,16 @@ class AgentConfig:
     # When slow_backend == "smb", the base mount path of the cold-storage share (labs live under
     # <slow_path>/labs/...). Ignored for the zfs backend.
     slow_path: str = "/mnt/cold"
-    # True when the cold-storage share is mounted on more than one node. Purely advisory + a safety
-    # signal: the agent only ever touches its own labs' sub-directories, never the shared root, and
-    # SMB cold storage is never scrubbed.
-    slow_shared: bool = False
+    # Host mount root for the flattened per-lab fast datasets. A lab is mounted on the host at
+    # /fast/<lab> and bind-mounted into its container at /fast.
+    fast_mount_root: str = DEFAULT_FAST_MOUNT_ROOT
+    # Native Docker userns-remap contract. Container uid N maps to userns_start + N on the host.
+    userns_user: str = DEFAULT_USERNS_USER
+    userns_start: int = DEFAULT_USERNS_START
+    userns_size: int = DEFAULT_USERNS_SIZE
+    docker_data_root: str = DEFAULT_DOCKER_DATA_ROOT
+    seccomp_profile: str = DEFAULT_SECCOMP_PROFILE
+    apparmor_profile: str = DEFAULT_APPARMOR_PROFILE
     # Local cache DB for the durable task buffer + offline event/log buffer.
     state_db: str = "/var/lib/lab-agent/state.db"
     heartbeat_interval_s: int = 15
@@ -58,7 +74,7 @@ class AgentConfig:
     # and the freshness gate below which a student-requested refresh is skipped as "already fresh".
     # The controller schedules the precise off-peak nightly scan (Settings -> per-student usage
     # scan); this daily fallback just keeps per-student numbers from going fully stale if disabled.
-    docker_scan_interval_s: int = 86400
+    usage_scan_interval_s: int = 86400
     # Weekly in-container security patching (docker exec apt-get update && upgrade), driven by the
     # agent off a persistent local record so the pinned base image never needs rebuilding for CVEs.
     apt_update_enabled: bool = True
@@ -90,10 +106,6 @@ class AgentConfig:
         """Persistent per-lab maintenance bookkeeping file (apt-upgrade timestamps), beside the
         durable state DB so it shares the agent's private state directory."""
         return os.path.join(os.path.dirname(self.state_db) or ".", "maintenance.json")
-
-    @property
-    def docker_dataset(self) -> str:
-        return f"{self.fast_pool}/docker"
 
     @property
     def scrub_pools(self) -> list[str]:
@@ -128,12 +140,18 @@ def load_config(path: Path | None = None) -> AgentConfig:
         "slow_pool",
         "slow_backend",
         "slow_path",
-        "slow_shared",
+        "fast_mount_root",
+        "userns_user",
+        "userns_start",
+        "userns_size",
+        "docker_data_root",
+        "seccomp_profile",
+        "apparmor_profile",
         "state_db",
         "heartbeat_interval_s",
         "usage_publish_interval_s",
         "lab_usage_interval_s",
-        "docker_scan_interval_s",
+        "usage_scan_interval_s",
         "apt_update_enabled",
         "apt_update_interval_s",
         "apt_update_check_interval_s",
@@ -169,12 +187,18 @@ def render_config(cfg: AgentConfig) -> str:
         "slow_pool",
         "slow_backend",
         "slow_path",
-        "slow_shared",
+        "fast_mount_root",
+        "userns_user",
+        "userns_start",
+        "userns_size",
+        "docker_data_root",
+        "seccomp_profile",
+        "apparmor_profile",
         "state_db",
         "heartbeat_interval_s",
         "usage_publish_interval_s",
         "lab_usage_interval_s",
-        "docker_scan_interval_s",
+        "usage_scan_interval_s",
         "apt_update_enabled",
         "apt_update_interval_s",
         "apt_update_check_interval_s",

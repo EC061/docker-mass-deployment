@@ -41,7 +41,7 @@ class Agent:
         self.log = LogBus(cfg.node_name, sink=self.localq.enqueue_outbound)
         self.dispatcher = Dispatcher(cfg, self.log)
         self.usage = UsageState()
-        self._docker_lock = threading.Lock()  # single-flight guard for the docker-layer scan
+        self._container_lock = threading.Lock()  # single-flight guard for the container-layer scan
         # On-demand usage scan (Stats page "Scan now"). Registered here rather than in the
         # dispatcher's builtins because it reuses the agent's shared scan cache + single-flight
         # lock, which live on the Agent, not the Dispatcher.
@@ -73,7 +73,7 @@ class Agent:
         gpu = asyncio.create_task(self._gpu_loop(), name="gpu-killer")
         publish = asyncio.create_task(self._usage_publish_loop(), name="usage-publish")
         lab_usage = asyncio.create_task(self._lab_usage_loop(), name="lab-usage")
-        docker_scan = asyncio.create_task(self._docker_scan_loop(), name="docker-scan")
+        usage_scan = asyncio.create_task(self._container_scan_loop(), name="usage-scan")
         pkg_update = asyncio.create_task(self._pkg_update_loop(), name="pkg-update")
         try:
             await self._connection_loop()
@@ -82,7 +82,7 @@ class Agent:
             gpu.cancel()
             publish.cancel()
             lab_usage.cancel()
-            docker_scan.cancel()
+            usage_scan.cancel()
             pkg_update.cancel()
             self.localq.close()
 
@@ -285,7 +285,7 @@ class Agent:
         fixed cadence and cache it; the heartbeat re-reports the cached snapshot. Moved off the
         per-15s heartbeat path so the agent does one ``zfs list`` / ``docker inspect`` per interval,
         not per heartbeat. The (expensive) per-student du breakdown is a separate, slower cache (see
-        ``_docker_scan_loop``)."""
+        ``_container_scan_loop``)."""
         while True:
             try:
                 await asyncio.to_thread(self._refresh_lab_usage)
@@ -306,16 +306,16 @@ class Agent:
                 usagereport.ensure_labquota_dirs(self.cfg, lab)
                 roster = usagereport.list_lab_students(self.cfg, lab)
                 snapshot = usagereport.build_snapshot(
-                    self.cfg, lab, lab_usage, self.usage.docker_for(lab), roster=roster
+                    self.cfg, lab, lab_usage, self.usage.container_for(lab), roster=roster
                 )
                 usagereport.publish_snapshot(self.cfg, lab, snapshot)
             except Exception as exc:  # one bad lab must not stop the others
                 self.log.warn("usage", f"publish failed for lab '{lab}': {exc}", lab=lab)
 
-    async def _docker_scan_loop(self) -> None:
+    async def _container_scan_loop(self) -> None:
         """Refresh the (expensive) per-student du breakdown on a daily fallback cadence / on demand.
 
-        A lab is (re)scanned when its cached data is older than ``docker_scan_interval_s`` (a daily
+        A lab is (re)scanned when its cached data is older than ``usage_scan_interval_s`` (a daily
         safety net; the controller drives the precise nightly scan, by default at midnight), or when
         a student dropped a refresh marker and the cache is older than the forced floor (5 min). The
         container-level writable-layer total is NOT scanned here — it lives in the lab-level cache,
@@ -326,21 +326,21 @@ class Agent:
             try:
                 # Single-flight: if the previous tick's scan is still running (a big lab can take a
                 # while), skip this tick rather than piling concurrent scans on top of it.
-                if self._docker_lock.acquire(blocking=False):
+                if self._container_lock.acquire(blocking=False):
                     try:
-                        await asyncio.to_thread(self._scan_due_docker, floor_ms)
+                        await asyncio.to_thread(self._scan_due_container, floor_ms)
                     finally:
-                        self._docker_lock.release()
+                        self._container_lock.release()
             except Exception as exc:  # never let the scanner die
-                self.log.error("usage", f"docker scan loop error: {exc}")
+                self.log.error("usage", f"usage scan loop error: {exc}")
             await asyncio.sleep(60)
 
-    def _scan_due_docker(self, floor_ms: int) -> None:
+    def _scan_due_container(self, floor_ms: int) -> None:
         now = P.now_ms()
-        interval_ms = max(60, self.cfg.docker_scan_interval_s) * 1000
+        interval_ms = max(60, self.cfg.usage_scan_interval_s) * 1000
         grouped = usagereport.collect_zfs_usage(self.cfg)
         for lab in grouped:
-            cached = self.usage.docker_for(lab)
+            cached = self.usage.container_for(lab)
             age = None if cached.scanned_at is None else now - cached.scanned_at
             users_list = usagereport.list_lab_students(self.cfg, lab)
             requested = usagereport.newest_request(self.cfg, lab, users_list)
@@ -354,9 +354,9 @@ class Agent:
             forced = fresh_request and (age is None or age >= floor_ms)
             if not (due or forced):
                 continue
-            self._scan_docker_lab(lab, users_list)
+            self._scan_container_lab(lab, users_list)
 
-    def _scan_docker_lab(self, lab: str, usernames: list[str]) -> None:
+    def _scan_container_lab(self, lab: str, usernames: list[str]) -> None:
         def progress(done: int, total: int, current: str) -> None:
             try:
                 usagereport.write_status(
@@ -371,8 +371,8 @@ class Agent:
         try:
             usagereport.ensure_labquota_dirs(self.cfg, lab)
             progress(0, len(usernames), "")
-            usage = usagereport.run_docker_scan(self.cfg, lab, usernames, progress=progress)
-            self.usage.set_docker(lab, usage)
+            usage = usagereport.run_container_scan(self.cfg, lab, usernames, progress=progress)
+            self.usage.set_container(lab, usage)
             usagereport.clear_requests(self.cfg, lab, usernames)
             usagereport.write_status(
                 self.cfg, lab, {"status": "idle", "scanned_at": usage.scanned_at}
@@ -385,7 +385,7 @@ class Agent:
             )
             usagereport.publish_snapshot(self.cfg, lab, snapshot)
         except Exception as exc:
-            self.log.warn("usage", f"docker scan failed for lab '{lab}': {exc}", lab=lab)
+            self.log.warn("usage", f"usage scan failed for lab '{lab}': {exc}", lab=lab)
 
     def _handle_usage_scan(self, cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
         """Controller-triggered usage scan for one lab (Stats page "Scan now").
@@ -398,15 +398,15 @@ class Agent:
         """
         lab = params["lab"]
         users_list = params.get("users") or usagereport.list_lab_students(cfg, lab)
-        with self._docker_lock:
-            self._scan_docker_lab(lab, users_list)
+        with self._container_lock:
+            self._scan_container_lab(lab, users_list)
         # Also recompute the lab-level snapshot now, so fast/cold/image refresh on the same trigger
         # rather than waiting for the next lab-usage cycle.
         try:
             self.usage.set_lab_level(lab, usagereport.lab_level_for(cfg, lab))
         except Exception as exc:  # lab-level refresh is best-effort; the per-student scan still ran
             self.log.warn("usage", f"lab-level refresh failed for '{lab}': {exc}", lab=lab)
-        usage = self.usage.docker_for(lab)
+        usage = self.usage.container_for(lab)
         return {"lab": lab, "scanned_at": usage.scanned_at}, f"usage scan complete for '{lab}'"
 
     # ----------------------------------------------------------------- weekly in-container patching

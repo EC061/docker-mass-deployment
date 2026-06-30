@@ -48,3 +48,13 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+
+  lab-image:
+    name: Lab image + AppArmor policy
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Parse AppArmor policy
+        run: sudo apparmor_parser -Q -T agent/src/lab_agent/assets/lab-codex.apparmor
+      - name: Build pinned lab image
+        run: docker build --tag custom-ssh:ci image

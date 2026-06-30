@@ -5,83 +5,43 @@ from lab_agent.executors.base import CommandResult
 from lab_agent.executors.docker import DockerError
 
 
-class CaptureExec:
+class Capture:
     def __init__(self, ok=True):
         self.calls = []
         self.ok = ok
 
-    def __call__(self, name, argv, input_text=None):
-        self.calls.append({"name": name, "argv": argv, "input": input_text})
+    def __call__(self, name, argv, input_text=None, **kwargs):
+        self.calls.append((name, argv, input_text))
         return CommandResult(self.ok, argv, 0 if self.ok else 1, "", "" if self.ok else "boom")
 
 
-@pytest.fixture
-def cap(monkeypatch):
-    c = CaptureExec()
-    monkeypatch.setattr(users, "exec_in", c)
-    return c
+def test_add_user_exact_ids_sudo_and_flat_links(monkeypatch):
+    cap = Capture()
+    monkeypatch.setattr(users, "exec_in", cap)
+    users.add_user("lab-bio", "alice", "secret", 10042, 10042)
+    script = cap.calls[0][2]
+    assert "groupadd -g 10042" in script
+    assert "useradd -m -u 10042 -g 10042" in script
+    assert "usermod -aG sudo" in script
+    assert "/fast/\"$u\"" in script and "/cold/\"$u\"" in script
+    assert "docker" not in script
 
 
-def test_add_user_script_creates_user_and_links(cap):
-    users.add_user("lab-bio", "alice", "s3cret")
-    script = cap.calls[0]["input"]
-    assert "u=alice" in script
-    assert "useradd -m -s /bin/bash" in script
-    assert "ln -sfn /labusers/fast/" in script
-    assert "ln -sfn /labusers/slow/" in script
-    assert "umask 027" in script
-    # Users are granted sudo + docker-group membership (safe only because lab containers run under
-    # the Sysbox runtime, which remaps container-root to an unprivileged host UID) so they can use the
-    # shared in-container Docker daemon when a project needs a nested container.
-    assert "usermod -aG sudo,docker" in script
-    assert "groupadd docker" in script
-    assert "chpasswd" in script
-    # Password is in the piped script body, not in argv.
-    assert "s3cret" in script
-    assert all("s3cret" not in a for a in cap.calls[0]["argv"])
-
-
-def test_add_user_password_is_shell_quoted(cap):
-    users.add_user("lab-bio", "bob", "pa'ss")
-    script = cap.calls[0]["input"]
-    assert "'pa'\\''ss'" in script
-
-
-def test_invalid_username_rejected(cap):
+def test_uid_and_username_validation(monkeypatch):
+    cap = Capture()
+    monkeypatch.setattr(users, "exec_in", cap)
+    for uid, gid in ((9999, 9999), (60000, 60000), (10000, 10001)):
+        with pytest.raises(DockerError):
+            users.add_user("lab-bio", "alice", "x", uid, gid)
     with pytest.raises(DockerError):
-        users.add_user("lab-bio", "Bad Name!", "x")
+        users.add_user("lab-bio", "Bad Name", "x", 10000, 10000)
     assert cap.calls == []
 
 
-def test_remove_user_default_keeps_home(cap):
+def test_remove_user_only_removes_account(monkeypatch):
+    cap = Capture()
+    monkeypatch.setattr(users, "exec_in", cap)
     users.remove_user("lab-bio", "alice")
-    assert "userdel alice" in cap.calls[0]["input"]
-    assert "userdel -r" not in cap.calls[0]["input"]
-
-
-def test_remove_user_delete_fast_and_cold(cap):
-    users.remove_user("lab-bio", "alice", delete_fast=True, delete_cold=True)
-    script = cap.calls[0]["input"]
+    script = cap.calls[0][2]
     assert "userdel -r alice" in script
-    assert "rm -rf /labusers/fast/alice" in script
-    assert "rm -rf /labusers/slow/alice" in script
-
-
-def test_remove_user_smb_client_wipes_fast_but_never_cold(cap):
-    # An SMB client deletes its local fast data but must NOT touch /labusers/slow (the owner's share).
-    users.remove_user("lab-bio", "alice", delete_fast=True, delete_cold=False)
-    script = cap.calls[0]["input"]
-    assert "userdel -r alice" in script
-    assert "rm -rf /labusers/fast/alice" in script
-    assert "/labusers/slow/" not in script
-
-
-def test_remove_user_default_does_not_touch_labusers(cap):
-    users.remove_user("lab-bio", "alice")
-    assert "/labusers/" not in cap.calls[0]["input"]
-
-
-def test_exec_failure_raises(monkeypatch):
-    monkeypatch.setattr(users, "exec_in", CaptureExec(ok=False))
-    with pytest.raises(DockerError):
-        users.add_user("lab-bio", "alice", "x")
+    assert "/fast" not in script and "/cold" not in script

@@ -1,14 +1,12 @@
-"""In-container student user management via `docker exec`.
+"""In-container account management for flattened fast/cold storage.
 
 A student is a Linux user inside the lab container with:
-  /home/<u>/scratch       -> /labusers/fast/<u>   (fast tier, a subdir of the lab's users mount)
-  /home/<u>/cold-storage  -> /labusers/slow/<u>   (slow tier, a subdir of the lab's users mount)
+  /home/<u>/scratch       -> /fast/<u>
+  /home/<u>/cold-storage  -> /cold/<u>
 
-There are no per-student datasets: /labusers/{fast,slow} are the lab's single users datasets,
-already UID-shifted by Sysbox, so we create each student's scratch/cold-storage as a plain subdir
-here and the chown to the student succeeds without host-side setup. We create the user, make the
-subdirs + symlinks, set the password, and set umask. The script is piped via stdin so the password
-never appears in the host process list.
+There are no per-student datasets. The agent creates the storage directories on the host with
+daemon user-namespace-remapped numeric ownership before creating this account. The script is piped
+via stdin so the password never appears in the host process list.
 """
 
 from __future__ import annotations
@@ -38,28 +36,36 @@ def _run_script(container: str, script: str) -> CommandResult:
     return res
 
 
-def add_user(container: str, username: str, password: str) -> CommandResult:
+MIN_STUDENT_UID = 10_000
+MAX_STUDENT_UID = 59_999
+
+
+def validate_uid(uid: int, gid: int) -> None:
+    if uid != gid or not MIN_STUDENT_UID <= uid <= MAX_STUDENT_UID:
+        raise DockerError(
+            f"student uid/gid must match and be in {MIN_STUDENT_UID}..{MAX_STUDENT_UID}"
+        )
+
+
+def add_user(container: str, username: str, password: str, uid: int, gid: int) -> CommandResult:
     validate_username(username)
+    validate_uid(uid, gid)
     # Password is embedded in the stdin-piped script body, never in argv.
     #
-    # Users ARE granted sudo and added to the `docker` group so they can administer the box and use
-    # the shared in-container Docker daemon (image/Dockerfile) when a project genuinely needs a
-    # nested container. This is only safe because every lab container runs under the Sysbox runtime:
-    # its user-namespace remap means container-root (which sudo and Docker grant) maps to an
-    # UNPRIVILEGED host UID, so neither sudo nor the in-container daemon is a path to host root.
-    # Note the tradeoff: a lab container is shared by all its students, so sudo means they are no
-    # longer isolated from one another *within the lab* (host isolation is unaffected). umask 027
-    # still keeps each student's files private by default.
+    # Full sudo is intentionally retained. Docker's daemon-wide userns-remap maps container root to
+    # an unprivileged host uid; students remain mutually trusted within their shared lab container.
     script = f"""set -e
 u={username}
-if ! id "$u" >/dev/null 2>&1; then useradd -m -s /bin/bash "$u"; fi
-getent group docker >/dev/null 2>&1 || groupadd docker
-usermod -aG sudo,docker "$u"
-mkdir -p /labusers/fast/"$u" /labusers/slow/"$u"
-chown "$u":"$u" /labusers/fast/"$u" /labusers/slow/"$u"
-ln -sfn /labusers/fast/"$u" /home/"$u"/scratch
-ln -sfn /labusers/slow/"$u" /home/"$u"/cold-storage
-chown -h "$u":"$u" /home/"$u"/scratch /home/"$u"/cold-storage
+existing_group=$(getent group {gid} | cut -d: -f1 || true)
+if [ -z "$existing_group" ]; then groupadd -g {gid} "$u"; else test "$existing_group" = "$u"; fi
+if ! id "$u" >/dev/null 2>&1; then useradd -m -u {uid} -g {gid} -s /bin/bash "$u"; fi
+test "$(id -u "$u")" = "{uid}"
+test "$(id -g "$u")" = "{gid}"
+usermod -aG sudo "$u"
+chmod 0700 /home/"$u"
+ln -sfn /fast/"$u" /home/"$u"/scratch
+ln -sfn /cold/"$u" /home/"$u"/cold-storage
+chown -h {uid}:{gid} /home/"$u"/scratch /home/"$u"/cold-storage
 grep -q '^umask ' /home/"$u"/.bashrc 2>/dev/null || echo 'umask 027' >> /home/"$u"/.bashrc
 printf '%s:%s' "$u" {_shell_quote(password)} | chpasswd
 """
@@ -75,26 +81,7 @@ def set_password(container: str, username: str, password: str) -> CommandResult:
 def remove_user(
     container: str,
     username: str,
-    *,
-    delete_fast: bool = False,
-    delete_cold: bool = False,
 ) -> CommandResult:
-    """Remove the student's account; optionally wipe their FAST (scratch) and/or COLD (cold-storage)
-    data. The two are separate because on an SMB-client node /labusers/slow is the OWNER node's
-    shared dataset over the mount — only the local-ZFS owner is ever told to delete the cold data
-    (delete_cold), so an SMB client passing delete_cold=False can never erase shared cold storage.
-    Removing any data also removes the account home (userdel -r); with neither flag the account is
-    removed but its files are kept. The username is USERNAME_RE-validated, so it is safe to use.
-    """
+    """Remove only the in-container account. Host-side storage deletion is handled separately."""
     validate_username(username)
-    lines = []
-    # `|| true` so removing an already-absent user is not an error.
-    if delete_fast or delete_cold:
-        lines.append(f"userdel -r {username} 2>/dev/null || true")
-    else:
-        lines.append(f"userdel {username} 2>/dev/null || true")
-    if delete_fast:
-        lines.append(f"rm -rf /labusers/fast/{username}")
-    if delete_cold:
-        lines.append(f"rm -rf /labusers/slow/{username}")
-    return _run_script(container, "\n".join(lines) + "\n")
+    return _run_script(container, f"userdel -r {username} 2>/dev/null || true\n")

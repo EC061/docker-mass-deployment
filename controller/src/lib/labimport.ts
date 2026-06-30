@@ -279,6 +279,15 @@ export async function applyRosterImport(labId: number, text: string, actor?: str
 
   db().transaction(() => {
     const stmt = (sql: string) => db().prepare(sql);
+    const usedUids = new Set((stmt("SELECT linux_uid FROM students WHERE linux_uid IS NOT NULL").all() as
+      { linux_uid: number }[]).map((row) => row.linux_uid));
+    const takeUid = () => {
+      let uid = 10_000;
+      while (uid <= 59_999 && usedUids.has(uid)) uid++;
+      if (uid > 59_999) throw new Error("student UID range 10000..59999 is exhausted");
+      usedUids.add(uid);
+      return uid;
+    };
     for (const s of db().prepare("SELECT id, username FROM students").all() as { id: number; username: string }[]) {
       studentId.set(s.username, s.id);
     }
@@ -289,7 +298,7 @@ export async function applyRosterImport(labId: number, text: string, actor?: str
       stmt("UPDATE labs SET updated_at = ? WHERE id = ?").run(now, labId);
     }
     for (const s of plan.studentsToCreate) {
-      const info = stmt("INSERT INTO students (student_id, username, email, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(s.studentId, s.username, s.email, s.name, now, now);
+      const info = stmt("INSERT INTO students (student_id, username, email, name, linux_uid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(s.studentId, s.username, s.email, s.name, takeUid(), now, now);
       studentId.set(s.username, Number(info.lastInsertRowid));
     }
     for (const s of plan.studentsToUpdate) {
@@ -303,7 +312,7 @@ export async function applyRosterImport(labId: number, text: string, actor?: str
       const exists = stmt("SELECT 1 FROM lab_members WHERE lab_id = ? AND student_id = ?").get(labId, sid);
       if (!exists) {
         stmt("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, ?)").run(labId, sid, now);
-        const student = db().prepare("SELECT id, username, email, name, student_id FROM students WHERE id = ?").get(sid) as ProvisionStudent;
+        const student = db().prepare("SELECT id, username, email, name, student_id, linux_uid FROM students WHERE id = ?").get(sid) as ProvisionStudent;
         added.push(student);
       }
     }

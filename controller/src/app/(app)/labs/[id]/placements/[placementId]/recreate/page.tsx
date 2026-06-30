@@ -46,7 +46,7 @@ export default async function RecreatePage({
           </p>
           <p>
             Current: image <b>{placement.image}</b> · {opts.cpus} CPU · {opts.memory} RAM ·{" "}
-            {opts.shm_size} shm · img-quota {opts.image_quota} · restart {opts.restart}
+            {opts.shm_size} shm · rootfs-quota {opts.rootfs_quota} · restart {opts.restart}
           </p>
         </CardContent>
       </Card>
@@ -68,7 +68,7 @@ export default async function RecreatePage({
             {field("CPUs", "cpus", opts.cpus)}
             {field("RAM", "memory", opts.memory)}
             {field("Shared memory", "shmSize", opts.shm_size)}
-            {field("Image size quota", "imageQuota", opts.image_quota)}
+            {field("Root filesystem quota", "rootfsQuota", opts.rootfs_quota)}
             {field("Restart policy", "restart", opts.restart)}
             <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-3">
               <Button type="submit">Recreate container</Button>

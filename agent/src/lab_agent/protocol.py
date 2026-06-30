@@ -13,7 +13,7 @@ from typing import Any
 
 # Wire-protocol version. Bumped on any breaking frame change; the controller refuses a mismatch
 # (this redesign is a clean break — agents are reinstalled, so there is no legacy compatibility).
-PROTOCOL_VERSION = 1
+PROTOCOL_VERSION = 2
 
 # Frame types (agent <-> controller).
 T_HELLO = "hello"  # agent -> controller: identity + capabilities on connect
@@ -35,6 +35,10 @@ A_CONTAINER_RECREATE = "container.recreate"
 A_GPU_POLICY_UPDATE = "gpu.policy.update"
 A_NODE_REPORT_STATE = "node.report_state"
 A_NODE_SCRUB = "node.scrub"
+A_NODE_CHECK = "node.check"
+A_NODE_REPAIR = "node.repair"
+A_NODE_PATCH = "node.patch"
+A_NODE_REBOOT = "node.reboot"
 A_USAGE_SCAN = "usage.scan"  # per-student storage (du) scan for one lab (nightly + on-demand)
 
 

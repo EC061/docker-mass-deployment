@@ -286,7 +286,13 @@ function handleResult(node: string, frame: any): void {
   if (t) {
     const params = safeParams(t.params);
     const labName = (frame.result?.lab as string | undefined) ?? params.lab;
-    if (labName && t.action === "lab.create") {
+    if (frame.ok && t.action === "node.check" && frame.result) {
+      db().prepare("UPDATE nodes SET capabilities = ?, last_seen = ? WHERE name = ?")
+        .run(JSON.stringify(frame.result), Date.now(), node);
+    } else if (frame.ok && ["node.repair", "node.patch"].includes(t.action) && frame.result?.health) {
+      db().prepare("UPDATE nodes SET capabilities = ?, last_seen = ? WHERE name = ?")
+        .run(JSON.stringify(frame.result.health), Date.now(), node);
+    } else if (labName && t.action === "lab.create") {
       markPlacementStateByLabNode(
         labName,
         node,

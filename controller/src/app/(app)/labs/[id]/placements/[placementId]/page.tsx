@@ -110,7 +110,7 @@ export default async function PlacementPage({
     (candidate) => candidate.node_cold_owner_node_id === placement.node_id,
   );
   const fastUsage = latestUsage(placement.id, "fast");
-  const coldUsage = latestUsage(placement.id, "slow");
+  const coldUsage = latestUsage(placement.id, "cold");
   const quotaTask = latestTask(placement, "lab.set_quota");
   const quotaState = taskLabel(quotaTask);
   const recreateState = taskLabel(latestTask(placement, "container.recreate"));
@@ -220,7 +220,7 @@ export default async function PlacementPage({
             <div><dt className="text-muted-foreground">CPUs</dt><dd className="font-medium">{opts.cpus}</dd></div>
             <div><dt className="text-muted-foreground">Memory</dt><dd className="font-medium">{opts.memory}</dd></div>
             <div><dt className="text-muted-foreground">Shared memory</dt><dd className="font-medium">{opts.shm_size}</dd></div>
-            <div><dt className="text-muted-foreground">Image quota</dt><dd className="font-medium">{opts.image_quota}</dd></div>
+            <div><dt className="text-muted-foreground">Rootfs quota</dt><dd className="font-medium">{opts.rootfs_quota}</dd></div>
             <div><dt className="text-muted-foreground">Restart</dt><dd className="font-medium">{opts.restart}</dd></div>
           </dl>
           <Button asChild variant="secondary">

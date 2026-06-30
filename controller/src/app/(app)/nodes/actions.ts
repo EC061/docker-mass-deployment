@@ -2,7 +2,9 @@
 
 import { redirect } from "next/navigation";
 import { requireAdmin } from "@/lib/auth";
+import { db } from "@/lib/db";
 import { putFlash } from "@/lib/flash";
+import { enqueueTask } from "@/lib/queue";
 import {
   type ColdBackend,
   deleteNode,
@@ -89,4 +91,52 @@ export async function deleteNodeAction(formData: FormData) {
   }
   if (error) redirect("/nodes?error=" + encodeURIComponent(error));
   redirect("/nodes?deleted=" + encodeURIComponent(name));
+}
+
+function nodeTask(formData: FormData, action: string, actor: string): string {
+  const name = String(formData.get("name") ?? "").trim().toLowerCase();
+  if (!isValidNodeName(name)) throw new Error("invalid node name");
+  enqueueTask(name, action, {}, actor);
+  return name;
+}
+
+export async function checkNodeAction(formData: FormData) {
+  const actor = (await requireAdmin()).email;
+  const name = nodeTask(formData, "node.check", actor);
+  redirect(`/nodes?maintenance=${encodeURIComponent(`Health check queued for ${name}`)}`);
+}
+
+export async function repairNodeAction(formData: FormData) {
+  const actor = (await requireAdmin()).email;
+  const name = nodeTask(formData, "node.repair", actor);
+  redirect(`/nodes?maintenance=${encodeURIComponent(`Safe repair queued for ${name}`)}`);
+}
+
+export async function rebootNodeAction(formData: FormData) {
+  const actor = (await requireAdmin()).email;
+  const name = nodeTask(formData, "node.reboot", actor);
+  redirect(`/nodes?maintenance=${encodeURIComponent(`Reboot queued for ${name}`)}`);
+}
+
+export async function patchAllNodesAction(formData: FormData) {
+  const actor = (await requireAdmin()).email;
+  const raw = String(formData.get("manifest") ?? "");
+  let manifest: { package: string; version: string }[] = [];
+  try {
+    manifest = raw.split(/[\n,]+/).map((line) => line.trim()).filter(Boolean).map((line) => {
+      const split = line.indexOf("=");
+      if (split <= 0 || split === line.length - 1) {
+        throw new Error(`manifest entry must pin a version: ${line}`);
+      }
+      return { package: line.slice(0, split), version: line.slice(split + 1) };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "invalid manifest";
+    redirect(`/nodes?error=${encodeURIComponent(message)}`);
+  }
+  if (manifest.length === 0) redirect("/nodes?error=Enter+at+least+one+package%3Dversion");
+  const nodes = db().prepare("SELECT name FROM nodes WHERE allowed = 1 ORDER BY name").all() as
+    { name: string }[];
+  nodes.forEach((node) => enqueueTask(node.name, "node.patch", { manifest }, actor));
+  redirect(`/nodes?maintenance=${encodeURIComponent(`Approved manifest queued for ${nodes.length} node(s)`)}`);
 }

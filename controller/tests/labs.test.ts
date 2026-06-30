@@ -21,7 +21,7 @@ let placements: typeof import("../src/lib/placements");
 let nodeId: number;
 let port = 50000;
 
-const OPTS = { cpus: "4", memory: "8g", shm_size: "1g", image_quota: "300g", restart: "unless-stopped" };
+const OPTS = { cpus: "4", memory: "8g", shm_size: "1g", rootfs_quota: "300g", restart: "unless-stopped" };
 
 beforeAll(async () => {
   dbmod = await import("../src/lib/db");
@@ -121,8 +121,8 @@ describe("destroyLab", () => {
     const a = makeLab("alpha");
     const b = makeLab("beta");
     const db = dbmod.db();
-    const sole = Number(db.prepare("INSERT INTO students (username, created_at, updated_at) VALUES ('sole', 0, 0)").run().lastInsertRowid);
-    const shared = Number(db.prepare("INSERT INTO students (username, created_at, updated_at) VALUES ('shared', 0, 0)").run().lastInsertRowid);
+    const sole = Number(db.prepare("INSERT INTO students (username, linux_uid, created_at, updated_at) VALUES ('sole', 10000, 0, 0)").run().lastInsertRowid);
+    const shared = Number(db.prepare("INSERT INTO students (username, linux_uid, created_at, updated_at) VALUES ('shared', 10001, 0, 0)").run().lastInsertRowid);
     db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(a.id, sole);
     db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(a.id, shared);
     db.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(b.id, shared);

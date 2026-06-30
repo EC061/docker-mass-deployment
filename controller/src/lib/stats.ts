@@ -3,10 +3,10 @@
  * nodes, so each block is a PLACEMENT (lab on one node). Two separately-cadenced kinds of data, both
  * read from the latest `storage_samples` row per (placement, student, pool):
  *
- *   - PLACEMENT-LEVEL (`LabStats.live`): the whole-container writable layer ("whole image",
- *     pool=docker, student_id NULL) plus the placement's fast/cold ZFS usage-vs-quota. The agent
+ *   - PLACEMENT-LEVEL (`LabStats.live`): the whole-container writable layer
+ *     (tier=rootfs, student_id NULL) plus the placement's fast/cold ZFS usage-vs-quota. The agent
  *     recomputes these every ~5 min and re-reports them each heartbeat, so they carry a freshness ts.
- *   - NIGHTLY per-student (`LabStats.students`): each student's docker home, scratch, cold `du` from
+ *   - NIGHTLY per-student (`LabStats.students`): each student's container home, scratch, and cold
  *     the per-student usage scan (nightly + on-demand "Scan now").
  */
 
@@ -18,9 +18,9 @@ export interface StudentUsage {
   studentId: number;
   username: string;
   name: string | null;
-  docker: number | null; // docker home (installed software) attributed to this student
+  homeUsed: number | null; // container home (installed software) attributed to this student
   fast: number | null; // scratch
-  slow: number | null; // cold storage
+  cold: number | null; // cold storage
 }
 
 export interface LabStats {
@@ -30,9 +30,9 @@ export interface LabStats {
   image: string;
   students: StudentUsage[];
   live: {
-    image: number | null; // whole-container writable layer (SizeRw) for the lab container
+    rootfs: number | null; // whole-container writable layer (SizeRw) for the lab container
     fast: { used: number | null; quota: number | null };
-    slow: { used: number | null; quota: number | null };
+    cold: { used: number | null; quota: number | null };
   };
   liveUpdatedAt: number | null;
   liveStale: boolean;
@@ -48,7 +48,7 @@ export interface NodeStats {
   node: string;
   online: number;
   labs: LabStats[]; // placements on this node
-  totalImageBytes: number;
+  totalRootfsBytes: number;
 }
 
 interface Cell {
@@ -134,14 +134,14 @@ export function buildStats(): NodeStats[] {
       studentId: m.id,
       username: m.username,
       name: m.name ?? null,
-      docker: used(p.id, m.id, "docker"),
+      homeUsed: used(p.id, m.id, "rootfs"),
       fast: used(p.id, m.id, "fast"),
-      slow: used(p.id, m.id, "slow"),
+      cold: used(p.id, m.id, "cold"),
     }));
-    students.sort((a, b) => (b.docker ?? 0) - (a.docker ?? 0) || a.username.localeCompare(b.username));
+    students.sort((a, b) => (b.homeUsed ?? 0) - (a.homeUsed ?? 0) || a.username.localeCompare(b.username));
 
     const usageScannedAt = p.usage_scanned_at ?? null;
-    const liveTs = (["docker", "fast", "slow"] as const)
+    const liveTs = (["rootfs", "fast", "cold"] as const)
       .map((pool) => samples.get(`${p.id}:L:${pool}`)?.ts)
       .filter((t): t is number => typeof t === "number");
     const liveUpdatedAt = liveTs.length ? Math.max(...liveTs) : null;
@@ -153,9 +153,9 @@ export function buildStats(): NodeStats[] {
       image: p.image,
       students,
       live: {
-        image: cell(p.id, "docker").used,
+        rootfs: cell(p.id, "rootfs").used,
         fast: cell(p.id, "fast"),
-        slow: cell(p.id, "slow"),
+        cold: cell(p.id, "cold"),
       },
       liveUpdatedAt,
       liveStale: liveUpdatedAt === null || now - liveUpdatedAt > LIVE_STALE_MS,
@@ -166,11 +166,11 @@ export function buildStats(): NodeStats[] {
 
     let node = byNode.get(p.node_name);
     if (!node) {
-      node = { node: p.node_name, online: p.online, labs: [], totalImageBytes: 0 };
+      node = { node: p.node_name, online: p.online, labs: [], totalRootfsBytes: 0 };
       byNode.set(p.node_name, node);
     }
     node.labs.push(labStats);
-    node.totalImageBytes += labStats.live.image ?? 0;
+    node.totalRootfsBytes += labStats.live.rootfs ?? 0;
   }
 
   const nodes = [...byNode.values()];

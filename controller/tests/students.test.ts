@@ -39,7 +39,7 @@ beforeAll(async () => {
     coldQuotaBytes: 2000,
     sshPort: 2222,
     image: "custom-ssh",
-    containerOptions: { cpus: "4", memory: "8g", shm_size: "1g", image_quota: "300g", restart: "unless-stopped" },
+    containerOptions: { cpus: "4", memory: "8g", shm_size: "1g", rootfs_quota: "300g", restart: "unless-stopped" },
   });
   rosterOnlyLabId = labs.createLab({ name: "noplacement", actor: "admin" }).id;
 });
@@ -69,6 +69,8 @@ describe("findOrCreateStudent", () => {
     const b = students.findOrCreateStudent({ username: "newbie" });
     expect(a.id).toBe(b.id);
     expect(b.email).toBe("n@uga.edu");
+    expect(a.linux_uid).toBeGreaterThanOrEqual(10_000);
+    expect(a.linux_uid).toBeLessThanOrEqual(59_999);
   });
 
   it("matches by student_id before username", () => {
@@ -92,7 +94,10 @@ describe("addStudentToLab (provisions on every placement)", () => {
     expect(enqueueTask).toHaveBeenCalledWith(
       "gpu-1",
       "student.add",
-      expect.objectContaining({ lab: "bio", username: "alice", password: expect.any(String) }),
+      expect.objectContaining({
+        lab: "bio", username: "alice", password: expect.any(String),
+        uid: res.student.linux_uid, gid: res.student.linux_uid,
+      }),
       "admin",
     );
     expect(sendCredentialEmail).not.toHaveBeenCalled();
