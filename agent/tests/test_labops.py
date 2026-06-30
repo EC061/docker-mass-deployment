@@ -12,7 +12,7 @@ def _patch_zfs(monkeypatch):
     quotas: list[tuple[str, int | None]] = []
     destroyed: list[str] = []
 
-    def create_dataset(name, *, quota_bytes=None, create_parents=True):
+    def create_dataset(name, *, quota_bytes=None, create_parents=True, mountpoint=None):
         created.append((name, quota_bytes))
 
     def set_quota(dataset, quota_bytes):
@@ -28,21 +28,22 @@ def _patch_zfs(monkeypatch):
     monkeypatch.setattr(labops.zfs, "set_quota", set_quota)
     monkeypatch.setattr(labops.zfs, "destroy_dataset", destroy_dataset)
     monkeypatch.setattr(labops.zfs, "get_usage", get_usage)
+    monkeypatch.setattr(labops.zfs, "get_mountpoint", lambda ds: "/fast/bio")
+    monkeypatch.setattr(labops.coldstore, "lab_mount", lambda cfg, lab: "/cold/bio")
+    monkeypatch.setattr("lab_agent.executors.coldfs.ensure_owned_dir", lambda *a, **k: None)
     # Container creation needs Docker/ZFS mountpoints — stub it for the storage-focused tests.
     monkeypatch.setattr(containerops, "ensure_container", lambda cfg, lab, params: "container-id")
+    monkeypatch.setattr(containerops, "assert_node_ready", lambda cfg: None)
     return created, quotas, destroyed
 
 
-def test_create_lab_provisions_four_datasets(monkeypatch):
+def test_create_lab_provisions_one_dataset_per_tier(monkeypatch):
     created, _quotas, _ = _patch_zfs(monkeypatch)
     result, _logs = labops.create_lab(_cfg(), {"lab": "bio", "fast_quota_bytes": 2000, "slow_quota_bytes": 3000})
     names = [n for n, _ in created]
     assert "fast/labs/bio" in names
     assert "slow/labs/bio" in names
-    assert "fast/labs/bio/shared" in names
-    assert "slow/labs/bio/shared" in names
-    assert "fast/labs/bio/users" in names
-    assert "slow/labs/bio/users" in names
+    assert names == ["fast/labs/bio", "slow/labs/bio"]
     # Parent datasets get the quota.
     assert ("fast/labs/bio", 2000) in created
     assert ("slow/labs/bio", 3000) in created

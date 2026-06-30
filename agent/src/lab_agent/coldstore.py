@@ -31,15 +31,14 @@ def create_lab(cfg: AgentConfig, lab: str, quota_bytes: int | None = None) -> st
     """Provision a lab's cold-storage datasets/directories. Returns a short log note."""
     if cfg.slow_is_zfs:
         zfs.create_dataset(paths.lab_slow(cfg, lab), quota_bytes=quota_bytes)
-        zfs.create_dataset(paths.lab_slow_shared(cfg, lab))
-        zfs.create_dataset(paths.lab_slow_users(cfg, lab))
-        return "slow datasets created (zfs)"
-    # SMB client: create the directories on the share so containers can bind-mount them. The owner
-    # node manages quotas/usage for the same data.
+        return "cold lab dataset created (zfs)"
+    # SMB client: create the single lab root. The owner node manages quota and usage.
+    if not os.path.ismount(cfg.slow_path):
+        raise coldfs.ColdFsError(
+            f"cold-storage SMB mount '{cfg.slow_path}' is not mounted; refusing fallback directory"
+        )
     coldfs.ensure_dir(paths.cold_lab(cfg, lab))
-    coldfs.ensure_dir(paths.cold_lab_shared(cfg, lab))
-    coldfs.ensure_dir(paths.cold_lab_users(cfg, lab))
-    return "slow directories created (smb client; owner node manages quota/usage)"
+    return "cold lab directory created (smb client; owner node manages quota/usage)"
 
 
 def set_lab_quota(cfg: AgentConfig, lab: str, quota_bytes: int | None) -> str:
@@ -59,18 +58,15 @@ def destroy_lab(cfg: AgentConfig, lab: str) -> None:
 # --------------------------------------------------------------------------- mounts (for docker)
 
 
-def shared_mount(cfg: AgentConfig, lab: str) -> str:
-    """Host path bind-mounted to /labdata/slow in the lab container."""
+def lab_mount(cfg: AgentConfig, lab: str) -> str:
+    """Host path bind-mounted to /cold in the lab container."""
     if cfg.slow_is_zfs:
-        return zfs.get_mountpoint(paths.lab_slow_shared(cfg, lab))
-    return paths.cold_lab_shared(cfg, lab)
-
-
-def users_mount(cfg: AgentConfig, lab: str) -> str:
-    """Host path bind-mounted to /labusers/slow in the lab container."""
-    if cfg.slow_is_zfs:
-        return zfs.get_mountpoint(paths.lab_slow_users(cfg, lab))
-    return paths.cold_lab_users(cfg, lab)
+        return zfs.get_mountpoint(paths.lab_slow(cfg, lab))
+    if not os.path.ismount(cfg.slow_path):
+        raise coldfs.ColdFsError(
+            f"cold-storage SMB mount '{cfg.slow_path}' is not mounted; refusing fallback directory"
+        )
+    return paths.cold_lab(cfg, lab)
 
 
 # --------------------------------------------------------------------------- usage
@@ -97,24 +93,8 @@ def cold_status(cfg: AgentConfig) -> dict[str, Any]:
             mount = zfs.get_mountpoint(cfg.slow_pool)
         except Exception:
             mount = None
-        return {"backend": "zfs", "mount_path": mount, "ready": True}
+        return {"backend": "zfs", "mount_path": mount, "ready": bool(mount)}
     # The share is mounted at slow_path (labs/ live under it); report that mount point + whether it
     # is an active mount, so the controller can refuse to provision onto an unmounted SMB client.
     root = cfg.slow_path
     return {"backend": "smb", "mount_path": root, "ready": bool(root) and os.path.ismount(root)}
-
-
-def list_usage(cfg: AgentConfig) -> list[dict[str, Any]]:
-    """Per-lab/per-student slow-tier usage for telemetry. Empty on the SMB client backend."""
-    if not cfg.slow_is_zfs:
-        return []
-    return [
-        {
-            "pool": "slow",
-            "dataset": u.dataset,
-            "used_bytes": u.used_bytes,
-            "quota_bytes": u.quota_bytes,
-            "available_bytes": u.available_bytes,
-        }
-        for u in zfs.list_usage(cfg.labs_slow_root)
-    ]

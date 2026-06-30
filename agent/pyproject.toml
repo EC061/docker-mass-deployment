@@ -43,3 +43,4 @@ select = ["E", "F", "I", "W", "UP", "B"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+markers = ["integration: requires a real prepared Linux lab container"]

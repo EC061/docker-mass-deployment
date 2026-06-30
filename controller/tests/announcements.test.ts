@@ -22,9 +22,9 @@ beforeAll(async () => {
   ann = await import("../src/lib/announcements");
   const d = dbmod.db();
   // Two students with email, one without; one duplicate email shared with a PI.
-  d.prepare("INSERT INTO students (username, email, created_at) VALUES ('alice','alice@uga.edu',0)").run();
-  d.prepare("INSERT INTO students (username, email, created_at) VALUES ('bob','shared@uga.edu',0)").run();
-  d.prepare("INSERT INTO students (username, email, created_at) VALUES ('carol',NULL,0)").run();
+  d.prepare("INSERT INTO students (username, email, linux_uid, created_at) VALUES ('alice','alice@uga.edu',10000,0)").run();
+  d.prepare("INSERT INTO students (username, email, linux_uid, created_at) VALUES ('bob','shared@uga.edu',10001,0)").run();
+  d.prepare("INSERT INTO students (username, email, linux_uid, created_at) VALUES ('carol',NULL,10002,0)").run();
   // Two labs, distinct PIs (one PI email duplicated across labs, one shared with student bob).
   const lab = (name: string, pi: string | null) =>
     d.prepare("INSERT INTO labs (name, pi_email, created_at, updated_at) VALUES (?,?,0,0)").run(name, pi);

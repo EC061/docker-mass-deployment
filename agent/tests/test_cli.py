@@ -47,7 +47,6 @@ def test_install_builds_config_from_flags_and_calls_installer(monkeypatch, capsy
         "--node-name", "node-7",
         "--slow-backend", "smb",
         "--slow-path", "/mnt/cold",
-        "--slow-shared",
         "--no-verify-tls",
         "--no-enable",
     ])
@@ -58,7 +57,6 @@ def test_install_builds_config_from_flags_and_calls_installer(monkeypatch, capsy
     assert cfg.node_name == "node-7"
     assert cfg.slow_backend == "smb"
     assert cfg.slow_path == "/mnt/cold"
-    assert cfg.slow_shared is True
     assert cfg.tls_verify is False
     assert captured["enable"] is False
     assert "status:" in capsys.readouterr().out
@@ -184,12 +182,10 @@ def test_set_token_no_restart(monkeypatch, tmp_path, capsys):
 
 
 def _caps(issues):
-    fields = dict(
-        zfs=True, docker=True, docker_zfs_driver=True, nvidia_runtime=False, nvidia_gpu=False,
-        gpu_count=0, fast_pool_present=True, slow_pool_present=True, slow_backend="zfs",
-        slow_shared=False, issues=issues,
-    )
-    return SimpleNamespace(issues=issues, to_dict=lambda: fields)
+    issue_rows = [SimpleNamespace(severity="critical", code="test", message=i) for i in issues]
+    fields = {"runtime": {"docker_ok": True}, "nvidia": {"gpu_count": 0},
+              "storage": {"zfs_ok": True}, "health": {"status": "healthy", "issues": []}}
+    return SimpleNamespace(health=SimpleNamespace(issues=issue_rows), to_dict=lambda: fields)
 
 
 def _stub_status(monkeypatch):
@@ -203,7 +199,7 @@ def test_doctor_returns_zero_when_healthy(monkeypatch, capsys):
     _stub_status(monkeypatch)
     monkeypatch.setattr(cli, "load_config", lambda path: AgentConfig(controller_url="w", token="t",
                                                                      node_name="n1"))
-    monkeypatch.setattr(cli, "detect_capabilities", lambda cfg: _caps([]))
+    monkeypatch.setattr(cli, "detect_capabilities", lambda cfg, **kwargs: _caps([]))
     rc = cli.main(["doctor"])
     out = capsys.readouterr().out
     assert rc == 0
@@ -216,7 +212,7 @@ def test_doctor_returns_zero_when_healthy(monkeypatch, capsys):
 def test_doctor_returns_one_when_issues(monkeypatch, capsys):
     _stub_status(monkeypatch)
     monkeypatch.setattr(cli, "load_config", lambda path: AgentConfig(controller_url="w", token="t"))
-    monkeypatch.setattr(cli, "detect_capabilities", lambda cfg: _caps(["zfs command not found"]))
+    monkeypatch.setattr(cli, "detect_capabilities", lambda cfg, **kwargs: _caps(["zfs command not found"]))
     rc = cli.main(["doctor"])
     out = capsys.readouterr().out
     assert rc == 1
@@ -232,7 +228,7 @@ def test_doctor_synthesizes_config_when_missing(monkeypatch):
     monkeypatch.setattr(cli, "load_config", raise_missing)
     seen = {}
 
-    def fake_detect(cfg):
+    def fake_detect(cfg, **kwargs):
         seen["cfg"] = cfg
         return _caps([])
 

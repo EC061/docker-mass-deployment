@@ -37,8 +37,8 @@ beforeAll(async () => {
   const d = dbmod.db();
   d.prepare("INSERT INTO nodes (id, name, online, created_at) VALUES (1, 'node-a', 1, 0)").run();
   mkLabPlacement(1, "bio", 1, 50001);
-  d.prepare("INSERT INTO students (id, username, name, created_at, updated_at) VALUES (1, 'alice', 'Alice A.', 0, 0)").run();
-  d.prepare("INSERT INTO students (id, username, name, created_at, updated_at) VALUES (2, 'bob', 'Bob B.', 0, 0)").run();
+  d.prepare("INSERT INTO students (id, username, name, linux_uid, created_at, updated_at) VALUES (1, 'alice', 'Alice A.', 10000, 0, 0)").run();
+  d.prepare("INSERT INTO students (id, username, name, linux_uid, created_at, updated_at) VALUES (2, 'bob', 'Bob B.', 10001, 0, 0)").run();
   d.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (1, 1, 0)").run();
   d.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (1, 2, 0)").run();
 });
@@ -64,29 +64,29 @@ function findLab(name: string) {
 
 describe("buildStats", () => {
   it("groups latest per-student and placement-level usage by node and lab", () => {
-    sample(1, 1, "docker", 100, 100);
-    sample(1, 1, "docker", 150, 200);
-    sample(1, 2, "docker", 80, 200);
-    sample(1, null, "docker", 300, 200);
+    sample(1, 1, "rootfs", 100, 100);
+    sample(1, 1, "rootfs", 150, 200);
+    sample(1, 2, "rootfs", 80, 200);
+    sample(1, null, "rootfs", 300, 200);
     sample(1, null, "fast", 500, 200, 2000);
-    sample(1, null, "slow", 200, 200, 3000);
+    sample(1, null, "cold", 200, 200, 3000);
 
     const nodes = stats.buildStats();
     expect(nodes).toHaveLength(1);
     const node = nodes[0];
     expect(node.node).toBe("node-a");
-    expect(node.totalImageBytes).toBe(300);
+    expect(node.totalRootfsBytes).toBe(300);
 
     const lab = node.labs.find((l) => l.labName === "bio")!;
     expect(lab.image).toBe("img-x");
     expect(lab.placementId).toBe(1);
     expect(lab.students.map((s) => s.username)).toEqual(["alice", "bob"]);
-    expect(lab.students[0].docker).toBe(150);
-    expect(lab.students[1].docker).toBe(80);
+    expect(lab.students[0].homeUsed).toBe(150);
+    expect(lab.students[1].homeUsed).toBe(80);
     expect(lab.students[0].fast).toBeNull();
-    expect(lab.live.image).toBe(300);
+    expect(lab.live.rootfs).toBe(300);
     expect(lab.live.fast).toEqual({ used: 500, quota: 2000 });
-    expect(lab.live.slow).toEqual({ used: 200, quota: 3000 });
+    expect(lab.live.cold).toEqual({ used: 200, quota: 3000 });
     expect(lab.liveUpdatedAt).toBe(200);
     expect(lab.liveStale).toBe(true);
   });

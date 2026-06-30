@@ -31,7 +31,7 @@ beforeAll(async () => {
     )
     .run(labId, nodeId, now, now);
   db.db()
-    .prepare("INSERT INTO students (username, email, created_at, updated_at) VALUES ('alice', 'a@uga.edu', ?, ?)")
+    .prepare("INSERT INTO students (username, email, linux_uid, created_at, updated_at) VALUES ('alice', 'a@uga.edu', 10000, ?, ?)")
     .run(now, now);
   const studentId = (db.db().prepare("SELECT id FROM students WHERE username='alice'").get() as any).id;
   db.db()
@@ -48,14 +48,13 @@ describe("settings", () => {
 });
 
 describe("telemetry ingestion", () => {
-  it("maps datasets to lab- and student-level storage samples", () => {
+  it("maps explicit lab/user/tier rows to storage samples", () => {
     ingest.ingestTelemetry("gpu-1", {
       pools: [{ name: "fast", free: 100 }],
-      datasets: [
-        { pool: "fast", dataset: "fast/labs/bio", used_bytes: 1000, quota_bytes: 2199023255552 },
-        { pool: "fast", dataset: "fast/labs/bio/shared", used_bytes: 500, quota_bytes: null },
-        { pool: "fast", dataset: "fast/labs/bio/users/alice", used_bytes: 250, quota_bytes: null },
-        { pool: "fast", dataset: "fast/labs/bio/users/ghost", used_bytes: 999, quota_bytes: null },
+      storage: [
+        { lab: "bio", user: null, tier: "fast", used_bytes: 1000, quota_bytes: 2199023255552 },
+        { lab: "bio", user: "alice", tier: "fast", used_bytes: 250, quota_bytes: null },
+        { lab: "bio", user: "ghost", tier: "fast", used_bytes: 999, quota_bytes: null },
       ],
       gpu_processes: [{ pid: 42, vram_bytes: 1048576, util: 0, user: "alice" }],
     });
@@ -74,7 +73,7 @@ describe("telemetry ingestion", () => {
       .get() as any;
     expect(aliceSample.used_bytes).toBe(250);
 
-    // 'shared' and unknown-user 'ghost' are not sampled.
+    // Unknown-user 'ghost' is not sampled.
     const total = db.db().prepare("SELECT COUNT(*) AS n FROM storage_samples").get() as any;
     expect(total.n).toBe(2);
 
@@ -86,7 +85,7 @@ describe("telemetry ingestion", () => {
 
   it("records per-lab usage-scan time and only moves it forward", () => {
     ingest.ingestTelemetry("gpu-1", {
-      datasets: [],
+      storage: [],
       usage_scans: [{ lab: "bio", scanned_at: 5000 }],
       gpu_processes: [],
     });
@@ -95,7 +94,7 @@ describe("telemetry ingestion", () => {
 
     // An older (stale) report must not roll the timestamp back.
     ingest.ingestTelemetry("gpu-1", {
-      datasets: [],
+      storage: [],
       usage_scans: [{ lab: "bio", scanned_at: 1000 }],
       gpu_processes: [],
     });
@@ -103,57 +102,56 @@ describe("telemetry ingestion", () => {
     expect(stale.usage_scanned_at).toBe(5000);
   });
 
-  it("stores docker-pool samples (installed software) without raising a PI quota alert", () => {
+  it("stores rootfs samples without raising a PI quota alert", () => {
     ingest.ingestTelemetry("gpu-1", {
       pools: [{ name: "fast", free: 100 }],
-      datasets: [
-        // lab-level docker is over 90% of its quota, but the docker pool must never alert.
-        { pool: "docker", dataset: "docker/labs/bio", used_bytes: 95, quota_bytes: 100 },
-        { pool: "docker", dataset: "docker/labs/bio/users/alice", used_bytes: 40, quota_bytes: null },
+      storage: [
+        { lab: "bio", user: null, tier: "rootfs", used_bytes: 95, quota_bytes: 100 },
+        { lab: "bio", user: "alice", tier: "rootfs", used_bytes: 40, quota_bytes: null },
       ],
       gpu_processes: [],
     });
-    const dockerSamples = db
+    const rootfsSamples = db
       .db()
-      .prepare("SELECT * FROM storage_samples WHERE pool='docker'")
+      .prepare("SELECT * FROM storage_samples WHERE pool='rootfs'")
       .all() as any[];
-    expect(dockerSamples.length).toBe(2);
-    const alerts = db.db().prepare("SELECT * FROM quota_alerts WHERE pool='docker'").all() as any[];
+    expect(rootfsSamples.length).toBe(2);
+    const alerts = db.db().prepare("SELECT * FROM quota_alerts WHERE pool='rootfs'").all() as any[];
     expect(alerts.length).toBe(0);
   });
 
   it("lets a changed scan-derived value bypass the 5-min throttle (so a fresh scan lands)", () => {
-    const dockerRows = () =>
+    const rootfsRows = () =>
       (db.db().prepare(
-        "SELECT COUNT(*) AS n FROM storage_samples WHERE pool='docker' AND lab_id=(SELECT id FROM labs WHERE name='bio') AND student_id IS NULL",
+        "SELECT COUNT(*) AS n FROM storage_samples WHERE pool='rootfs' AND lab_id=(SELECT id FROM labs WHERE name='bio') AND student_id IS NULL",
       ).get() as any).n as number;
     const fastRows = () =>
       (db.db().prepare(
         "SELECT COUNT(*) AS n FROM storage_samples WHERE pool='fast' AND lab_id=(SELECT id FROM labs WHERE name='bio') AND student_id IS NULL",
       ).get() as any).n as number;
 
-    const dockerBefore = dockerRows();
+    const rootfsBefore = rootfsRows();
     const fastBefore = fastRows();
 
     // A changed docker (writable-layer) value reported moments later must store, even though the
     // previous sample is well within the throttle window — this is the post-scan refresh.
     ingest.ingestTelemetry("gpu-1", {
-      datasets: [{ pool: "docker", dataset: "docker/labs/bio", used_bytes: 12345, quota_bytes: null }],
+      storage: [{ lab: "bio", user: null, tier: "rootfs", used_bytes: 12345, quota_bytes: null }],
       gpu_processes: [],
     });
-    expect(dockerRows()).toBe(dockerBefore + 1);
+    expect(rootfsRows()).toBe(rootfsBefore + 1);
 
     // Re-reporting the same value (the agent re-sends its cached number every heartbeat) must NOT
     // create another row — store on change only, so the series doesn't bloat between scans.
     ingest.ingestTelemetry("gpu-1", {
-      datasets: [{ pool: "docker", dataset: "docker/labs/bio", used_bytes: 12345, quota_bytes: null }],
+      storage: [{ lab: "bio", user: null, tier: "rootfs", used_bytes: 12345, quota_bytes: null }],
       gpu_processes: [],
     });
-    expect(dockerRows()).toBe(dockerBefore + 1);
+    expect(rootfsRows()).toBe(rootfsBefore + 1);
 
     // A live lab-level fast value (ZFS metadata) that drifts within the window stays throttled.
     ingest.ingestTelemetry("gpu-1", {
-      datasets: [{ pool: "fast", dataset: "fast/labs/bio", used_bytes: 4242, quota_bytes: 2199023255552 }],
+      storage: [{ lab: "bio", user: null, tier: "fast", used_bytes: 4242, quota_bytes: 2199023255552 }],
       gpu_processes: [],
     });
     expect(fastRows()).toBe(fastBefore);

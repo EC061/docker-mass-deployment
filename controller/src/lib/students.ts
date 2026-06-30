@@ -25,6 +25,7 @@ export interface Student {
   username: string;
   email: string | null;
   name: string | null;
+  linux_uid: number;
 }
 
 /** A roster member of a logical lab (no per-student quotas in the redesign — they share lab quota). */
@@ -68,13 +69,26 @@ export function findOrCreateStudent(input: StudentInput): Student {
     | undefined;
   if (byName) return byName;
 
-  const now = Date.now();
-  const info = db()
-    .prepare(
-      "INSERT INTO students (student_id, username, email, name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)",
-    )
-    .run(input.studentId ?? null, username, normalizeEmail(input.email), input.name ?? null, now, now);
-  return db().prepare("SELECT * FROM students WHERE id = ?").get(Number(info.lastInsertRowid)) as Student;
+  return db().transaction(() => {
+    const used = new Set(
+      (db().prepare("SELECT linux_uid FROM students WHERE linux_uid IS NOT NULL").all() as
+        { linux_uid: number }[]).map((row) => row.linux_uid),
+    );
+    let linuxUid = 10_000;
+    while (linuxUid <= 59_999 && used.has(linuxUid)) linuxUid++;
+    if (linuxUid > 59_999) throw new Error("student UID range 10000..59999 is exhausted");
+    const now = Date.now();
+    const info = db()
+      .prepare(
+        `INSERT INTO students
+          (student_id, username, email, name, linux_uid, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(input.studentId ?? null, username, normalizeEmail(input.email), input.name ?? null,
+        linuxUid, now, now);
+    return db().prepare("SELECT * FROM students WHERE id = ?")
+      .get(Number(info.lastInsertRowid)) as Student;
+  })();
 }
 
 export interface AddMemberResult {

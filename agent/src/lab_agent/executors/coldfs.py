@@ -23,6 +23,41 @@ def ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+def ensure_owned_dir(path: str, uid: int, gid: int, *, mode: int = 0o700) -> None:
+    """Create a real directory and give it exact numeric ownership without following symlinks."""
+    try:
+        os.lstat(path)
+        if not os.path.isdir(path) or os.path.islink(path):
+            raise ColdFsError(f"refusing to use '{path}': expected a real directory")
+    except FileNotFoundError:
+        os.mkdir(path, mode)
+        os.lstat(path)
+    os.chown(path, uid, gid, follow_symlinks=False)
+    os.chmod(path, mode, follow_symlinks=False)
+
+
+def remove_child(root: str, name: str) -> None:
+    """Remove one direct child below a trusted root, never the root or a symlink target."""
+    path = os.path.join(root, name)
+    real_root = os.path.realpath(root)
+    if os.path.dirname(os.path.abspath(path)) != os.path.abspath(root):
+        raise ColdFsError(f"refusing to remove '{path}': not a direct child of '{root}'")
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return
+    if os.path.islink(path):
+        os.unlink(path)
+        return
+    real_path = os.path.realpath(path)
+    if not real_path.startswith(real_root + os.sep):
+        raise ColdFsError(f"refusing to remove '{path}': escaped '{root}'")
+    if os.path.isdir(path):
+        shutil.rmtree(path)
+    else:
+        os.unlink(path)
+
+
 def remove_tree(path: str, *, guard: str) -> None:
     """Recursively delete ``path`` — but only if it is strictly inside ``guard``.
 

@@ -39,7 +39,7 @@ function containerOptionsFromForm(formData: FormData): ContainerOptions {
     cpus: String(formData.get("cpus") ?? "4"),
     memory: String(formData.get("memory") ?? "8g"),
     shm_size: String(formData.get("shmSize") ?? "1g"),
-    image_quota: String(formData.get("imageQuota") ?? "300g"),
+    rootfs_quota: String(formData.get("rootfsQuota") ?? "300g"),
     restart: String(formData.get("restart") ?? "unless-stopped"),
   };
 }

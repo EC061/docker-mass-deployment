@@ -1,32 +1,37 @@
-"""Student handlers: add/remove a student in a lab's shared container.
-
-Storage model: there are no per-student ZFS datasets. A lab has a single fast `users` dataset and a
-single slow `users` dataset (each bind-mounted into the container), both covered by the lab's fast/
-slow quota. A student is just a plain subdir under those mounts, created *inside* the container
-by ``users.add_user``. Because the parent ``users`` mounts are already UID-shifted by Sysbox, the
-in-container ``mkdir``/``chown`` work without privilege; nothing is created on the host here.
-There is intentionally no per-student quota — usage is bounded by the lab quota alone.
-"""
+"""Create exact-ID student accounts and their host-owned fast/cold directories."""
 
 from __future__ import annotations
 
 from typing import Any
 
+from . import coldstore
 from .config import AgentConfig
-from .executors import docker, users
+from .executors import coldfs, docker, users, zfs
+from .paths import lab_fast
 
 
 def add_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     username = params["username"]
     password = params["password"]
+    uid = int(params["uid"])
+    gid = int(params.get("gid", uid))
+    users.validate_username(username)
+    users.validate_uid(uid, gid)
 
-    # No host-side dataset creation: add_user makes the student's scratch/cold-storage subdirs under
-    # the already-shifted /labusers mounts inside the container, so the chown succeeds. (The old
-    # per-student ZFS datasets appeared inside the userns as an unmapped UID and could not be
-    # chowned by container-root — the "Operation not permitted" failure this replaces.)
-    users.add_user(docker.container_name(lab), username, password)
-    return {"lab": lab, "username": username}, f"added student '{username}' to lab '{lab}'"
+    host_uid = cfg.userns_start + uid
+    host_gid = cfg.userns_start + gid
+    fast_root = zfs.get_mountpoint(lab_fast(cfg, lab))
+    cold_root = coldstore.lab_mount(cfg, lab)
+    coldfs.ensure_owned_dir(f"{fast_root}/{username}", host_uid, host_gid)
+    coldfs.ensure_owned_dir(f"{cold_root}/{username}", host_uid, host_gid)
+
+    # The directories already have the daemon-remapped host IDs; the in-container account receives
+    # the matching stable IDs and only creates home-directory symlinks.
+    users.add_user(docker.container_name(lab), username, password, uid, gid)
+    return {"lab": lab, "username": username, "uid": uid}, (
+        f"added student '{username}' (uid={uid}) to lab '{lab}'"
+    )
 
 
 def remove_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
@@ -38,9 +43,11 @@ def remove_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     # touch the owner's share). Defaults to delete_data for a standalone local-ZFS lab / old caller.
     delete_cold = bool(params.get("delete_cold", delete_data))
 
-    users.remove_user(
-        docker.container_name(lab), username, delete_fast=delete_data, delete_cold=delete_cold
-    )
+    users.remove_user(docker.container_name(lab), username)
+    if delete_data:
+        coldfs.remove_child(zfs.get_mountpoint(lab_fast(cfg, lab)), username)
+    if delete_cold:
+        coldfs.remove_child(coldstore.lab_mount(cfg, lab), username)
     msg = f"removed student '{username}' from lab '{lab}'"
     result = {
         "lab": lab,

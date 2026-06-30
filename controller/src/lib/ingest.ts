@@ -1,12 +1,9 @@
 /**
  * Ingestion of agent telemetry + scan results into the controller DB.
  *
- * A telemetry frame arrives from a specific authenticated `node`. Dataset names encode the lab and
- * (optionally) the student, so we parse them back and resolve them to the PLACEMENT (lab on that
- * node) — a lab can run on several nodes, so usage is always bound to (lab, node):
- *   <pool>/labs/<lab>                 -> placement-level usage
- *   <pool>/labs/<lab>/users/<user>    -> per-student usage
- * (the `shared` and intermediate `users` datasets are ignored for sampling).
+ * A telemetry frame arrives from a specific authenticated `node`. Storage identity is explicit;
+ * physical dataset names never cross the protocol boundary. Each row is resolved to the placement
+ * for (lab, authenticated node), so one node cannot submit another node's usage.
  */
 
 import { alertAdmins } from "./alerts";
@@ -17,23 +14,6 @@ import { getSetting } from "./settings";
 
 const STORAGE_SAMPLE_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const QUOTA_ALERT_DEDUP_MS = 6 * 60 * 60 * 1000; // re-alert a PI about the same pool at most every 6h
-
-interface ParsedDataset {
-  lab: string;
-  user: string | null;
-  level: "lab" | "user" | "other";
-}
-
-function parseDataset(dataset: string): ParsedDataset | null {
-  const idx = dataset.indexOf("/labs/");
-  if (idx === -1) return null;
-  const rest = dataset.slice(idx + "/labs/".length).split("/");
-  const lab = rest[0];
-  if (!lab) return null;
-  if (rest.length === 1) return { lab, user: null, level: "lab" };
-  if (rest.length === 3 && rest[1] === "users") return { lab, user: rest[2], level: "user" };
-  return { lab, user: null, level: "other" };
-}
 
 interface PlacementRef {
   placement_id: number;
@@ -68,7 +48,7 @@ function studentIdInLab(labId: number, username: string): number | null {
 /**
  * Whether to persist a new sample for (placement, student, pool). Lab/placement-level fast/slow ZFS
  * rows are periodic reads re-reported every heartbeat — throttled to one row per interval to bound
- * the series. Scan-derived metrics (docker writable layer + per-student `du`) change only when a scan
+ * the series. Scan-derived metrics (rootfs writable layer + per-student `du`) change only when a scan
  * runs, so they bypass the throttle whenever the value actually changes (store-on-change).
  */
 function shouldSample(
@@ -91,11 +71,13 @@ function shouldSample(
   return scanDerived && row.used !== used;
 }
 
-interface DatasetUsage {
-  pool: string;
-  dataset: string;
+interface StorageUsage {
+  lab: string;
+  user: string | null;
+  tier: "fast" | "cold" | "rootfs";
   used_bytes: number;
   quota_bytes: number | null;
+  available_bytes: number | null;
 }
 
 export function ingestTelemetry(node: string, payload: any): void {
@@ -113,25 +95,26 @@ export function ingestTelemetry(node: string, payload: any): void {
   // ZFS scrub status: store the latest, alert admins when a pool newly reports errors.
   ingestScrub(node, payload.scrub, now);
 
-  // Per-dataset storage samples (throttled), bound to this node's placement for the lab.
+  // Explicit storage samples (throttled), bound to this node's placement for the lab.
   const insertSample = db().prepare(
     `INSERT INTO storage_samples (placement_id, lab_id, student_id, pool, used_bytes, quota_bytes, ts)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
-  for (const ds of (payload.datasets ?? []) as DatasetUsage[]) {
-    const parsed = parseDataset(ds.dataset);
-    if (!parsed || parsed.level === "other") continue;
-    const ref = placementByLabNode(parsed.lab, node);
+  for (const ds of (payload.storage ?? []) as StorageUsage[]) {
+    if (!ds || typeof ds.lab !== "string" || !["fast", "cold", "rootfs"].includes(ds.tier) ||
+        typeof ds.used_bytes !== "number" || !Number.isFinite(ds.used_bytes)) continue;
+    const ref = placementByLabNode(ds.lab, node);
     if (!ref) continue; // node isn't hosting this lab per our records — reject foreign telemetry
-    const studentId = parsed.user ? studentIdInLab(ref.lab_id, parsed.user) : null;
-    if (parsed.level === "user" && studentId === null) continue;
-    const scanDerived = ds.pool === "docker" || parsed.level === "user";
-    if (!shouldSample(ref.placement_id, studentId, ds.pool, ds.used_bytes, now, scanDerived)) continue;
-    insertSample.run(ref.placement_id, ref.lab_id, studentId, ds.pool, ds.used_bytes, ds.quota_bytes ?? null, now);
-    // The "docker" pool is the container writable layer (installed software), tracked for the
+    const studentId = ds.user ? studentIdInLab(ref.lab_id, ds.user) : null;
+    if (ds.user && studentId === null) continue;
+    const scanDerived = ds.tier === "rootfs" || ds.user !== null;
+    if (!shouldSample(ref.placement_id, studentId, ds.tier, ds.used_bytes, now, scanDerived)) continue;
+    insertSample.run(ref.placement_id, ref.lab_id, studentId, ds.tier, ds.used_bytes,
+      ds.quota_bytes ?? null, now);
+    // The rootfs tier is the container writable layer (installed software), tracked for the
     // labquota breakdown but not a managed quota — never raise a PI quota alert on it.
-    if (parsed.level === "lab" && ds.quota_bytes && ds.pool !== "docker") {
-      maybeQuotaAlert(ref.placement_id, ref.lab_id, ds.pool, ds.used_bytes, ds.quota_bytes, now);
+    if (!ds.user && ds.quota_bytes && ds.tier !== "rootfs") {
+      maybeQuotaAlert(ref.placement_id, ref.lab_id, ds.tier, ds.used_bytes, ds.quota_bytes, now);
     }
   }
 

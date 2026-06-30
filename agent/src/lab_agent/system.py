@@ -1,169 +1,398 @@
-"""Host capability checks: zfs, docker, nvidia, and the expected ZFS pools.
-
-Used by `lab-agent doctor` and reported to the controller in the hello frame so the UI can show
-what each node can do. Adapts the NVIDIA detection from the old core/utils/arg_validator.py.
-"""
+"""Structured host health checks for runc/userns, Codex bubblewrap, storage, and NVIDIA CDI."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+import json
+import os
+import re
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
 
 from .config import AgentConfig
 from .executors.base import run
 
 
 @dataclass
-class Capabilities:
-    zfs: bool
-    docker: bool
-    docker_zfs_driver: bool
-    nvidia_runtime: bool
-    nvidia_gpu: bool
+class HealthIssue:
+    code: str
+    severity: str
+    message: str
+    repairable: bool = False
+
+
+@dataclass
+class RuntimeHealth:
+    docker_ok: bool
+    storage_driver: str
+    userns_ok: bool
+    userns_user: str
+    bwrap_ok: bool
+    nested_userns_ok: bool
+    codex_sandbox_ok: bool
+
+
+@dataclass
+class NvidiaHealth:
     gpu_count: int
-    sysbox: bool  # the sysbox-runc OCI runtime is registered (required for nested Docker)
-    nvidia_cdi: bool  # an NVIDIA CDI spec exists (how GPUs are attached under sysbox-runc)
-    fast_pool_present: bool
-    slow_pool_present: bool
-    slow_backend: str  # "zfs" or "smb"
-    slow_shared: bool  # cold storage shared between nodes (smb only)
-    issues: list[str]
+    nvml_ok: bool
+    loaded_driver_version: str
+    userspace_driver_version: str
+    cdi_ok: bool
+    cdi_devices: list[str] = field(default_factory=list)
+
+
+@dataclass
+class StorageHealth:
+    zfs_ok: bool
+    fast_ok: bool
+    cold_ok: bool
+    cold_backend: str
+
+
+@dataclass
+class Health:
+    status: str
+    issues: list[HealthIssue]
+
+
+@dataclass
+class Capabilities:
+    runtime: RuntimeHealth
+    nvidia: NvidiaHealth
+    storage: StorageHealth
+    health: Health
+
+    @property
+    def nvidia_gpu(self) -> bool:
+        return self.nvidia.gpu_count > 0 and self.nvidia.nvml_ok
+
+    @property
+    def nvidia_cdi(self) -> bool:
+        return self.nvidia.cdi_ok
+
+    @property
+    def issues(self) -> list[HealthIssue]:
+        return self.health.issues
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+DOCKER_DRIVERS_OK = ("zfs", "overlay2")
+
+
+def _issue(items: list[HealthIssue], code: str, severity: str, message: str,
+           repairable: bool = False) -> None:
+    items.append(HealthIssue(code, severity, message, repairable))
 
 
 def _pool_exists(pool: str) -> bool:
     return run(["zpool", "list", "-H", "-o", "name", pool], timeout=15).ok
 
 
-def _is_mountpoint(path: str) -> bool:
-    import os
-
-    return os.path.ismount(path)
-
-
-# Docker storage drivers that work for lab containers under Sysbox:
-#   - "zfs":      container rootfs is a zfs dataset. Works under Sysbox ONLY on kernels that ship
-#                 shiftfs; on shiftfs-less kernels (e.g. stock Ubuntu kernels >= 6.8) sysbox-mgr
-#                 rejects the zfs rootfs with "unknown fs".
-#   - "overlay2": container rootfs is overlayfs, Sysbox's natively-supported path on any modern
-#                 kernel. Back the data-root with an xfs filesystem mounted with prjquota so the
-#                 per-lab writable-layer quota (docker --storage-opt size=) is still enforceable.
-DOCKER_DRIVERS_OK = ("zfs", "overlay2")
+def _zfs_root_ok(dataset: str, expected_mount: str | None = None) -> bool:
+    mounted = run(["zfs", "get", "-H", "-o", "value", "mounted", dataset], timeout=15)
+    mountpoint = run(["zfs", "get", "-H", "-o", "value", "mountpoint", dataset], timeout=15)
+    if not mounted.ok or mounted.stdout.strip() != "yes" or not mountpoint.ok:
+        return False
+    path = mountpoint.stdout.strip()
+    return path == expected_mount if expected_mount else path.startswith("/")
 
 
-def _docker_storage_driver() -> str:
-    res = run(["docker", "info", "--format", "{{.Driver}}"], timeout=20)
-    return res.stdout.strip() if res.ok else ""
+def _sysctl_int(name: str) -> int:
+    res = run(["sysctl", "-n", name], timeout=10)
+    try:
+        return int(res.stdout.strip()) if res.ok else -1
+    except ValueError:
+        return -1
 
 
-def _docker_backing_fs() -> str:
-    """Filesystem under Docker's data-root (overlay2's 'Backing Filesystem'), e.g. 'xfs'."""
-    fmt = (
+def _docker_userns(cfg: AgentConfig) -> bool:
+    res = run(["docker", "info", "--format", "{{json .SecurityOptions}}"], timeout=20)
+    if not res.ok or "userns" not in res.stdout:
+        return False
+    if cfg.userns_user in res.stdout:
+        return _subid_ok(cfg)
+    try:
+        daemon = json.loads(open("/etc/docker/daemon.json", encoding="utf-8").read())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return daemon.get("userns-remap") == cfg.userns_user and _subid_ok(cfg)
+
+
+def _docker_root_ok(cfg: AgentConfig) -> bool:
+    result = run(["docker", "info", "--format", "{{.DockerRootDir}}"], timeout=20)
+    return result.ok and os.path.realpath(result.stdout.strip()) == os.path.realpath(
+        cfg.docker_data_root
+    )
+
+
+def _overlay_quota_ok(cfg: AgentConfig) -> bool:
+    backing_fmt = (
         '{{range .DriverStatus}}{{if eq (index . 0) "Backing Filesystem"}}'
         "{{index . 1}}{{end}}{{end}}"
     )
-    res = run(["docker", "info", "--format", fmt], timeout=20)
-    return res.stdout.strip() if res.ok else ""
+    backing = run(["docker", "info", "--format", backing_fmt], timeout=20)
+    if not backing.ok or backing.stdout.strip().lower() != "xfs":
+        return False
+    options = run(["findmnt", "-no", "OPTIONS", cfg.docker_data_root], timeout=20)
+    return options.ok and any(
+        option in options.stdout.split(",") for option in ("pquota", "prjquota")
+    )
 
 
-def _nvidia_runtime() -> bool:
-    res = run(["docker", "info", "--format", "{{.Runtimes}}"], timeout=20)
-    return res.ok and "nvidia" in res.stdout
+def _subid_ok(cfg: AgentConfig) -> bool:
+    wanted = f"{cfg.userns_user}:{cfg.userns_start}:{cfg.userns_size}"
+    try:
+        subuid = open("/etc/subuid", encoding="utf-8").read().splitlines()
+        subgid = open("/etc/subgid", encoding="utf-8").read().splitlines()
+    except OSError:
+        return False
+    return wanted in subuid and wanted in subgid
 
 
-def _sysbox_runtime() -> bool:
-    """The Sysbox OCI runtime is registered (lab containers run with --runtime=sysbox-runc)."""
-    res = run(["docker", "info", "--format", "{{.Runtimes}}"], timeout=20)
-    return res.ok and "sysbox-runc" in res.stdout
-
-
-def _cdi_present() -> bool:
-    """An NVIDIA CDI spec exists. GPUs are injected with `--device nvidia.com/gpu=all` (runtime-
-    agnostic, so it composes with sysbox-runc), generated via `nvidia-ctk cdi generate`."""
-    import os
-
-    return os.path.exists("/etc/cdi/nvidia.yaml") or os.path.exists("/var/run/cdi/nvidia.yaml")
-
-
-def _gpu_count() -> int:
-    res = run(["nvidia-smi", "-L"], timeout=20)
+def _cdi_devices() -> list[str]:
+    res = run(["nvidia-ctk", "cdi", "list"], timeout=30)
     if not res.ok:
-        return 0
-    return sum(1 for line in res.stdout.splitlines() if line.strip().startswith("GPU"))
+        return []
+    return sorted({line.strip().split()[0] for line in res.stdout.splitlines()
+                   if line.strip().startswith("nvidia.com/gpu=")})
 
 
-def detect_capabilities(cfg: AgentConfig) -> Capabilities:
-    issues: list[str] = []
+def _loaded_driver_version() -> str:
+    try:
+        text = open("/proc/driver/nvidia/version", encoding="utf-8").read()
+    except OSError:
+        return ""
+    match = re.search(r"Kernel Module\s+([0-9.]+)", text)
+    return match.group(1) if match else ""
 
+
+def _nvidia_hardware_count() -> int:
+    count = 0
+    for vendor in Path("/sys/bus/pci/devices").glob("*/vendor"):
+        try:
+            class_code = vendor.with_name("class").read_text(encoding="utf-8").strip().lower()
+            if (vendor.read_text(encoding="utf-8").strip().lower() == "0x10de"
+                    and class_code.startswith("0x03")):
+                count += 1
+        except OSError:
+            continue
+    return count
+
+
+def _userspace_driver_version() -> str:
+    res = run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"], timeout=20)
+    if res.ok and res.stdout.strip():
+        return res.stdout.splitlines()[0].strip()
+    res = run(["dpkg-query", "-W", "-f=${Version}\n", "libnvidia-compute-*"], timeout=20)
+    if not res.ok:
+        return ""
+    match = re.search(r"([0-9]{3,}(?:\.[0-9]+)+)", res.stdout)
+    return match.group(1) if match else ""
+
+
+def _security_profiles_ok(cfg: AgentConfig) -> bool:
+    if not os.path.isfile(cfg.seccomp_profile):
+        return False
+    status = run(["aa-status"], timeout=20)
+    return status.ok and cfg.apparmor_profile in status.stdout
+
+
+def _first_student_container() -> tuple[str, str] | None:
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
+    ], timeout=20)
+    if not listed.ok:
+        return None
+    for container in listed.stdout.splitlines():
+        users = run([
+            "docker", "exec", container, "getent", "passwd"
+        ], timeout=20)
+        if not users.ok:
+            continue
+        for line in users.stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) >= 3 and parts[2].isdigit() and 10_000 <= int(parts[2]) <= 59_999:
+                return container, parts[0]
+    return None
+
+
+def _student_command(container_user: tuple[str, str] | None, argv: list[str]) -> bool:
+    if not container_user:
+        return False
+    container, user = container_user
+    return run([
+        "docker", "exec", "-u", user,
+        "-e", f"HOME=/home/{user}", "-e", f"USER={user}", "-e", f"LOGNAME={user}",
+        container, *argv,
+    ], timeout=90).ok
+
+
+def _smb_posix_ok(cfg: AgentConfig) -> bool:
+    """Probe numeric ownership and writes without ever creating an unmounted fallback tree."""
+    if not os.path.ismount(cfg.slow_path):
+        return False
+    probe = os.path.join(cfg.slow_path, f".lab-agent-posix-probe-{os.getpid()}")
+    mapped = cfg.userns_start + 10_000
+    child = os.path.join(probe, "write-test")
+    try:
+        os.mkdir(probe, 0o700)
+        os.chown(probe, mapped, mapped)
+        if (os.lstat(probe).st_uid, os.lstat(probe).st_gid) != (mapped, mapped):
+            return False
+        result = run([
+            "setpriv", "--reuid", str(mapped), "--regid", str(mapped), "--clear-groups",
+            "touch", child,
+        ], timeout=20)
+        return result.ok and os.lstat(child).st_uid == mapped
+    except OSError:
+        return False
+    finally:
+        try:
+            if os.path.lexists(child):
+                os.unlink(child)
+            if os.path.isdir(probe):
+                os.rmdir(probe)
+        except OSError:
+            pass
+
+
+def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
+    issues: list[HealthIssue] = []
     zfs_ok = run(["zfs", "version"], timeout=15).ok
     if not zfs_ok:
-        issues.append("zfs command not found")
+        _issue(issues, "zfs_missing", "critical", "ZFS is unavailable")
 
     docker_ok = run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=20).ok
-    if not docker_ok:
-        issues.append("docker not reachable")
-
-    driver = _docker_storage_driver() if docker_ok else ""
-    docker_zfs = driver == "zfs"
-    if docker_ok and driver not in DOCKER_DRIVERS_OK:
-        issues.append(
-            f"docker storage driver is '{driver}', expected one of "
-            f"{', '.join(DOCKER_DRIVERS_OK)} (see host-prep docs)"
-        )
-    # overlay2 only enforces --storage-opt size= on an xfs backing filesystem (mounted prjquota);
-    # without it, per-lab image-size quotas silently fail to apply.
-    if docker_ok and driver == "overlay2":
-        backing = _docker_backing_fs()
-        if backing != "xfs":
-            issues.append(
-                f"docker overlay2 backing filesystem is '{backing or 'unknown'}', expected 'xfs' "
-                "mounted with prjquota (needed for per-lab --storage-opt size quotas)"
-            )
-
-    nv_runtime = _nvidia_runtime() if docker_ok else False
-    gpus = _gpu_count()
-
-    # Lab containers run under Sysbox for host-isolated nested Docker; flag a node that lacks it.
-    sysbox = _sysbox_runtime() if docker_ok else False
-    if docker_ok and not sysbox:
-        issues.append(
-            "sysbox-runc runtime not found: nested Docker needs Sysbox CE (see host-prep docs)"
-        )
-    # GPUs are attached via CDI (not the nvidia runtime, which can't combine with sysbox-runc).
-    cdi = _cdi_present()
-    if gpus > 0 and not cdi:
-        issues.append(
-            "NVIDIA GPUs present but no CDI spec found; run `nvidia-ctk cdi generate "
-            "--output=/etc/cdi/nvidia.yaml` or GPUs will not be attached to lab containers"
-        )
-
-    fast_ok = _pool_exists(cfg.fast_pool) if zfs_ok else False
-    if zfs_ok and not fast_ok:
-        issues.append(f"fast pool '{cfg.fast_pool}' not found")
-
-    # Cold storage: a local ZFS pool, or an externally-managed SMB/CIFS mount.
-    if cfg.slow_is_zfs:
-        slow_ok = _pool_exists(cfg.slow_pool) if zfs_ok else False
-        if zfs_ok and not slow_ok:
-            issues.append(f"slow pool '{cfg.slow_pool}' not found")
+    driver = ""
+    if docker_ok:
+        result = run(["docker", "info", "--format", "{{.Driver}}"], timeout=20)
+        driver = result.stdout.strip() if result.ok else ""
     else:
-        slow_ok = _is_mountpoint(cfg.slow_path)
-        if not slow_ok:
-            issues.append(f"cold-storage SMB mount '{cfg.slow_path}' is not mounted")
+        _issue(issues, "docker_unavailable", "critical", "Docker daemon is unreachable")
+    if docker_ok and driver not in DOCKER_DRIVERS_OK:
+        _issue(issues, "docker_storage_driver", "critical",
+               f"Docker storage driver '{driver or 'unknown'}' is unsupported")
+    if docker_ok and not _docker_root_ok(cfg):
+        _issue(issues, "docker_data_root", "critical",
+               f"Docker data-root does not match '{cfg.docker_data_root}'", True)
+    if docker_ok and driver == "overlay2" and not _overlay_quota_ok(cfg):
+        _issue(issues, "docker_rootfs_quota", "critical",
+               "overlay2 rootfs quotas require XFS mounted with pquota/prjquota")
 
+    userns_ok = docker_ok and _docker_userns(cfg)
+    if docker_ok and not userns_ok:
+        _issue(issues, "docker_userns", "critical",
+               f"Docker userns-remap must use '{cfg.userns_user}'", True)
+
+    clone_ok = _sysctl_int("kernel.unprivileged_userns_clone") == 1
+    max_userns = _sysctl_int("user.max_user_namespaces")
+    apparmor_restrict = _sysctl_int("kernel.apparmor_restrict_unprivileged_userns")
+    nested_userns_ok = clone_ok and max_userns >= 16_384
+    if not nested_userns_ok:
+        _issue(issues, "bubblewrap_namespace", "critical",
+               "Unprivileged user namespaces are disabled or below 16384", True)
+
+    if apparmor_restrict == 0:
+        _issue(issues, "apparmor_userns_unrestricted", "critical",
+               "AppArmor unprivileged-userns restriction was globally disabled", True)
+
+    bwrap_ok = _security_profiles_ok(cfg)
+    codex_ok = False
+    target: tuple[str, str] | None = None
+    if deep and docker_ok:
+        target = _first_student_container()
+        if target:
+            mode = run(["docker", "exec", target[0], "stat", "-c", "%a", "/usr/bin/bwrap"],
+                       timeout=20)
+            mode_ok = mode.ok and mode.stdout.strip() == "755"
+            bwrap_ok = mode_ok and _student_command(target, [
+                "bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+                "--unshare-user", "--unshare-pid", "--unshare-net", "--new-session", "true",
+            ])
+            nested_userns_ok = nested_userns_ok and _student_command(
+                target, ["unshare", "--user", "--map-root-user", "true"]
+            )
+            codex_ok = _student_command(target, ["codex", "--version"]) and _student_command(
+                target, ["codex", "sandbox", "linux", "--", "true"]
+            )
+        else:
+            _issue(
+                issues,
+                "codex_smoke_unavailable",
+                "critical",
+                "No running lab with a provisioned student is available for the Codex smoke test",
+            )
+    if not bwrap_ok:
+        _issue(issues, "bubblewrap_failed", "critical",
+               "Distribution /usr/bin/bwrap is missing, setuid, or cannot create its sandbox", True)
+    if not nested_userns_ok and not any(i.code == "bubblewrap_namespace" for i in issues):
+        _issue(issues, "bubblewrap_namespace", "critical",
+               "Nested unprivileged user namespace test failed", True)
+    if deep and target is not None and not codex_ok:
+        _issue(issues, "codex_sandbox_failed", "critical",
+               "codex sandbox linux -- true failed as a provisioned student")
+
+    gpu_list = run(["nvidia-smi", "-L"], timeout=20)
+    smi_count = sum(1 for line in gpu_list.stdout.splitlines()
+                    if line.strip().startswith("GPU")) if gpu_list.ok else 0
+    gpu_count = max(smi_count, _nvidia_hardware_count())
+    loaded = _loaded_driver_version()
+    userspace = _userspace_driver_version()
+    nvml_ok = gpu_list.ok
+    if loaded and (not nvml_ok or (userspace and loaded != userspace)):
+        _issue(issues, "nvml_driver_mismatch", "critical",
+               "NVIDIA kernel/userspace driver mismatch; reboot the node", False)
+    elif gpu_count and not nvml_ok:
+        _issue(
+            issues,
+            "nvidia_kernel_failure",
+            "critical",
+            "NVIDIA hardware is present but NVML failed; inspect DKMS, Secure Boot, "
+            "Fabric Manager, and kernel logs",
+            False,
+        )
+    if gpu_count and run(["systemctl", "is-failed", "nvidia-fabricmanager.service"],
+                         timeout=15).ok:
+        _issue(issues, "nvidia_fabric_manager", "critical",
+               "NVIDIA Fabric Manager is failed and requires operator repair", False)
+    devices = _cdi_devices()
+    cdi_names = {device.partition("=")[2] for device in devices}
+    identifiers = set(re.findall(r"\(UUID:\s*([^)]+)\)", gpu_list.stdout))
+    expected = {"all", *(str(index) for index in range(smi_count)), *identifiers}
+    cdi_ok = gpu_count == 0 or (nvml_ok and expected <= cdi_names)
+    if gpu_count and not cdi_ok:
+        _issue(issues, "nvidia_cdi_stale", "critical",
+               "NVIDIA CDI devices are missing or stale", True)
+
+    fast_ok = (
+        _pool_exists(cfg.fast_pool)
+        and _zfs_root_ok(cfg.labs_fast_root, cfg.fast_mount_root)
+        if zfs_ok else False
+    )
+    if not fast_ok:
+        _issue(issues, "fast_storage_missing", "critical",
+               f"Fast pool '{cfg.fast_pool}' is unavailable")
+    if cfg.slow_is_zfs:
+        cold_ok = (
+            _pool_exists(cfg.slow_pool) and _zfs_root_ok(cfg.labs_slow_root)
+            if zfs_ok else False
+        )
+    else:
+        cold_ok = os.path.ismount(cfg.slow_path) and _smb_posix_ok(cfg)
+    if not cold_ok:
+        code = "cold_storage_missing" if cfg.slow_is_zfs or not os.path.ismount(cfg.slow_path) \
+            else "smb_posix_ownership"
+        _issue(issues, code, "critical",
+               f"Cold {cfg.slow_backend} storage is unavailable or lacks POSIX numeric ownership")
+
+    severity = {"warning": 1, "critical": 2}
+    status = "healthy" if not issues else max(issues, key=lambda i: severity[i.severity]).severity
     return Capabilities(
-        zfs=zfs_ok,
-        docker=docker_ok,
-        docker_zfs_driver=docker_zfs,
-        nvidia_runtime=nv_runtime,
-        nvidia_gpu=gpus > 0,
-        gpu_count=gpus,
-        sysbox=sysbox,
-        nvidia_cdi=cdi,
-        fast_pool_present=fast_ok,
-        slow_pool_present=slow_ok,
-        slow_backend=cfg.slow_backend,
-        slow_shared=cfg.slow_shared,
-        issues=issues,
+        runtime=RuntimeHealth(docker_ok, driver, userns_ok, cfg.userns_user, bwrap_ok,
+                              nested_userns_ok, codex_ok),
+        nvidia=NvidiaHealth(gpu_count, nvml_ok, loaded, userspace, cdi_ok, devices),
+        storage=StorageHealth(zfs_ok, fast_ok, cold_ok, cfg.slow_backend),
+        health=Health(status, issues),
     )

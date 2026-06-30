@@ -105,11 +105,11 @@ function LabBlock({ lab }: { lab: LabStats }) {
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <Stat
-            label="Image (writable layer)"
-            value={lab.live.image === null ? <span className="text-muted-foreground">—</span> : fmtBytes(lab.live.image)}
+            label="Rootfs (writable layer)"
+            value={lab.live.rootfs === null ? <span className="text-muted-foreground">—</span> : fmtBytes(lab.live.rootfs)}
           />
           <Stat label="Fast" value={quotaCell(lab.live.fast.used, lab.live.fast.quota)} />
-          <Stat label="Cold" value={quotaCell(lab.live.slow.used, lab.live.slow.quota)} />
+          <Stat label="Cold" value={quotaCell(lab.live.cold.used, lab.live.cold.quota)} />
         </div>
       </div>
 
@@ -145,13 +145,13 @@ function LabBlock({ lab }: { lab: LabStats }) {
                     {s.name && <span className="text-xs text-muted-foreground"> · {s.name}</span>}
                   </TableCell>
                   <TableCell>
-                    {s.docker === null ? <span className="text-muted-foreground">—</span> : fmtBytes(s.docker)}
+                    {s.homeUsed === null ? <span className="text-muted-foreground">—</span> : fmtBytes(s.homeUsed)}
                   </TableCell>
                   <TableCell>
                     {s.fast === null ? <span className="text-muted-foreground">—</span> : fmtBytes(s.fast)}
                   </TableCell>
                   <TableCell>
-                    {s.slow === null ? <span className="text-muted-foreground">—</span> : fmtBytes(s.slow)}
+                    {s.cold === null ? <span className="text-muted-foreground">—</span> : fmtBytes(s.cold)}
                   </TableCell>
                 </TableRow>
               ))
@@ -389,7 +389,7 @@ export default async function StatsPage({
                 {node.node}{" "}
                 <Badge variant={node.online ? "ok" : "err"}>{node.online ? "online" : "offline"}</Badge>
                 <span className="text-sm font-normal text-muted-foreground">
-                  {" "}· whole-image usage on this node: {fmtBytes(node.totalImageBytes)}
+                  {" "}· rootfs usage on this node: {fmtBytes(node.totalRootfsBytes)}
                 </span>
               </h3>
 

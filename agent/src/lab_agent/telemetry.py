@@ -44,42 +44,42 @@ def _pools(cfg: AgentConfig) -> list[dict[str, Any]]:
     return [info for p in zfs_pools if (info := _pool_free(p)) is not None]
 
 
-def _dataset_usage(cfg: AgentConfig, docker_state: Any = None) -> list[dict[str, Any]]:
-    if docker_state is None:
+def _storage_usage(cfg: AgentConfig, usage_state: Any = None) -> list[dict[str, Any]]:
+    if usage_state is None:
         return []
     out: list[dict[str, Any]] = []
     # Lab-level totals: the container writable-layer ("image") plus lab-level fast/slow ZFS
     # usage-vs-quota. Sourced from the lab-usage cache (refreshed every ``lab_usage_interval_s`` /
     # on-demand), so the heartbeat re-reports the last computed snapshot — it does not re-measure.
-    for level in docker_state.all_lab_level().values():
-        out.extend(level.datasets)
-    # Per-student breakdown from the (expensive) scan cache: each student's docker home (installed
-    # software) plus their scratch/cold ``du``. Updated only by the nightly / on-demand scan, so the
+    for level in usage_state.all_lab_level().values():
+        out.extend(level.storage)
+    # Per-student breakdown from the scan cache: each student's container home (installed software)
+    # plus their scratch/cold ``du``. Updated only by the nightly / on-demand scan, so the
     # heartbeat just re-reports the cached numbers — they change on disk only when a scan reruns.
-    for lab, usage in docker_state.all_docker().items():
-        out.extend(usagereport.docker_datasets(lab, usage))
-        out.extend(usagereport.tier_datasets(lab, usage))
+    for lab, usage in usage_state.all_container().items():
+        out.extend(usagereport.rootfs_storage(lab, usage))
+        out.extend(usagereport.tier_storage(lab, usage))
     return out
 
 
-def _usage_scans(docker_state: Any = None) -> list[dict[str, Any]]:
+def _usage_scans(usage_state: Any = None) -> list[dict[str, Any]]:
     """Per-lab timestamp of the last per-student usage (``du``) scan, so the controller can show
     data freshness and decide whether an on-demand re-scan is warranted."""
-    if docker_state is None:
+    if usage_state is None:
         return []
     return [
         {"lab": lab, "scanned_at": usage.scanned_at}
-        for lab, usage in docker_state.all_docker().items()
+        for lab, usage in usage_state.all_container().items()
         if usage.scanned_at is not None
     ]
 
 
-def collect_heartbeat(cfg: AgentConfig, docker_state: Any = None) -> dict[str, Any]:
+def collect_heartbeat(cfg: AgentConfig, usage_state: Any = None) -> dict[str, Any]:
     return {
         "pools": _pools(cfg),
-        "datasets": _dataset_usage(cfg, docker_state),
+        "storage": _storage_usage(cfg, usage_state),
         "scrub": [zfs.scrub_status(p).to_dict() for p in cfg.scrub_pools],
         "cold": coldstore.cold_status(cfg),
         "gpu_processes": list_gpu_processes(),
-        "usage_scans": _usage_scans(docker_state),
+        "usage_scans": _usage_scans(usage_state),
     }

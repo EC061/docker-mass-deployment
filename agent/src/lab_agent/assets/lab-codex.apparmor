@@ -1,0 +1,47 @@
+#include <tunables/global>
+
+profile lab-codex flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  network,
+  capability,
+  file,
+  signal,
+  ptrace (readby, tracedby),
+  deny /proc/sys/** wklx,
+  deny /proc/sysrq-trigger rwklx,
+  deny /proc/kcore rwklx,
+  deny /proc/kmem rwklx,
+  deny /proc/mem rwklx,
+  deny /proc/tty/driver/** rwklx,
+  deny /sys/firmware/** rwklx,
+  deny /sys/kernel/security/** rwklx,
+  deny mount,
+  deny umount,
+
+  /usr/bin/bwrap cx -> lab-codex-bwrap,
+  /** ix,
+
+  profile lab-codex-bwrap flags=(attach_disconnected,mediate_deleted) {
+    #include <abstractions/base>
+
+    userns,
+    network,
+    capability,
+    file,
+    signal,
+    ptrace (readby, tracedby),
+    deny /proc/sys/** wklx,
+    deny /proc/sysrq-trigger rwklx,
+    deny /proc/kcore rwklx,
+    deny /proc/kmem rwklx,
+    deny /proc/mem rwklx,
+    deny /proc/tty/driver/** rwklx,
+    deny /sys/firmware/** rwklx,
+    deny /sys/kernel/security/** rwklx,
+    mount,
+    umount,
+    pivot_root,
+    /** ix,
+  }
+}

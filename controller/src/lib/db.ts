@@ -576,6 +576,27 @@ Thanks for helping keep the cluster healthy.`,
       conn.prepare("DELETE FROM settings WHERE key = 'emailSignatureHtml'").run();
     },
   },
+  {
+    id: "0020_student_linux_uid",
+    fn: (conn) => {
+      conn.exec("ALTER TABLE students ADD COLUMN linux_uid INTEGER");
+      const rows = conn.prepare("SELECT id FROM students ORDER BY id").all() as { id: number }[];
+      if (rows.length > 50_000) throw new Error("student UID range 10000..59999 is exhausted");
+      const setUid = conn.prepare("UPDATE students SET linux_uid = ? WHERE id = ?");
+      rows.forEach((row, index) => setUid.run(10_000 + index, row.id));
+      conn.exec(`
+        CREATE UNIQUE INDEX idx_students_linux_uid ON students(linux_uid);
+        CREATE TRIGGER students_linux_uid_insert
+          BEFORE INSERT ON students
+          WHEN NEW.linux_uid IS NULL OR NEW.linux_uid < 10000 OR NEW.linux_uid > 59999
+          BEGIN SELECT RAISE(ABORT, 'linux_uid must be in 10000..59999'); END;
+        CREATE TRIGGER students_linux_uid_update
+          BEFORE UPDATE OF linux_uid ON students
+          WHEN NEW.linux_uid IS NULL OR NEW.linux_uid < 10000 OR NEW.linux_uid > 59999
+          BEGIN SELECT RAISE(ABORT, 'linux_uid must be in 10000..59999'); END;
+      `);
+    },
+  },
 ];
 
 function migrate(conn: Database.Database): void {

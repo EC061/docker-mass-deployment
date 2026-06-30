@@ -22,7 +22,7 @@ let students: typeof import("../src/lib/students");
 let nodeA: number;
 let nodeB: number;
 
-const OPTS = { cpus: "4", memory: "8g", shm_size: "1g", image_quota: "300g", restart: "unless-stopped" };
+const OPTS = { cpus: "4", memory: "8g", shm_size: "1g", rootfs_quota: "300g", restart: "unless-stopped" };
 
 beforeAll(async () => {
   dbmod = await import("../src/lib/db");
@@ -96,6 +96,8 @@ describe("createPlacement", () => {
     const p = await grant(lab.id, nodeA);
     const adds = enqueueTask.mock.calls.filter((c) => c[1] === "student.add");
     expect(adds.map((c) => (c[2] as any).username).sort()).toEqual(["alice", "bob"]);
+    expect(adds.every((c) => Number.isInteger((c[2] as any).uid) &&
+      (c[2] as any).uid === (c[2] as any).gid)).toBe(true);
     // placement_members recorded for both.
     const n = (dbmod.db().prepare("SELECT COUNT(*) AS n FROM placement_members WHERE placement_id=?").get(p.id) as any).n;
     expect(n).toBe(2);

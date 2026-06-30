@@ -85,8 +85,8 @@ export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, acti
         <Input name="shmSize" defaultValue="1g" />
       </div>
       <div>
-        <Label>Image size quota</Label>
-        <Input name="imageQuota" defaultValue="300g" />
+        <Label>Root filesystem quota</Label>
+        <Input name="rootfsQuota" defaultValue="300g" />
       </div>
       <div>
         <Label>Restart policy</Label>

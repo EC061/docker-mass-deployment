@@ -11,10 +11,92 @@ Only ZFS pools are scrubbed. A node whose cold storage is an SMB mount has no sl
 
 from __future__ import annotations
 
+import re
+from pathlib import Path
 from typing import Any
 
 from .config import AgentConfig
 from .executors import docker, zfs
+from .executors.base import run
+from .system import detect_capabilities
+
+PACKAGE_RE = re.compile(r"^[a-z0-9][a-z0-9+.-]{0,127}$")
+VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.+:~_-]{0,127}$")
+
+
+def run_check(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
+    caps = detect_capabilities(cfg, deep=True)
+    return caps.to_dict(), f"node health is {caps.health.status}"
+
+
+def run_repair(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
+    """Only perform explicitly safe, repeatable repairs; unknown kernel failures remain critical."""
+    repaired: list[str] = []
+    apparmor = Path("/etc/apparmor.d/lab-codex")
+    seccomp = Path(cfg.seccomp_profile)
+    if seccomp.exists():
+        seccomp.chmod(0o644)
+        repaired.append("seccomp_permissions_repaired")
+    if apparmor.exists():
+        apparmor.chmod(0o644)
+        result = run(["apparmor_parser", "-r", str(apparmor)], timeout=30)
+        if result.ok:
+            repaired.append("apparmor_reloaded")
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
+    ], timeout=20)
+    containers = listed.stdout.splitlines() if listed.ok else []
+    for name in containers:
+        mode = docker.exec_in(name, ["chmod", "0755", "/usr/bin/bwrap"], timeout=20)
+        if mode.ok:
+            repaired.append(f"bwrap_mode_repaired:{name}")
+    if run(["nvidia-ctk", "--version"], timeout=10).ok:
+        generated = run([
+            "nvidia-ctk", "cdi", "generate", "--output=/etc/cdi/nvidia.yaml"
+        ], timeout=60)
+        if generated.ok:
+            repaired.append("cdi_regenerated")
+            for name in containers:
+                if run(["docker", "restart", name], timeout=120).ok:
+                    repaired.append(f"container_restarted:{name}")
+    caps = detect_capabilities(cfg, deep=True)
+    note = ", ".join(repaired) or "no safe repair applied"
+    return {"repaired": repaired, "health": caps.to_dict()}, note
+
+
+def run_node_patch(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
+    manifest = params.get("manifest")
+    if not isinstance(manifest, list) or not manifest:
+        raise ValueError("node.patch requires a non-empty approved manifest")
+    packages: list[str] = []
+    for item in manifest:
+        if not isinstance(item, dict):
+            raise ValueError("manifest entries must contain package and version")
+        package = str(item.get("package", ""))
+        version = str(item.get("version", ""))
+        if not PACKAGE_RE.fullmatch(package) or not VERSION_RE.fullmatch(version):
+            raise ValueError(f"invalid pinned package manifest entry: {package}={version}")
+        packages.append(f"{package}={version}")
+    updated = run(["apt-get", "update"], timeout=600)
+    if not updated.ok:
+        raise RuntimeError(updated.logs)
+    installed = run([
+        "apt-get", "install", "-y", "--no-install-recommends", *packages
+    ], timeout=1800)
+    if not installed.ok:
+        raise RuntimeError(installed.logs)
+    health = detect_capabilities(cfg, deep=True).to_dict()
+    return {"installed": packages, "health": health}, "installed approved package manifest"
+
+
+def run_reboot(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
+    result = run([
+        "systemd-run", "--unit=lab-agent-reboot", "--on-active=10s",
+        "/usr/bin/systemctl", "reboot",
+    ], timeout=30)
+    if not result.ok:
+        raise RuntimeError(result.logs)
+    return {"scheduled": True, "delay_seconds": 10}, "node reboot scheduled in 10 seconds"
 
 
 def run_apt_upgrade(cfg: AgentConfig, lab: str, *, timeout: float = 1800.0) -> tuple[bool, str]:

@@ -26,7 +26,11 @@ def dataset_exists(name: str) -> bool:
 
 
 def create_dataset(
-    name: str, *, quota_bytes: int | None = None, create_parents: bool = True
+    name: str,
+    *,
+    quota_bytes: int | None = None,
+    mountpoint: str | None = None,
+    create_parents: bool = True,
 ) -> None:
     """Create a dataset (idempotent). Optionally set a quota."""
     if not dataset_exists(name):
@@ -37,6 +41,13 @@ def create_dataset(
         _checked(run(args, timeout=60))
     if quota_bytes is not None:
         set_quota(name, quota_bytes)
+    if mountpoint is not None:
+        set_property(name, "mountpoint", mountpoint)
+
+
+def set_property(dataset: str, key: str, value: str) -> None:
+    """Set one trusted ZFS property. Keys are internal constants, never user input."""
+    _checked(run(["zfs", "set", f"{key}={value}", dataset], timeout=30))
 
 
 def set_quota(dataset: str, quota_bytes: int | None) -> None:

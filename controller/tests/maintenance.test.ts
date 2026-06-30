@@ -154,7 +154,7 @@ describe("scheduleUsageScans", () => {
     insP.run(bioId, onId, 40000);
     insP.run(offlineId, downId, 40000);
     bioPlacementId = (d.prepare("SELECT id FROM lab_placements WHERE lab_id=?").get(bioId) as any).id;
-    d.prepare("INSERT INTO students (username, created_at, updated_at) VALUES ('alice', 0, 0)").run();
+    d.prepare("INSERT INTO students (username, linux_uid, created_at, updated_at) VALUES ('alice', 10000, 0, 0)").run();
     const sid = (d.prepare("SELECT id FROM students WHERE username='alice'").get() as any).id;
     d.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, 0)").run(bioId, sid);
   });

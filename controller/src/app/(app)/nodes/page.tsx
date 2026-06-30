@@ -8,10 +8,15 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   deleteNodeAction,
+  checkNodeAction,
+  patchAllNodesAction,
   provisionNodeAction,
+  rebootNodeAction,
+  repairNodeAction,
   revokeNodeAction,
   rotateNodeTokenAction,
   setNodeAliasAction,
@@ -44,6 +49,13 @@ interface ScrubEntry {
   scrubbing?: boolean;
   errors?: number;
   last_scrub?: string | null;
+}
+
+interface PatchResult {
+  node: string;
+  state: string;
+  error: string | null;
+  updated_at: number;
 }
 
 function scrubSummary(raw: string | null): { text: string; bad: boolean } {
@@ -101,6 +113,7 @@ export default async function NodesPage({
   const error = typeof sp.error === "string" ? sp.error : undefined;
   const deleted = typeof sp.deleted === "string" ? sp.deleted : undefined;
   const revoked = typeof sp.revoked === "string" ? sp.revoked : undefined;
+  const maintenance = typeof sp.maintenance === "string" ? sp.maintenance : undefined;
 
   const nodes = db()
     .prepare(
@@ -117,6 +130,16 @@ export default async function NodesPage({
     )
     .all() as NodeRow[];
   const localZfsNodes = listLocalZfsNodes().map((n) => n.name);
+  const patchResults = db()
+    .prepare(
+      `SELECT t.node, t.state, t.error, t.updated_at
+       FROM task_log t
+       WHERE t.action = 'node.patch'
+         AND t.id = (SELECT MAX(t2.id) FROM task_log t2
+                     WHERE t2.action = 'node.patch' AND t2.node = t.node)
+       ORDER BY t.node`,
+    )
+    .all() as PatchResult[];
 
   return (
     <div className="space-y-4">
@@ -143,6 +166,12 @@ export default async function NodesPage({
           <CardContent>
             <p className="text-sm text-warn">Node “{revoked}” was revoked and its live connection is being closed.</p>
           </CardContent>
+        </Card>
+      )}
+
+      {maintenance && (
+        <Card className="border-primary/50">
+          <CardContent><p className="text-sm">{maintenance}</p></CardContent>
         </Card>
       )}
 
@@ -181,6 +210,40 @@ export default async function NodesPage({
             Adds the node to the allow-list and issues a per-node token. Only allow-listed nodes may
             connect.
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <div>
+            <h3 className="text-base font-semibold">Patch all nodes</h3>
+            <p className="text-xs text-muted-foreground">
+              Administrator-approved, version-pinned APT manifest. One task and result is recorded per node.
+            </p>
+          </div>
+          <form action={patchAllNodesAction} className="space-y-2">
+            <Label htmlFor="patch-manifest">Package manifest</Label>
+            <Textarea id="patch-manifest" name="manifest" required
+              placeholder={"libnvidia-compute-570=570.00.00-0ubuntu1\nnvidia-container-toolkit=1.18.0-1"} />
+            <Button type="submit">Patch all nodes</Button>
+          </form>
+          {patchResults.length > 0 && (
+            <Table>
+              <TableHeader><TableRow><TableHead>Node</TableHead><TableHead>Result</TableHead>
+                <TableHead>Updated</TableHead></TableRow></TableHeader>
+              <TableBody>{patchResults.map((result) => (
+                <TableRow key={result.node}>
+                  <TableCell>{result.node}</TableCell>
+                  <TableCell>
+                    <Badge variant={result.state === "ok" ? "ok" :
+                      result.state === "failed" ? "err" : "warn"}>{result.state}</Badge>
+                    {result.error && <span className="ml-2 text-xs text-err">{result.error}</span>}
+                  </TableCell>
+                  <TableCell className="text-xs text-muted-foreground">{ago(result.updated_at)}</TableCell>
+                </TableRow>
+              ))}</TableBody>
+            </Table>
+          )}
         </CardContent>
       </Card>
 
@@ -242,7 +305,7 @@ export default async function NodesPage({
                             </div>
                             <div>
                               <dt className="text-muted-foreground">GPUs</dt>
-                              <dd>{caps.gpu_count ?? 0}</dd>
+                              <dd>{caps.nvidia?.gpu_count ?? 0}</dd>
                             </div>
                           </dl>
                         </div>
@@ -301,8 +364,9 @@ export default async function NodesPage({
                           </div>
                           <div>
                             <dt className="text-muted-foreground">Issues</dt>
-                            <dd className={caps.issues && caps.issues.length > 0 ? "text-warn" : undefined}>
-                              {caps.issues && caps.issues.length > 0 ? caps.issues.length : "—"}
+                            <dd className={caps.health?.issues?.length > 0 ? "text-warn" : undefined}>
+                              {caps.health?.issues?.length > 0 ?
+                                `${caps.health.status}: ${caps.health.issues.length}` : "—"}
                             </dd>
                           </div>
                         </dl>
@@ -312,6 +376,20 @@ export default async function NodesPage({
                           Last seen {ago(n.last_seen)}
                         </div>
                         <div className="flex flex-wrap gap-1.5">
+                          <form action={checkNodeAction}>
+                            <input type="hidden" name="name" value={n.name} />
+                            <Button type="submit" variant="secondary" size="sm">Check</Button>
+                          </form>
+                          <form action={repairNodeAction}>
+                            <input type="hidden" name="name" value={n.name} />
+                            <Button type="submit" variant="secondary" size="sm">Repair</Button>
+                          </form>
+                          <form action={rebootNodeAction}>
+                            <input type="hidden" name="name" value={n.name} />
+                            <ConfirmButton variant="secondary" size="sm" className="text-warn"
+                              confirm={`Reboot node "${n.name}"? Running labs will be interrupted.`}
+                              confirmLabel="Reboot node">Reboot</ConfirmButton>
+                          </form>
                           <form action={rotateNodeTokenAction}>
                             <input type="hidden" name="name" value={n.name} />
                             <Button type="submit" variant="secondary" size="sm">
