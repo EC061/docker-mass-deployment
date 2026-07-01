@@ -78,7 +78,7 @@ class Capabilities:
         return asdict(self)
 
 
-DOCKER_DRIVERS_OK = ("zfs", "overlay2")
+DOCKER_DRIVERS_OK = ("zfs",)
 
 
 def _issue(items: list[HealthIssue], code: str, severity: str, message: str,
@@ -124,20 +124,6 @@ def _docker_root_ok(cfg: AgentConfig) -> bool:
     result = run(["docker", "info", "--format", "{{.DockerRootDir}}"], timeout=20)
     return result.ok and os.path.realpath(result.stdout.strip()) == os.path.realpath(
         cfg.docker_data_root
-    )
-
-
-def _overlay_quota_ok(cfg: AgentConfig) -> bool:
-    backing_fmt = (
-        '{{range .DriverStatus}}{{if eq (index . 0) "Backing Filesystem"}}'
-        "{{index . 1}}{{end}}{{end}}"
-    )
-    backing = run(["docker", "info", "--format", backing_fmt], timeout=20)
-    if not backing.ok or backing.stdout.strip().lower() != "xfs":
-        return False
-    options = run(["findmnt", "-no", "OPTIONS", cfg.docker_data_root], timeout=20)
-    return options.ok and any(
-        option in options.stdout.split(",") for option in ("pquota", "prjquota")
     )
 
 
@@ -264,6 +250,13 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     if not zfs_ok:
         _issue(issues, "zfs_missing", "critical", "ZFS is unavailable")
 
+    # host-prepare only puts Docker's data-root on a ZFS dataset once the pool(s) it needs exist
+    # (see hostprep._zfs_pools_ready); before that, a plain install on the default backing store is
+    # expected and the missing pool(s) are already flagged below via fast/cold_storage_missing.
+    zfs_pools_ready = zfs_ok and _pool_exists(cfg.fast_pool) and (
+        not cfg.slow_is_zfs or _pool_exists(cfg.slow_pool)
+    )
+
     docker_ok = run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=20).ok
     driver = ""
     if docker_ok:
@@ -271,15 +264,12 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
         driver = result.stdout.strip() if result.ok else ""
     else:
         _issue(issues, "docker_unavailable", "critical", "Docker daemon is unreachable")
-    if docker_ok and driver not in DOCKER_DRIVERS_OK:
+    if docker_ok and zfs_pools_ready and driver not in DOCKER_DRIVERS_OK:
         _issue(issues, "docker_storage_driver", "critical",
                f"Docker storage driver '{driver or 'unknown'}' is unsupported")
     if docker_ok and not _docker_root_ok(cfg):
         _issue(issues, "docker_data_root", "critical",
                f"Docker data-root does not match '{cfg.docker_data_root}'", True)
-    if docker_ok and driver == "overlay2" and not _overlay_quota_ok(cfg):
-        _issue(issues, "docker_rootfs_quota", "critical",
-               "overlay2 rootfs quotas require XFS mounted with pquota/prjquota")
 
     userns_ok = docker_ok and _docker_userns(cfg)
     if docker_ok and not userns_ok:
