@@ -54,13 +54,13 @@ def test_unprivileged_bubblewrap_and_codex():
     )
     student_exec("unshare", "--user", "--map-root-user", "true")
     student_exec("codex", "--version")
-    student_exec("codex", "sandbox", "linux", "--", "true")
+    student_exec("codex", "sandbox", "--", "true")
 
 
 def test_gpu_storage_and_quota_commands():
     student_exec("sh", "-c", "test -w /home/$USER && test -w /cold-storage/$USER")
     student_exec("nvidia-smi")
-    student_exec("codex", "sandbox", "linux", "--", "nvidia-smi")
+    student_exec("codex", "sandbox", "--", "nvidia-smi")
     student_exec("labquota", "--me")
 
 

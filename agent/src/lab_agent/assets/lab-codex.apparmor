@@ -39,6 +39,10 @@ profile lab-codex flags=(attach_disconnected,mediate_deleted) {
     deny /proc/tty/driver/** rwklx,
     deny /sys/firmware/** rwklx,
     deny /sys/kernel/security/** rwklx,
+    # Mount propagation is mediated separately from ordinary mounts on Ubuntu kernels. bwrap's
+    # first mount operation is mount(NULL, "/", MS_REC|MS_SLAVE), reported by AppArmor as
+    # make-rslave; without this explicit rule it fails before constructing the sandbox root.
+    mount options=(rw, make-rslave) -> /,
     mount,
     umount,
     pivot_root,
