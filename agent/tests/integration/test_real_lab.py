@@ -39,6 +39,8 @@ def test_outer_boundary_and_mounts():
     assert all("unconfined" not in item for item in host.get("SecurityOpt") or [])
     destinations = {mount["Destination"] for mount in config["Mounts"]}
     assert destinations == {"/home", "/cold-storage", "/run/labquota"}
+    assert docker("exec", CONTAINER, "cat", "/proc/1/comm").stdout.strip() == "sshd"
+    docker("exec", CONTAINER, "/usr/sbin/sshd", "-t")
 
 
 def test_unprivileged_bubblewrap_and_codex():
