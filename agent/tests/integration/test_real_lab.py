@@ -39,7 +39,8 @@ def test_outer_boundary_and_mounts():
     security = host.get("SecurityOpt") or []
     assert "systempaths=unconfined" in security
     assert host["UsernsMode"] == "host"
-    assert "seccomp=unconfined" not in security and "apparmor=unconfined" not in security
+    assert "seccomp=unconfined" not in security
+    assert "apparmor=unconfined" in security
     destinations = {mount["Destination"] for mount in config["Mounts"]}
     assert destinations == {"/home", "/cold-storage", "/run/labquota"}
     assert docker("exec", CONTAINER, "cat", "/proc/1/comm").stdout.strip() == "sshd"
@@ -50,7 +51,11 @@ def test_outer_boundary_and_mounts():
     assert "ssh-ed25519" in keys.stdout
 
 
-def test_unprivileged_bubblewrap_and_codex():
+def test_setuid_bubblewrap_and_codex():
+    bwrap_mode = docker(
+        "exec", CONTAINER, "stat", "-c", "%U:%G %a", "/usr/bin/bwrap"
+    ).stdout.strip()
+    assert bwrap_mode == "root:root 4755"
     bwrap = ("bwrap", "--unshare-user", "--uid", "0", "--gid", "0",
              "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
              "--unshare-pid", "--new-session", "true")

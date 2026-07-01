@@ -175,7 +175,7 @@ def test_deep_doctor_accepts_codex_sandbox_when_raw_bwrap_fails(monkeypatch):
             (True, "[]\t[]"),
         "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
         "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
-        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "755"),
+        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
             (False, ""),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test unshare":

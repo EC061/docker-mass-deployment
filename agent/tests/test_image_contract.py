@@ -7,8 +7,9 @@ def test_lab_image_has_codex_bubblewrap_and_no_nested_engine():
     assert "ARG CODEX_VERSION=0.142.4" in dockerfile
     assert "setup_24.x" in dockerfile
     assert "bubblewrap uidmap libseccomp2" in dockerfile
-    assert "chmod 0755 /usr/bin/bwrap" in dockerfile
-    assert "test ! -u /usr/bin/bwrap" in dockerfile
+    assert "chown root:root /usr/bin/bwrap" in dockerfile
+    assert "chmod 4755 /usr/bin/bwrap" in dockerfile
+    assert "test -u /usr/bin/bwrap" in dockerfile
     assert "prefix=${HOME}/.local" in dockerfile
     assert 'export PATH="$HOME/.local/bin:$PATH"' in dockerfile
     assert ". /etc/profile.d/lab-npm-user-prefix.sh" in dockerfile

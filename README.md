@@ -6,9 +6,9 @@ lab, no host engine socket, and no privileged mode. Students retain full passwor
 daemon-remapped parent namespace locks the inherited mounts that nested bubblewrap must modify.
 
 Codex is a required workload. The lab image includes a pinned Codex CLI and distribution
-`/usr/bin/bwrap`; the outer container uses dedicated seccomp and AppArmor profiles for sandbox
-setup without granting outer `CAP_SYS_ADMIN`. The doctor validates Codex's supported sandbox command
-directly; raw bubblewrap procfs setup may remain unavailable at the outer container boundary.
+`/usr/bin/bwrap`; the outer container uses a dedicated seccomp profile and deliberately runs with
+`apparmor=unconfined` for setuid bubblewrap setup without granting outer `CAP_SYS_ADMIN`. Doctor
+validates Codex's supported sandbox command directly.
 
 ## Persistent layout
 
@@ -111,7 +111,7 @@ sudo lab-agent host-prepare
   `kernel.apparmor_restrict_unprivileged_userns=1`;
 - installs and loads `lab-codex-seccomp.json`, `lab-codex`, and the distribution
   `bwrap-userns-restrict` profile when available;
-- restores non-setuid mode on `/usr/bin/bwrap` in running managed labs;
+- restores root ownership and setuid mode (`4755`) on `/usr/bin/bwrap` in running managed labs;
 - removes the deprecated `features.use_legacy_landlock` opt-in from existing student Codex configs
   while preserving all unrelated settings;
 - regenerates NVIDIA CDI at `/etc/cdi/nvidia.yaml` when `nvidia-ctk` is installed.
@@ -123,9 +123,10 @@ profile digest differs from the installed profile.
 
 Managed labs also use Docker's `systempaths=unconfined` creation option. Docker's default masked
 and read-only submounts below `/proc` make Linux reject the fresh procfs mount required by an
-unprivileged bubblewrap PID namespace. The `lab-codex` AppArmor profile preserves those sensitive
-path restrictions without the conflicting submounts. Existing containers must be recreated after
-this contract changes; doctor reports them as `container_systempaths_stale`.
+unprivileged bubblewrap PID namespace. Managed containers pair this with `apparmor=unconfined`;
+the dedicated seccomp profile, restricted mounts, and lack of outer `CAP_SYS_ADMIN` remain active.
+Existing containers must be recreated after this contract changes; doctor reports them as
+`container_systempaths_stale`.
 
 Managed labs run with `--userns=host` (the initial user namespace). Bubblewrap needs it: under a
 remapped namespace Linux locks the inherited root mount and bubblewrap fails at `make / slave`
@@ -136,8 +137,8 @@ subordinate base UID, so under `--userns=host` those binaries elevate to that un
 instead of real root and fail with "Authentication token manipulation error" (`passwd`) or a setuid
 complaint (`sudo`). `lab-agent doctor` flags a still-remapped daemon as a critical `docker_userns`
 issue; the fix is to re-run `host-prepare` and recreate placements. Students start unprivileged;
-each has a real sudo rule that requires their assigned password. AppArmor, seccomp, the absence of
-Docker's socket, and the restricted bind mounts are the outer boundary. Migrating an
+each has a real sudo rule that requires their assigned password. Seccomp, the absence of Docker's
+socket, and the restricted bind mounts are the outer boundary. Migrating an
 already-remapped node requires recreating each placement, because the images and container layers
 live in the remapped graph store and persistent ownership moves from remapped IDs to the stable
 student IDs (the ZFS-backed `/home` and `/cold-storage` data is untouched).
@@ -195,10 +196,10 @@ codex sandbox -- true
 ```
 
 Doctor still records whether the distribution `bwrap` binary can create a raw nested sandbox, but
-Codex's own sandbox smoke test is the supported pass/fail gate. Keep `/usr/bin/bwrap` non-setuid in
-managed labs: it builds its sandbox from the unprivileged user namespace (`--userns=host` plus the
-`kernel.unprivileged_userns_clone` / `user.max_user_namespaces` sysctls above), which is the safer
-path, and the setuid mode has no benefit here. `host-prepare` and `Repair` re-assert `0755` on it.
+Codex's own sandbox smoke test is the supported pass/fail gate. Managed labs enforce root ownership
+and setuid mode (`4755`) on `/usr/bin/bwrap`, and run the outer container with
+`--security-opt apparmor=unconfined` for the most reliable nested sandbox setup. The dedicated
+seccomp profile remains enabled. `host-prepare` and `Repair` re-assert this bwrap mode.
 
 Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace
 isolation, and that container root cannot modify a host sentinel outside `/home` and
@@ -213,7 +214,7 @@ ownership.
 The Nodes page exposes:
 
 - **Check**: refresh structured Docker/userns, bubblewrap/Codex, NVIDIA, CDI, ZFS and SMB health;
-- **Repair**: reload AppArmor, restore non-setuid mode on `bwrap`, regenerate CDI, and restart
+- **Repair**: reload AppArmor, restore setuid-root mode on `bwrap`, regenerate CDI, and restart
   affected lab containers;
 - **Reboot**: schedule a reboot, which is the supported response to an NVML kernel/userspace mismatch.
 

@@ -1,7 +1,7 @@
 # SSH-accessible Ubuntu lab image. Docker and NVIDIA integration live only on the host; this image
 # deliberately contains no Docker daemon, Docker CLI, containerd, Docker socket, or NVIDIA runtime.
-# Students retain sudo, while the outer daemon's userns-remap maps container root to an unprivileged
-# host uid. Bubblewrap is installed as a normal (non-setuid) binary for Codex's Linux sandbox.
+# Students retain sudo. Docker userns-remap is disabled on managed nodes so setuid-root binaries
+# keep their real root ownership. Bubblewrap is installed setuid-root for reliable nested sandboxing.
 
 FROM ubuntu:noble@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
 
@@ -17,8 +17,9 @@ RUN apt-get update \
     && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && npm install --global "@openai/codex@${CODEX_VERSION}" \
-    && chmod 0755 /usr/bin/bwrap \
-    && test ! -u /usr/bin/bwrap \
+    && chown root:root /usr/bin/bwrap \
+    && chmod 4755 /usr/bin/bwrap \
+    && test -u /usr/bin/bwrap \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
 # Keep the pinned system Codex as a baseline while allowing its student-run in-app updater to

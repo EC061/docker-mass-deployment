@@ -43,8 +43,9 @@ def run_repair(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     ], timeout=20)
     containers = listed.stdout.splitlines() if listed.ok else []
     for name in containers:
-        mode = docker.exec_in(name, ["chmod", "0755", "/usr/bin/bwrap"], timeout=20)
-        if mode.ok:
+        owner = docker.exec_in(name, ["chown", "root:root", "/usr/bin/bwrap"], timeout=20)
+        mode = docker.exec_in(name, ["chmod", "4755", "/usr/bin/bwrap"], timeout=20)
+        if owner.ok and mode.ok:
             repaired.append(f"bwrap_mode_repaired:{name}")
     if run(["nvidia-ctk", "--version"], timeout=10).ok:
         generated = run([
