@@ -9,6 +9,9 @@ def test_lab_image_has_cuda_bubblewrap_and_no_nested_engine():
     assert "build-essential cmake ninja-build pkg-config" in dockerfile
     assert "nvcc --version" in dockerfile
     assert "nvcc -c /tmp/cuda-smoke.cu" in dockerfile
+    assert "/etc/environment" in dockerfile
+    assert "/etc/profile.d/cuda.sh" in dockerfile
+    assert "ln -s /usr/local/cuda/bin/nvcc /usr/local/bin/nvcc" in dockerfile
     assert "chown root:root /usr/bin/bwrap" in dockerfile
     assert "chmod 4755 /usr/bin/bwrap" in dockerfile
     assert "test -u /usr/bin/bwrap" in dockerfile

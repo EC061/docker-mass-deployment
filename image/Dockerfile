@@ -5,6 +5,7 @@
 FROM nvidia/cuda:13.3.0-devel-ubuntu24.04@sha256:ef2203909e80b8b976cfc672f7e2ae2b00bc0e25c404ee86d89e10a3802f1c52
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV CUDA_HOME=/usr/local/cuda
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
@@ -22,6 +23,22 @@ RUN apt-get update \
     && nvcc -c /tmp/cuda-smoke.cu -o /tmp/cuda-smoke.o \
     && rm -f /tmp/cuda-smoke.cu /tmp/cuda-smoke.o \
     && rm -rf /var/lib/apt/lists/*
+
+# sshd starts login sessions with the distro's safe default PATH instead of the image's inherited
+# CUDA PATH. Publish the toolkit through PAM, login shells, and /usr/local/bin so interactive and
+# non-interactive SSH commands can both resolve nvcc.
+RUN printf '%s\n' \
+        'CUDA_HOME=/usr/local/cuda' \
+        'PATH=/usr/local/cuda/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin' \
+        'LD_LIBRARY_PATH=/usr/local/cuda/lib64' \
+        >> /etc/environment \
+    && printf '%s\n' \
+        'export CUDA_HOME=/usr/local/cuda' \
+        'export PATH="$CUDA_HOME/bin:$PATH"' \
+        'export LD_LIBRARY_PATH="$CUDA_HOME/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"' \
+        > /etc/profile.d/cuda.sh \
+    && chmod 0644 /etc/profile.d/cuda.sh \
+    && ln -s /usr/local/cuda/bin/nvcc /usr/local/bin/nvcc
 
 # Password SSH remains the initial access mechanism; root login is disabled. Every container creates
 # unique host keys on first boot.
