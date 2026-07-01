@@ -54,7 +54,7 @@ def container_name(lab: str) -> str:
 
 @dataclass
 class ContainerOptions:
-    image: str = "custom-ssh"
+    image: str = "ghcr.io/ec061/custom-ssh:latest"
     cpus: str = "4"
     memory: str = "8g"
     shm_size: str = "1g"

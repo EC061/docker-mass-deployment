@@ -27,6 +27,7 @@ interface Props {
 /** "Grant node access": create a placement of the lab on a node with its initial container config. */
 export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, action }: Props) {
   const [nodeId, setNodeId] = useState<number>(0);
+  const noNodeSelected = nodeId === 0;
   if (nodes.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -43,8 +44,13 @@ export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, acti
       <input type="hidden" name="labId" value={labId} />
       <div>
         <Label>Node</Label>
-        <Select name="nodeId" required value={nodeId} onChange={(e) => setNodeId(Number(e.target.value))}>
-          <option value={0} disabled>
+        <Select
+          name="nodeId"
+          required
+          value={noNodeSelected ? "" : nodeId}
+          onChange={(e) => setNodeId(Number(e.target.value))}
+        >
+          <option value="" disabled>
             Select node…
           </option>
           {nodes.map((n) => (
@@ -70,7 +76,7 @@ export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, acti
       </div>
       <div>
         <Label>Base image</Label>
-        <Input name="image" defaultValue="custom-ssh" />
+        <Input name="image" defaultValue="ghcr.io/ec061/custom-ssh:latest" />
       </div>
       <div>
         <Label>CPUs</Label>
@@ -100,7 +106,7 @@ export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, acti
           The SSH port is allocated automatically on the node. Container options are frozen after
           creation (change them via the placement&apos;s recreate action). All GPUs are always attached.
         </p>
-        <Button type="submit" disabled={blocked}>
+        <Button type="submit" disabled={blocked || noNodeSelected}>
           Grant node access
         </Button>
       </div>
