@@ -266,6 +266,35 @@ def _stale_lab_userns_containers() -> list[str]:
     return stale
 
 
+def _stale_bwrap_capability_containers() -> list[str]:
+    """Return managed containers missing capabilities required by setuid bubblewrap."""
+    required = {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"}
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
+    ], timeout=20)
+    if not listed.ok:
+        return []
+    stale: list[str] = []
+    for container in listed.stdout.splitlines():
+        result = run([
+            "docker", "inspect", "--format", "{{json .HostConfig.CapAdd}}", container,
+        ], timeout=20)
+        if not result.ok:
+            stale.append(container)
+            continue
+        try:
+            cap_add = json.loads(result.stdout.strip() or "null") or []
+        except json.JSONDecodeError:
+            stale.append(container)
+            continue
+        normalized = {
+            str(cap).upper().removeprefix("CAP_") for cap in cap_add
+        } if isinstance(cap_add, list) else set()
+        if not required.issubset(normalized):
+            stale.append(container)
+    return stale
+
+
 def _first_student_container() -> tuple[str, str] | None:
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
@@ -402,6 +431,15 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "Managed containers require reinstall for bubblewrap-compatible user namespaces: "
                 + ", ".join(stale_lab_userns),
             )
+        stale_bwrap_caps = _stale_bwrap_capability_containers()
+        if stale_bwrap_caps:
+            _issue(
+                issues,
+                "container_bwrap_caps_stale",
+                "critical",
+                "Managed containers require recreation with the setuid bubblewrap capability "
+                "contract: " + ", ".join(stale_bwrap_caps),
+            )
         target = _first_student_container()
         if target:
             if not docker.wait_ssh_ready(target[0], timeout=10, interval=1):
@@ -420,13 +458,14 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "--unshare-pid", "--new-session", "true",
             ]
             raw_bwrap_ok = mode_ok and _student_command(target, bwrap_smoke)
-            nested_userns_ok = nested_userns_ok and _student_command(
-                target, ["unshare", "--user", "--map-root-user", "true"]
-            )
             codex_ok = (
                 _student_command(target, ["codex", "--version"])
                 and _student_command(target, ["codex", "sandbox", "--", "true"])
             )
+            # Fix 3 relies on setuid bwrap's narrowly scoped setup capabilities. Ubuntu may reject
+            # a plain unprivileged `unshare --user` under its global AppArmor restriction; that is
+            # expected and is not the sandbox contract deployed here.
+            nested_userns_ok = nested_userns_ok and (raw_bwrap_ok or codex_ok)
             bwrap_ok = mode_ok and (raw_bwrap_ok or codex_ok)
             npm_prefix_ok = _student_command(
                 target, ["sh", "-c", 'test "$(npm config get prefix)" = "$HOME/.local"']

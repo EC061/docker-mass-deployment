@@ -35,7 +35,8 @@ def test_outer_boundary_and_mounts():
     config = json.loads(docker("inspect", CONTAINER).stdout)[0]
     host = config["HostConfig"]
     assert host["Privileged"] is False
-    assert "SYS_ADMIN" not in (host.get("CapAdd") or [])
+    cap_add = set(host.get("CapAdd") or [])
+    assert {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"}.issubset(cap_add)
     security = host.get("SecurityOpt") or []
     assert "systempaths=unconfined" in security
     assert host["UsernsMode"] == "host"
@@ -60,7 +61,6 @@ def test_setuid_bubblewrap_and_codex():
              "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
              "--unshare-pid", "--new-session", "true")
     student_exec(*bwrap)
-    student_exec("unshare", "--user", "--map-root-user", "true")
     student_exec("codex", "--version")
     student_exec("codex", "sandbox", "--", "true")
     student_exec("codex", "sandbox", "--", *bwrap)

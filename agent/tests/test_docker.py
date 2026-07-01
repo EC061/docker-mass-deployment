@@ -21,14 +21,16 @@ def test_runc_host_userns_outer_container_contract():
     assert "seccomp=/etc/lab-agent/security/lab-codex-seccomp.json" in joined
     assert "apparmor=unconfined" in joined
     assert "systempaths=unconfined" in joined
+    for capability in ("SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"):
+        assert f"--cap-add {capability}" in joined
     assert "source=/fast/bio,target=/home" in joined
     assert "source=/cold/bio,target=/cold-storage" in joined
     assert "target=/run/labquota,readonly" in joined
     assert "--storage-opt size=100g" in joined
     assert "--stop-signal SIGTERM" in joined
     assert "SIGRTMIN+3" not in joined
-    for forbidden in ("--privileged", "--cap-add", "SYS_ADMIN", "/var/run/docker.sock",
-                      "no-new-privileges", "seccomp=unconfined"):
+    for forbidden in ("--privileged", "/var/run/docker.sock", "no-new-privileges",
+                      "seccomp=unconfined"):
         assert forbidden not in joined
 
 

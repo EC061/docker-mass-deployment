@@ -118,6 +118,11 @@ def build_run_args(
     args += [
         "--runtime=runc", "--userns=host", "--cgroupns=private", "--stop-signal", "SIGTERM"
     ]
+    # A setuid bubblewrap drops to the caller while retaining this minimal setup set. Docker's
+    # default bounding set omits all three, which makes bwrap's capset(2) fail with EPERM before it
+    # can create the sandbox. These capabilities remain confined to the outer lab container.
+    for capability in ("SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"):
+        args += ["--cap-add", capability]
     args += ["--tmpfs", "/run:rw,nosuid,nodev", "--tmpfs", "/run/lock:rw,nosuid,nodev"]
     args += ["--security-opt", f"seccomp={mounts.seccomp_profile}"]
     # The setuid-root bubblewrap image contract is paired with an unconfined outer AppArmor policy.

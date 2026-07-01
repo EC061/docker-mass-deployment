@@ -165,6 +165,18 @@ def test_stale_lab_userns_containers_detects_remapped_contract(monkeypatch):
     assert system._stale_lab_userns_containers() == ["lab-old", "lab-remapped"]
 
 
+def test_stale_bwrap_capability_containers_detects_missing_contract(monkeypatch):
+    monkeypatch.setattr(system, "run", Runner({
+        "docker ps": (True, "lab-old\nlab-partial\nlab-current\n"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-old": (True, "null"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-partial":
+            (True, '["CAP_SYS_ADMIN"]'),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-current":
+            (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
+    }))
+    assert system._stale_bwrap_capability_containers() == ["lab-old", "lab-partial"]
+
+
 def test_deep_doctor_accepts_codex_sandbox_when_raw_bwrap_fails(monkeypatch):
     runner = healthy_runner()
     runner.responses.update({
@@ -174,12 +186,12 @@ def test_deep_doctor_accepts_codex_sandbox_when_raw_bwrap_fails(monkeypatch):
         "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
             (True, "[]\t[]"),
         "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test":
+            (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
         "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
         "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
             (False, ""),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test unshare":
-            (True, ""),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test codex --version":
             (True, "codex 1.2.3"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test codex sandbox -- true":
