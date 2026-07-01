@@ -214,6 +214,21 @@ def _stale_seccomp_containers(cfg: AgentConfig) -> list[str]:
     return stale
 
 
+def _stale_systempaths_containers() -> list[str]:
+    """Return managed containers created before the bubblewrap-compatible /proc contract."""
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true",
+        "--format", '{{.Names}}\t{{.Label "lab-agent.systempaths-unconfined"}}',
+    ], timeout=20)
+    if not listed.ok:
+        return []
+    return [
+        parts[0]
+        for line in listed.stdout.splitlines()
+        if (parts := line.split("\t", 1)) and (len(parts) == 1 or parts[1] != "true")
+    ]
+
+
 def _first_student_container() -> tuple[str, str] | None:
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
@@ -330,6 +345,15 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "Managed containers require recreation after a seccomp profile update: "
                 + ", ".join(stale_seccomp),
             )
+        stale_systempaths = _stale_systempaths_containers()
+        if stale_systempaths:
+            _issue(
+                issues,
+                "container_systempaths_stale",
+                "critical",
+                "Managed containers require recreation for nested bubblewrap procfs: "
+                + ", ".join(stale_systempaths),
+            )
         target = _first_student_container()
         if target:
             if not docker.wait_ssh_ready(target[0], timeout=10, interval=1):
@@ -342,15 +366,19 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
             mode = run(["docker", "exec", target[0], "stat", "-c", "%a", "/usr/bin/bwrap"],
                        timeout=20)
             mode_ok = mode.ok and mode.stdout.strip() == "755"
-            # Codex owns its bwrap invocation and changes it as the Linux sandbox evolves. Keep
-            # this distribution-binary check to the contract we control; codex_ok below is the
-            # authoritative end-to-end sandbox smoke test.
-            bwrap_ok = mode_ok and _student_command(target, ["bwrap", "--version"])
+            bwrap_smoke = [
+                "bwrap", "--unshare-user", "--uid", "0", "--gid", "0",
+                "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+                "--unshare-pid", "--new-session", "true",
+            ]
+            bwrap_ok = mode_ok and _student_command(target, bwrap_smoke)
             nested_userns_ok = nested_userns_ok and _student_command(
                 target, ["unshare", "--user", "--map-root-user", "true"]
             )
-            codex_ok = _student_command(target, ["codex", "--version"]) and _student_command(
-                target, ["codex", "sandbox", "--", "true"]
+            codex_ok = (
+                _student_command(target, ["codex", "--version"])
+                and _student_command(target, ["codex", "sandbox", "--", "true"])
+                and _student_command(target, ["codex", "sandbox", "--", *bwrap_smoke])
             )
             npm_prefix_ok = _student_command(
                 target, ["sh", "-c", 'test "$(npm config get prefix)" = "$HOME/.local"']
@@ -372,7 +400,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
             )
     if not bwrap_ok:
         _issue(issues, "bubblewrap_failed", "critical",
-               "Distribution /usr/bin/bwrap is missing, setuid, or not executable", True)
+               "Distribution /usr/bin/bwrap cannot create a user/PID/proc sandbox", True)
     if not nested_userns_ok and not any(i.code == "bubblewrap_namespace" for i in issues):
         _issue(issues, "bubblewrap_namespace", "critical",
                "Nested unprivileged user namespace test failed", True)

@@ -137,3 +137,10 @@ def test_stale_seccomp_containers_detects_missing_and_changed_labels(monkeypatch
         "docker ps": (True, "lab-old\nlab-stale\tprevious\nlab-current\tcurrent\n"),
     }))
     assert system._stale_seccomp_containers(cfg()) == ["lab-old", "lab-stale"]
+
+
+def test_stale_systempaths_containers_detects_old_contract(monkeypatch):
+    monkeypatch.setattr(system, "run", Runner({
+        "docker ps": (True, "lab-old\nlab-stale\tfalse\nlab-current\ttrue\n"),
+    }))
+    assert system._stale_systempaths_containers() == ["lab-old", "lab-stale"]

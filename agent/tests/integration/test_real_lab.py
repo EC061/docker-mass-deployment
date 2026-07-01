@@ -36,7 +36,9 @@ def test_outer_boundary_and_mounts():
     host = config["HostConfig"]
     assert host["Privileged"] is False
     assert "SYS_ADMIN" not in (host.get("CapAdd") or [])
-    assert all("unconfined" not in item for item in host.get("SecurityOpt") or [])
+    security = host.get("SecurityOpt") or []
+    assert "systempaths=unconfined" in security
+    assert "seccomp=unconfined" not in security and "apparmor=unconfined" not in security
     destinations = {mount["Destination"] for mount in config["Mounts"]}
     assert destinations == {"/home", "/cold-storage", "/run/labquota"}
     assert docker("exec", CONTAINER, "cat", "/proc/1/comm").stdout.strip() == "sshd"
@@ -48,10 +50,14 @@ def test_outer_boundary_and_mounts():
 
 
 def test_unprivileged_bubblewrap_and_codex():
-    student_exec("bwrap", "--version")
+    bwrap = ("bwrap", "--unshare-user", "--uid", "0", "--gid", "0",
+             "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
+             "--unshare-pid", "--new-session", "true")
+    student_exec(*bwrap)
     student_exec("unshare", "--user", "--map-root-user", "true")
     student_exec("codex", "--version")
     student_exec("codex", "sandbox", "--", "true")
+    student_exec("codex", "sandbox", "--", *bwrap)
 
 
 def test_gpu_storage_and_quota_commands():
