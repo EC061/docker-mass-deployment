@@ -28,6 +28,7 @@ describe("Server Actions reject unauthenticated callers", () => {
   let templates: typeof import("../src/app/(app)/email-templates/actions.js");
   let backups: typeof import("../src/app/(app)/backups/actions.js");
   let stats: typeof import("../src/app/(app)/stats/actions.js");
+  let gpu: typeof import("../src/app/(app)/gpu/actions.js");
 
   beforeAll(async () => {
     labs = await import("../src/app/(app)/labs/actions.js");
@@ -36,6 +37,7 @@ describe("Server Actions reject unauthenticated callers", () => {
     templates = await import("../src/app/(app)/email-templates/actions.js");
     backups = await import("../src/app/(app)/backups/actions.js");
     stats = await import("../src/app/(app)/stats/actions.js");
+    gpu = await import("../src/app/(app)/gpu/actions.js");
   });
 
   const fd = () => new FormData();
@@ -54,6 +56,7 @@ describe("Server Actions reject unauthenticated callers", () => {
       labs.addMemberAction(fd()),
       labs.removeMemberAction(fd()),
       stats.usageScanAction(fd()),
+      gpu.clearGpuEventsAction(),
       students.importStudentsAction({ labId: 1, rows: [] }),
       settings.saveStorageSettingsAction(fd()),
       settings.saveUsageScanSettingsAction(fd()),

@@ -1,5 +1,7 @@
 import { db } from "@/lib/db";
 import { ago, fmtBytes } from "@/lib/format";
+import { ConfirmButton } from "../_components/ConfirmButton";
+import { clearGpuEventsAction } from "./actions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -16,6 +18,7 @@ interface SnapRow {
 }
 
 interface EventRow {
+  id: number;
   node: string;
   pid: number | null;
   user: string | null;
@@ -74,7 +77,21 @@ export default function GpuPage() {
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Recent idle-kill events</h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-base font-semibold">Recent idle-kill events</h3>
+            {events.length > 0 ? (
+              <form action={clearGpuEventsAction}>
+                <ConfirmButton
+                  size="sm"
+                  title="Clear GPU events?"
+                  confirmLabel="Clear events"
+                  confirm="Clear all recorded GPU idle-kill events? This cannot be undone and does not affect live GPU processes."
+                >
+                  Clear events
+                </ConfirmButton>
+              </form>
+            ) : null}
+          </div>
           {events.length === 0 ? (
             <p className="text-sm text-muted-foreground">No events yet.</p>
           ) : (
@@ -90,8 +107,8 @@ export default function GpuPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {events.map((e, i) => (
-                  <TableRow key={i}>
+                {events.map((e) => (
+                  <TableRow key={e.id}>
                     <TableCell className="text-muted-foreground">{ago(e.ts)}</TableCell>
                     <TableCell>{e.node}</TableCell>
                     <TableCell>{e.pid ?? "—"}</TableCell>
