@@ -71,6 +71,7 @@ jobs:
           '
           output=$(docker run --rm \
             --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
+            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
             --security-opt apparmor=unconfined --security-opt systempaths=unconfined \
             --entrypoint sh custom-ssh:ci -c '
               useradd -m -s /bin/bash student
