@@ -60,7 +60,8 @@ existing_group=$(getent group {gid} | cut -d: -f1 || true)
 if [ -z "$existing_group" ]; then groupadd -g {gid} "$u"; else test "$existing_group" = "$u"; fi
 if ! id "$u" >/dev/null 2>&1; then
   useradd -M -d /home/"$u" -u {uid} -g {gid} -s /bin/bash "$u"
-  cp -a -n --chown={uid}:{gid} /etc/skel/. /home/"$u"/
+  cp -a -n /etc/skel/. /home/"$u"/
+  chown -R {uid}:{gid} /home/"$u"/
 fi
 test "$(id -u "$u")" = "{uid}"
 test "$(id -g "$u")" = "{gid}"
