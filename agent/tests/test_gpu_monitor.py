@@ -2,6 +2,16 @@ from lab_agent.executors.base import CommandResult
 from lab_agent.gpu import monitor
 
 
+class _FakeProcFile:
+    def __init__(self, files):
+        self.files = files
+
+    def __call__(self, path, **kwargs):
+        from io import StringIO
+
+        return StringIO(self.files[path])
+
+
 def test_list_gpu_processes_merges_vram_and_util(monkeypatch):
     def fake_run(args, **kwargs):
         argv = [str(a) for a in args]
@@ -41,6 +51,24 @@ def test_parse_inspect_distinguishes_managed_from_unmanaged():
     # An unmanaged container: docker emits "<no value>" for missing labels -> managed False, lab None.
     assert monitor._parse_inspect("/rando|<no value>|<no value>") == ("rando", False, None)
     assert monitor._parse_inspect("/x||") == ("x", False, None)
+
+
+def test_proc_uid_translates_userns_remapped_host_uid(monkeypatch):
+    files = {
+        "/proc/123/status": "Name:\tpython3\nUid:\t241072\t241072\t241072\t241072\n",
+        "/proc/123/uid_map": "         0     231072      65536\n",
+    }
+    monkeypatch.setattr("builtins.open", _FakeProcFile(files))
+    assert monitor._proc_uid(123) == 10000
+
+
+def test_proc_uid_is_unchanged_without_userns_remap(monkeypatch):
+    files = {
+        "/proc/456/status": "Uid:\t10000\t10000\t10000\t10000\n",
+        "/proc/456/uid_map": "         0          0 4294967295\n",
+    }
+    monkeypatch.setattr("builtins.open", _FakeProcFile(files))
+    assert monitor._proc_uid(456) == 10000
 
 
 def test_list_gpu_processes_carries_managed_label(monkeypatch):
