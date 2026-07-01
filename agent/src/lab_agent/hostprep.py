@@ -71,7 +71,15 @@ NVIDIA_CGROUPFS_EXEC_OPT = "native.cgroupdriver=cgroupfs"
 def merge_daemon_config(current: dict[str, Any], cfg: AgentConfig, *, use_zfs: bool,
                          gpu_present: bool) -> dict[str, Any]:
     merged = dict(current)
-    merged["userns-remap"] = cfg.userns_user
+    # Deliberately NOT enabling "userns-remap". Labs run with --userns=host (bubblewrap needs the
+    # initial user namespace, see executors/docker.py), which opts each container out of remapping
+    # anyway — so a daemon-wide remap gives labs no containment. Its only real effect is that Docker
+    # unpacks the image into a remapped graph store and chowns every file, including setuid
+    # /usr/bin/passwd and /usr/bin/sudo, to the subordinate base UID; under --userns=host those
+    # binaries then elevate to that unprivileged UID instead of real root, so passwd, sudo, and
+    # every other setuid-root program fail inside the lab ("Authentication token manipulation
+    # error"). Drop any stale key an earlier agent left behind.
+    merged.pop("userns-remap", None)
     merged["data-root"] = cfg.docker_data_root
     if use_zfs:
         # The data-root is a native ZFS dataset; the zfs graphdriver clones it per layer/container
@@ -435,6 +443,10 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
     if not Path("/sys/kernel/security/apparmor/features/domain/stack").exists():
         raise RuntimeError("kernel lacks AppArmor namespace support")
 
+    # Reserve the subordinate-ID range for the labdockremap account. The daemon no longer consumes
+    # it (see merge_daemon_config — labs run --userns=host, not remapped), but keeping the exact
+    # reservation stops the range being handed to another account and keeps the numeric mapping the
+    # controller reports for cross-node cold-storage consistency stable.
     _ensure_account(cfg.userns_user)
     for path in (SUBUID, SUBGID):
         current = path.read_text(encoding="utf-8") if path.exists() else ""

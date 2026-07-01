@@ -111,16 +111,17 @@ def _sysctl_int(name: str) -> int:
 
 
 def _docker_userns(cfg: AgentConfig) -> bool:
+    """Healthy when the daemon does NOT enable userns-remap.
+
+    Labs run with --userns=host, so a remapped daemon gives them no containment; its only effect is
+    that Docker unpacks the image into a remapped graph store and chowns every file — including
+    setuid /usr/bin/passwd and /usr/bin/sudo — to the subordinate base UID. Under --userns=host
+    those binaries then elevate to that unprivileged UID instead of real root, so passwd, sudo, and
+    every setuid-root program fail inside the lab. ``docker info`` reports ``name=userns`` in its
+    security options exactly when the running daemon is remapping, which is the authoritative check.
+    """
     res = run(["docker", "info", "--format", "{{json .SecurityOptions}}"], timeout=20)
-    if not res.ok or "userns" not in res.stdout:
-        return False
-    if cfg.userns_user in res.stdout:
-        return _subid_ok(cfg)
-    try:
-        daemon = json.loads(open("/etc/docker/daemon.json", encoding="utf-8").read())
-    except (OSError, json.JSONDecodeError):
-        return False
-    return daemon.get("userns-remap") == cfg.userns_user and _subid_ok(cfg)
+    return res.ok and "name=userns" not in res.stdout
 
 
 def _docker_root_ok(cfg: AgentConfig) -> bool:
@@ -355,7 +356,9 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     userns_ok = docker_ok and _docker_userns(cfg)
     if docker_ok and not userns_ok:
         _issue(issues, "docker_userns", "critical",
-               f"Docker userns-remap must use '{cfg.userns_user}'", True)
+               "Docker userns-remap must be disabled: labs run --userns=host and a remapped daemon "
+               "breaks setuid passwd/sudo inside the lab — re-run host-prepare and recreate "
+               "placements")
 
     clone_ok = _sysctl_int("kernel.unprivileged_userns_clone") == 1
     max_userns = _sysctl_int("user.max_user_namespaces")
