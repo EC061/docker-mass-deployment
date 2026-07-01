@@ -68,6 +68,9 @@ jobs:
             test "$(stat -c %U:%G /usr/bin/bwrap)" = root:root
             test "$(stat -c %a /usr/bin/bwrap)" = 4755
             useradd -m -s /bin/bash student
+            su - student -c "nvcc --version"
+            env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+              nvcc --version
           '
           output=$(docker run --rm \
             --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
