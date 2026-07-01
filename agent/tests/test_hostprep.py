@@ -228,7 +228,8 @@ def test_running_labs_get_home_owned_npm_prefix(monkeypatch):
     assert all("chmod 0755 /usr/bin/bwrap" in call for call in exec_calls)
     assert all('"$home/.npmrc"' in call for call in exec_calls)
     assert all('"$home/.codex/config.toml"' in call for call in exec_calls)
-    assert all("use_legacy_landlock = true" in call for call in exec_calls)
+    assert all("use_legacy_landlock" in call for call in exec_calls)
+    assert all("if [ -f" in call for call in exec_calls)
     assert all("10000" in call and "59999" in call for call in exec_calls)
 
 

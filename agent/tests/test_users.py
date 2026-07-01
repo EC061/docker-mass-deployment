@@ -32,8 +32,8 @@ def test_add_user_exact_ids_sudo_and_flat_links(monkeypatch):
     assert '/home/"$u"/.npmrc' in script
     assert "prefix=/home/%s/.local" in script
     assert '/home/"$u"/.local/bin' in script
-    assert '/home/"$u"/.codex/config.toml' in script
-    assert "use_legacy_landlock = true" in script
+    assert '/home/"$u"/.codex' not in script
+    assert "use_legacy_landlock" not in script
 
 
 def test_uid_and_username_validation(monkeypatch):

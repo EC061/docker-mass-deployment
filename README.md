@@ -7,8 +7,8 @@ daemon-remapped parent namespace locks the inherited mounts that nested bubblewr
 
 Codex is a required workload. The lab image includes a pinned Codex CLI and distribution
 `/usr/bin/bwrap`; the outer container uses dedicated seccomp and AppArmor profiles for sandbox
-setup without granting outer `CAP_SYS_ADMIN`. `host-prepare` also enables Codex's legacy Landlock
-sandbox path for student homes, which avoids requiring setuid bubblewrap inside Docker.
+setup without granting outer `CAP_SYS_ADMIN`. The doctor validates Codex's supported sandbox command
+directly; raw bubblewrap procfs setup may remain unavailable at the outer container boundary.
 
 ## Persistent layout
 
@@ -107,8 +107,8 @@ sudo lab-agent host-prepare
 - installs and loads `lab-codex-seccomp.json`, `lab-codex`, and the distribution
   `bwrap-userns-restrict` profile when available;
 - restores non-setuid mode on `/usr/bin/bwrap` in running managed labs;
-- configures existing student homes with `~/.codex/config.toml` so Codex uses its legacy Landlock
-  sandbox path instead of requiring setuid bubblewrap inside Docker;
+- removes the deprecated `features.use_legacy_landlock` opt-in from existing student Codex configs
+  while preserving all unrelated settings;
 - regenerates NVIDIA CDI at `/etc/cdi/nvidia.yaml` when `nvidia-ctk` is installed.
 
 Seccomp policy is fixed when Docker creates a container. If an agent upgrade changes
