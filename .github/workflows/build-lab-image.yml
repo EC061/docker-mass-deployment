@@ -1,0 +1,85 @@
+name: Build lab image
+
+# Gated on CI: a push to main runs the "CI" workflow (which also validates this image builds via the
+# lab-image job); only once it succeeds does this publish fire. Version tags (v*) and manual runs
+# build directly without waiting on CI. Lab nodes are NVIDIA GPU hosts (amd64-only), so this is a
+# single-arch publish — no multi-arch merge needed like the controller image.
+#
+# NOTE: workflow_run always uses the copy of this file on the default branch — these changes only
+# take effect once merged to main.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE: ${{ github.repository_owner }}/custom-ssh
+
+jobs:
+  build:
+    # Build on: CI success on main, or a version tag / manual dispatch. PR and rewrite/** CI runs
+    # (different head_branch/event) are filtered out so we only publish from main.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Lowercase image
+        env:
+          image: ${{ env.IMAGE }}
+        run: echo "IMAGE_LC=${image,,}" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+        with:
+          # For workflow_run, check out the exact commit CI validated. Empty for push/dispatch, which
+          # falls back to the triggering ref (the tag or branch).
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@d7f5e7f509e45cec5c76c4d5afdd7de93d0b3df5 # v4
+
+      - name: Docker metadata (tags + labels)
+        id: meta
+        uses: docker/metadata-action@80c7e94dd9b9319bd5eb7a0e0fe9291e23a2a2e9 # v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_LC }}
+          tags: |
+            # main (workflow_run) and manual runs move :latest; a v* tag push is a release and only
+            # gets its semver tag. ('push' here is exclusively the tags: ["v*"] trigger.)
+            type=raw,value=latest,enable=${{ github.event_name != 'push' }}
+            type=sha
+            type=semver,pattern={{version}}
+
+      - name: Build and push
+        uses: docker/build-push-action@f9f3042f7e2789586610d6e8b85c8f03e5195baf # v7
+        with:
+          context: ./image
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          # No provenance/SBOM attestation manifest — that is the spurious "unknown/unknown" entry on
+          # the GHCR package page.
+          provenance: false
+          sbom: false
+
+      - name: Inspect manifest
+        run: docker buildx imagetools inspect ${{ env.REGISTRY }}/${{ env.IMAGE_LC }}:${{ steps.meta.outputs.version }}

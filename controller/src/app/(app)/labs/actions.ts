@@ -102,10 +102,10 @@ export async function grantNodeAccessAction(formData: FormData) {
   const who = await actor();
   const labId = Number(formData.get("labId"));
   const nodeId = Number(formData.get("nodeId"));
-  if (!labId || !nodeId) throw new Error("Lab and node are required");
-  const image = String(formData.get("image") ?? "").trim() || "custom-ssh";
+  const image = String(formData.get("image") ?? "").trim() || "ghcr.io/ec061/custom-ssh:latest";
   const coldTb = formData.get("coldTb");
   try {
+    if (!labId || !nodeId) throw new Error("Lab and node are required");
     await createPlacement({
       labId,
       nodeId,
@@ -175,7 +175,7 @@ export async function recreatePlacementSettingsAction(formData: FormData) {
   const placementId = Number(formData.get("placementId"));
   const placement = getPlacement(placementId);
   if (!placement) redirect("/labs");
-  const image = String(formData.get("image") ?? "").trim() || "custom-ssh";
+  const image = String(formData.get("image") ?? "").trim() || "ghcr.io/ec061/custom-ssh:latest";
   const containerOptions = containerOptionsFromForm(formData);
   try {
     recreatePlacement(placementId, { image, containerOptions }, who);
@@ -238,8 +238,10 @@ export async function removePlacementAction(formData: FormData) {
   }
   revalidatePath(`/labs/${placement.lab_id}`);
   revalidatePath(`/labs/${placement.lab_id}/placements/${placement.id}`);
-  const fid = putFlash("Removal queued. The placement remains visible until the node confirms destruction.");
-  redirect(`/labs/${placement.lab_id}/placements/${placement.id}?saved=${fid}`);
+  // Don't send the user back to the placement's own page: the row (and that page) disappears
+  // as soon as the node confirms teardown, which can race the redirect.
+  const fid = putFlash("Removal queued. The placement remains visible on the lab page until the node confirms destruction.");
+  redirect(`/labs/${placement.lab_id}?saved=${fid}`);
 }
 
 export async function addMemberAction(formData: FormData) {

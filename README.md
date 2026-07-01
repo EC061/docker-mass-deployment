@@ -119,10 +119,17 @@ sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
 
 Nodes are dedicated to managed labs because Docker user-namespace remapping is daemon-wide.
 
-## 2. Build the lab image
+## 2. Get the lab image
+
+The default image is `ghcr.io/ec061/custom-ssh:latest`, built and pushed by the `Build lab image`
+GitHub Actions workflow (`image/Dockerfile`) on every merge to main. The agent pulls it automatically
+on first use, so nodes with GHCR access need no manual step here.
+
+To customize the image or build offline instead, build it locally under that same tag and point
+placements at it (or override the image per-placement in the controller UI):
 
 ```bash
-docker build -t custom-ssh image
+docker build -t ghcr.io/ec061/custom-ssh:latest image
 ```
 
 The image contains systemd, SSH, sudo, Python, Node.js LTS, bubblewrap, uidmap, seccomp support,
