@@ -69,6 +69,7 @@ profile lab-codex//lab-codex-bwrap flags=(attach_disconnected,mediate_deleted) {
   deny /sys/devices/system/cpu/**/thermal_throttle/** rwklx,
   deny /sys/kernel/security/** rwklx,
   mount,
+  remount,
   umount,
   pivot_root,
   /** ix,
