@@ -210,6 +210,7 @@ def test_security_assets_include_required_runtime_syscalls():
     apparmor = root.joinpath("lab-codex.apparmor").read_text()
     assert "/usr/bin/bwrap Px -> lab-codex//lab-codex-bwrap" in apparmor
     assert "profile lab-codex//lab-codex-bwrap" in apparmor and "userns," in apparmor
+    assert "  mount options=(rw, make-rslave) -> **,\n" in apparmor
     assert "  remount,\n" in apparmor
 
 

@@ -68,6 +68,8 @@ profile lab-codex//lab-codex-bwrap flags=(attach_disconnected,mediate_deleted) {
   deny /sys/devices/virtual/powercap/** rwklx,
   deny /sys/devices/system/cpu/**/thermal_throttle/** rwklx,
   deny /sys/kernel/security/** rwklx,
+  mount options=(rw, make-rslave) -> **,
+  mount options=(rw, make-slave) -> **,
   mount,
   remount,
   umount,
