@@ -53,12 +53,12 @@ def fmt_bytes(n) -> str:
 
 
 def fmt_pair(pair) -> str:
-    """'used / quota (pct%)' for a {used, quota} object, tolerating missing quota / missing data."""
+    """Format usage, adding quota and percentage only when an actual quota is present."""
     if not pair:
         return "—"
     used = pair.get("used")
     quota = pair.get("quota")
-    base = f"{fmt_bytes(used)} / {fmt_bytes(quota)}" if quota else f"{fmt_bytes(used)} / —"
+    base = f"{fmt_bytes(used)} / {fmt_bytes(quota)}" if quota else fmt_bytes(used)
     if quota and used is not None and quota > 0:
         base += f" ({used * 100 // quota}%)"
     return base
