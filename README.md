@@ -158,7 +158,7 @@ bwrap --ro-bind / / --proc /proc --dev /dev \
   --unshare-user --unshare-pid --unshare-net --new-session true
 unshare --user --map-root-user true
 codex --version
-codex sandbox linux -- true
+codex sandbox -- true
 ```
 
 Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace

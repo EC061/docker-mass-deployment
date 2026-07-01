@@ -350,7 +350,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 target, ["unshare", "--user", "--map-root-user", "true"]
             )
             codex_ok = _student_command(target, ["codex", "--version"]) and _student_command(
-                target, ["codex", "sandbox", "linux", "--", "true"]
+                target, ["codex", "sandbox", "--", "true"]
             )
         else:
             _issue(
@@ -367,7 +367,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                "Nested unprivileged user namespace test failed", True)
     if deep and target is not None and not codex_ok:
         _issue(issues, "codex_sandbox_failed", "critical",
-               "codex sandbox linux -- true failed as a provisioned student")
+               "codex sandbox -- true failed as a provisioned student")
 
     gpu_list = run(["nvidia-smi", "-L"], timeout=20)
     smi_count = sum(1 for line in gpu_list.stdout.splitlines()
