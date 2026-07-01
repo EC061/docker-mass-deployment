@@ -217,16 +217,35 @@ def _stale_seccomp_containers(cfg: AgentConfig) -> list[str]:
 def _stale_systempaths_containers() -> list[str]:
     """Return managed containers created before the bubblewrap-compatible /proc contract."""
     listed = run([
-        "docker", "ps", "--filter", "label=lab-agent.managed=true",
-        "--format", '{{.Names}}\t{{.Label "lab-agent.systempaths-unconfined"}}',
+        "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
     ], timeout=20)
     if not listed.ok:
         return []
-    return [
-        parts[0]
-        for line in listed.stdout.splitlines()
-        if (parts := line.split("\t", 1)) and (len(parts) == 1 or parts[1] != "true")
-    ]
+    stale: list[str] = []
+    for container in listed.stdout.splitlines():
+        paths = run([
+            "docker", "inspect", "--format",
+            "{{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}}", container,
+        ], timeout=20)
+        if not paths.ok:
+            stale.append(container)
+            continue
+        parts = paths.stdout.strip().split("\t", 1)
+        if len(parts) != 2:
+            stale.append(container)
+            continue
+        try:
+            masked_paths = json.loads(parts[0] or "[]")
+            readonly_paths = json.loads(parts[1] or "[]")
+        except json.JSONDecodeError:
+            stale.append(container)
+            continue
+        if not isinstance(masked_paths, list) or not isinstance(readonly_paths, list):
+            stale.append(container)
+            continue
+        if masked_paths or readonly_paths:
+            stale.append(container)
+    return stale
 
 
 def _stale_lab_userns_containers() -> list[str]:

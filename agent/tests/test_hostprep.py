@@ -208,8 +208,8 @@ def test_security_assets_include_required_runtime_syscalls():
             "fsopen", "fsconfig", "fsmount", "move_mount", "open_tree", "mount_setattr",
             "seccomp", "prctl", "capset", "chroot"} <= allowed
     apparmor = root.joinpath("lab-codex.apparmor").read_text()
-    assert "/usr/bin/bwrap cx -> lab-codex-bwrap" in apparmor
-    assert "profile lab-codex-bwrap" in apparmor and "userns," in apparmor
+    assert "/usr/bin/bwrap Px -> lab-codex//lab-codex-bwrap" in apparmor
+    assert "profile lab-codex//lab-codex-bwrap" in apparmor and "userns," in apparmor
 
 
 def test_running_labs_get_home_owned_npm_prefix(monkeypatch):
