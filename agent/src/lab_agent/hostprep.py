@@ -22,7 +22,7 @@ from typing import Any
 
 from .config import AgentConfig
 from .executors.base import run
-from .student_config import codex_config_patch_shell
+from .student_config import codex_config_cleanup_shell
 from .system import _nvidia_hardware_count, _pool_exists
 
 DAEMON_JSON = Path("/etc/docker/daemon.json")
@@ -309,10 +309,11 @@ def _lab_npm_config_script() -> str:
         "    printf 'prefix=%s/.local\\n' \"$home\" >> \"$home/.npmrc\"\n"
         "    chown \"$uid:$gid\" \"$home/.npmrc\"\n"
         "    chmod 0644 \"$home/.npmrc\"\n"
-        "    install -d -m 0755 -o \"$uid\" -g \"$gid\" \"$home/.codex\"\n"
-        + codex_config_patch_shell('"$home/.codex/config.toml"')
-        + "    chown \"$uid:$gid\" \"$home/.codex/config.toml\"\n"
-        "    chmod 0644 \"$home/.codex/config.toml\"\n"
+        "    if [ -f \"$home/.codex/config.toml\" ]; then\n"
+        + codex_config_cleanup_shell('"$home/.codex/config.toml"')
+        + "      chown \"$uid:$gid\" \"$home/.codex/config.toml\"\n"
+        "      chmod 0644 \"$home/.codex/config.toml\"\n"
+        "    fi\n"
         "  fi\n"
         "done\n"
     )

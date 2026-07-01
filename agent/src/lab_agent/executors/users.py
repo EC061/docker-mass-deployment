@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import re
 
-from ..student_config import codex_config_patch_shell
 from .base import CommandResult
 from .docker import DockerError, exec_in
 
@@ -83,10 +82,6 @@ sed -i '/^[[:space:]]*prefix[[:space:]]*=/d' /home/"$u"/.npmrc
 printf 'prefix=/home/%s/.local\n' "$u" >> /home/"$u"/.npmrc
 chown {uid}:{gid} /home/"$u"/.npmrc
 chmod 0644 /home/"$u"/.npmrc
-install -d -m 0755 -o {uid} -g {gid} /home/"$u"/.codex
-{codex_config_patch_shell('/home/"$u"/.codex/config.toml').rstrip()}
-chown {uid}:{gid} /home/"$u"/.codex/config.toml
-chmod 0644 /home/"$u"/.codex/config.toml
 printf '%s:%s' "$u" {_shell_quote(password)} | chpasswd
 """
     return _run_script(container, script)
