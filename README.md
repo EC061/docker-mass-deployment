@@ -154,8 +154,7 @@ the real bubblewrap and Codex smoke tests as that ordinary user. A lab is not he
 commands pass inside its outer container:
 
 ```bash
-bwrap --ro-bind / / --proc /proc --dev /dev \
-  --unshare-user --unshare-pid --unshare-net --new-session true
+bwrap --version
 unshare --user --map-root-user true
 codex --version
 codex sandbox -- true

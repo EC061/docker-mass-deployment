@@ -342,10 +342,10 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
             mode = run(["docker", "exec", target[0], "stat", "-c", "%a", "/usr/bin/bwrap"],
                        timeout=20)
             mode_ok = mode.ok and mode.stdout.strip() == "755"
-            bwrap_ok = mode_ok and _student_command(target, [
-                "bwrap", "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
-                "--unshare-user", "--unshare-pid", "--unshare-net", "--new-session", "true",
-            ])
+            # Codex owns its bwrap invocation and changes it as the Linux sandbox evolves. Keep
+            # this distribution-binary check to the contract we control; codex_ok below is the
+            # authoritative end-to-end sandbox smoke test.
+            bwrap_ok = mode_ok and _student_command(target, ["bwrap", "--version"])
             nested_userns_ok = nested_userns_ok and _student_command(
                 target, ["unshare", "--user", "--map-root-user", "true"]
             )
@@ -361,7 +361,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
             )
     if not bwrap_ok:
         _issue(issues, "bubblewrap_failed", "critical",
-               "Distribution /usr/bin/bwrap is missing, setuid, or cannot create its sandbox", True)
+               "Distribution /usr/bin/bwrap is missing, setuid, or not executable", True)
     if not nested_userns_ok and not any(i.code == "bubblewrap_namespace" for i in issues):
         _issue(issues, "bubblewrap_namespace", "critical",
                "Nested unprivileged user namespace test failed", True)
