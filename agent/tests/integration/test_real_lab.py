@@ -38,6 +38,7 @@ def test_outer_boundary_and_mounts():
     assert "SYS_ADMIN" not in (host.get("CapAdd") or [])
     security = host.get("SecurityOpt") or []
     assert "systempaths=unconfined" in security
+    assert host["UsernsMode"] == "host"
     assert "seccomp=unconfined" not in security and "apparmor=unconfined" not in security
     destinations = {mount["Destination"] for mount in config["Mounts"]}
     assert destinations == {"/home", "/cold-storage", "/run/labquota"}
@@ -70,6 +71,11 @@ def test_gpu_storage_and_quota_commands():
 def test_sudo_reaches_container_root_but_not_host_files():
     if not PASSWORD:
         pytest.skip("set LAB_INTEGRATION_PASSWORD to verify student sudo")
+    passwordless = subprocess.run(
+        ["docker", "exec", "-u", STUDENT, CONTAINER, "sudo", "-n", "true"],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert passwordless.returncode != 0
     with tempfile.NamedTemporaryFile(prefix="lab-host-sentinel-", delete=False) as sentinel:
         sentinel.write(b"host-safe")
         path = sentinel.name

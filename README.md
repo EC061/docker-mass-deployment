@@ -1,8 +1,9 @@
 # Lab Manager: runc, Docker user namespaces, and Codex
 
 This repository runs one standard `runc` container per lab. There is no container engine inside a
-lab, no host engine socket, and no privileged mode. Students retain full `sudo` inside the lab;
-daemon-wide `userns-remap` maps that root account to an unprivileged host ID.
+lab, no host engine socket, and no privileged mode. Students retain full password-authenticated
+`sudo` inside the lab. Managed labs use Docker's per-container host user namespace because a
+daemon-remapped parent namespace locks the inherited mounts that nested bubblewrap must modify.
 
 Codex is a required workload. The lab image includes a pinned Codex CLI and distribution
 `/usr/bin/bwrap`; the outer container uses dedicated seccomp and AppArmor profiles that allow
@@ -33,8 +34,7 @@ the NVIDIA Container Toolkit once it sees GPU hardware). Every node must reserve
 user:  labdockremap
 subuid/subgid start: 231072
 range: 65536
-student container IDs: 10000-59999
-mapped host ID: 231072 + container ID
+student container and host IDs: 10000-59999
 ```
 
 Create the storage roots. The agent creates the per-lab datasets, but the pools must already exist:
@@ -117,6 +117,13 @@ and read-only submounts below `/proc` make Linux reject the fresh procfs mount r
 unprivileged bubblewrap PID namespace. The `lab-codex` AppArmor profile preserves those sensitive
 path restrictions without the conflicting submounts. Existing containers must be recreated after
 this contract changes; doctor reports them as `container_systempaths_stale`.
+
+Managed labs override the daemon default with `--userns=host`. Without that override, Linux locks
+the root mount inherited from Docker's remapped namespace and bubblewrap fails at `make / slave`
+before it can construct its sandbox. Students start unprivileged; each student has a real sudo rule
+that requires their assigned password. AppArmor, seccomp, the absence of Docker's socket, and the
+restricted bind mounts remain the outer boundary. This contract requires a clean lab reinstall
+because persistent ownership changes from remapped IDs to the stable student IDs.
 
 Inspect the resulting Docker settings before accepting work:
 

@@ -4,9 +4,9 @@ A student is a Linux user inside the lab container with:
   /home/<u>               is the persistent fast directory
   /home/<u>/cold-storage  -> /cold-storage/<u>
 
-There are no per-student datasets. The agent creates the storage directories on the host with
-daemon user-namespace-remapped numeric ownership before creating this account. The script is piped
-via stdin so the password never appears in the host process list.
+There are no per-student datasets. The agent creates storage directories with the student's stable
+numeric ownership before creating this account. The script is piped via stdin so the password never
+appears in the host process list.
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ def add_user(container: str, username: str, password: str, uid: int, gid: int) -
     validate_uid(uid, gid)
     # Password is embedded in the stdin-piped script body, never in argv.
     #
-    # Full sudo is intentionally retained. Docker's daemon-wide userns-remap maps container root to
-    # an unprivileged host uid; students remain mutually trusted within their shared lab container.
+    # Full sudo is retained, but it must require the student's password. A late-sorted per-user rule
+    # overrides NOPASSWD defaults that may be supplied by the base image.
     script = f"""set -e
 u={username}
 existing_group=$(getent group {gid} | cut -d: -f1 || true)
@@ -66,6 +66,8 @@ fi
 test "$(id -u "$u")" = "{uid}"
 test "$(id -g "$u")" = "{gid}"
 usermod -aG sudo "$u"
+printf '%s ALL=(ALL:ALL) PASSWD: ALL\n' "$u" > /etc/sudoers.d/zz-lab-agent-"$u"
+chmod 0440 /etc/sudoers.d/zz-lab-agent-"$u"
 chmod 0700 /home/"$u"
 if [ -e /home/"$u"/cold-storage ] && [ ! -L /home/"$u"/cold-storage ]; then
   echo "refusing to replace non-symlink cold-storage path" >&2

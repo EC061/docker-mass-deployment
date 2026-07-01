@@ -144,3 +144,13 @@ def test_stale_systempaths_containers_detects_old_contract(monkeypatch):
         "docker ps": (True, "lab-old\nlab-stale\tfalse\nlab-current\ttrue\n"),
     }))
     assert system._stale_systempaths_containers() == ["lab-old", "lab-stale"]
+
+
+def test_stale_lab_userns_containers_detects_remapped_contract(monkeypatch):
+    monkeypatch.setattr(system, "run", Runner({
+        "docker ps": (True, "lab-old\nlab-remapped\nlab-current\n"),
+        "docker inspect --format {{.HostConfig.UsernsMode}} lab-old": (True, ""),
+        "docker inspect --format {{.HostConfig.UsernsMode}} lab-remapped": (True, "default"),
+        "docker inspect --format {{.HostConfig.UsernsMode}} lab-current": (True, "host"),
+    }))
+    assert system._stale_lab_userns_containers() == ["lab-old", "lab-remapped"]

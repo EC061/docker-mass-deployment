@@ -19,15 +19,16 @@ def add_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     users.validate_username(username)
     users.validate_uid(uid, gid)
 
-    host_uid = cfg.userns_start + uid
-    host_gid = cfg.userns_start + gid
+    # Managed labs use --userns=host, so persistent storage has identical host/container IDs.
+    host_uid = uid
+    host_gid = gid
     fast_root = zfs.get_mountpoint(lab_fast(cfg, lab))
     cold_root = coldstore.lab_mount(cfg, lab)
     coldfs.ensure_owned_dir(f"{fast_root}/{username}", host_uid, host_gid)
     coldfs.ensure_owned_dir(f"{cold_root}/{username}", host_uid, host_gid)
 
-    # The directories already have the daemon-remapped host IDs; the in-container account receives
-    # the matching stable IDs and only creates home-directory symlinks.
+    # The directories already have the student's stable IDs; account creation populates the home
+    # and creates its cold-storage symlink.
     users.add_user(docker.container_name(lab), username, password, uid, gid)
     return {"lab": lab, "username": username, "uid": uid}, (
         f"added student '{username}' (uid={uid}) to lab '{lab}'"

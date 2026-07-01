@@ -30,6 +30,7 @@ def _labels(cfg: AgentConfig, lab: str) -> dict[str, str]:
         # This creation-time Docker option removes /proc overmounts that prevent bubblewrap from
         # mounting the procfs for its PID namespace. Doctor uses the label to reject old labs.
         "lab-agent.systempaths-unconfined": "true",
+        "lab-agent.userns": "host",
     }
 
 

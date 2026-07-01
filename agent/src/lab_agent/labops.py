@@ -41,14 +41,11 @@ def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     )
     coldstore.create_lab(cfg, lab, slow_quota)
 
-    # With Docker userns-remap, container root is a high host uid. It owns each lab mount root so it
-    # can administer users inside the container without gaining host-root ownership.
+    # Managed labs use --userns=host, so container root owns the lab mount roots as host uid 0.
     from .executors import coldfs
 
-    coldfs.ensure_owned_dir(zfs.get_mountpoint(lab_fast(cfg, lab)), cfg.userns_start,
-                            cfg.userns_start, mode=0o711)
-    coldfs.ensure_owned_dir(coldstore.lab_mount(cfg, lab), cfg.userns_start,
-                            cfg.userns_start, mode=0o711)
+    coldfs.ensure_owned_dir(zfs.get_mountpoint(lab_fast(cfg, lab)), 0, 0, mode=0o711)
+    coldfs.ensure_owned_dir(coldstore.lab_mount(cfg, lab), 0, 0, mode=0o711)
 
     # Provision the shared container (no-op if Docker absent -> reported as failure upstream).
     container = containerops.ensure_container(cfg, lab, params)
