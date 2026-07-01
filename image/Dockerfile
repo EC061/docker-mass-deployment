@@ -10,7 +10,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        systemd systemd-sysv dbus openssh-server sudo \
+        openssh-server sudo \
         python3-pip python3-venv \
         bubblewrap uidmap libseccomp2 \
         git ripgrep curl ca-certificates procps util-linux nano gnupg \
@@ -33,14 +33,10 @@ RUN sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh
     && rm -f /etc/ssh/ssh_host_*
 
 COPY labquota /usr/local/bin/labquota
-COPY ssh-hostkeys.service /etc/systemd/system/ssh-hostkeys.service
+COPY entrypoint /usr/local/sbin/lab-entrypoint
 
-RUN chmod 0755 /usr/local/bin/labquota \
-    && systemctl enable ssh ssh-hostkeys \
-    && systemctl mask systemd-udevd.service systemd-udevd-kernel.socket \
-        systemd-udevd-control.socket systemd-modules-load.service \
-        sys-kernel-debug.mount sys-kernel-tracing.mount
+RUN chmod 0755 /usr/local/bin/labquota /usr/local/sbin/lab-entrypoint
 
 EXPOSE 22
-STOPSIGNAL SIGRTMIN+3
-CMD ["/sbin/init"]
+STOPSIGNAL SIGTERM
+ENTRYPOINT ["/usr/local/sbin/lab-entrypoint"]

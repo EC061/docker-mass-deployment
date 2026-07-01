@@ -104,7 +104,7 @@ def build_run_args(
     args += ["--cpus", opts.cpus, "--memory", opts.memory, "--shm-size", opts.shm_size]
     # Standard runc + daemon-wide userns-remap provide the outer boundary. The custom profiles keep
     # outer boundary while allowing unprivileged bubblewrap to create nested namespaces.
-    args += ["--runtime=runc", "--cgroupns=private", "--stop-signal", "SIGRTMIN+3"]
+    args += ["--runtime=runc", "--cgroupns=private", "--stop-signal", "SIGTERM"]
     args += ["--tmpfs", "/run:rw,nosuid,nodev", "--tmpfs", "/run/lock:rw,nosuid,nodev"]
     args += ["--security-opt", f"seccomp={mounts.seccomp_profile}"]
     args += ["--security-opt", f"apparmor={mounts.apparmor_profile}"]
@@ -162,21 +162,12 @@ def create_container(
 # --------------------------------------------------------------------------- recreate primitives
 
 
-def image_present(image: str) -> bool:
-    """True if the image is already available locally (no registry round-trip)."""
-    return run(["docker", "image", "inspect", image], timeout=60).ok
-
-
 def ensure_image(image: str) -> None:
-    """Make sure the image is usable before we touch the running container: validate it, and if it
-    isn't present locally, try to pull it. Raises if it remains unavailable. Lab base images are
-    typically built locally (no registry), so a present local image is the common success path."""
+    """Pull the requested image before deployment so mutable tags never use a stale local copy."""
     validate_image(image)
-    if image_present(image):
-        return
     pulled = run(["docker", "pull", image], timeout=600)
-    if not pulled.ok or not image_present(image):
-        raise DockerError(f"image '{image}' unavailable locally and pull failed: {pulled.logs}")
+    if not pulled.ok:
+        raise DockerError(f"failed to pull image '{image}': {pulled.logs}")
 
 
 def rename_container(old: str, new: str) -> None:
@@ -195,17 +186,26 @@ def start_container(name: str) -> None:
         raise DockerError(res.logs)
 
 
-def wait_systemd_ready(name: str, *, timeout: float = 90.0, interval: float = 2.0) -> bool:
-    """Poll until sshd is active under the container's systemd, or the timeout elapses. Verifies a
-    freshly recreated container actually came up before promoting it over the preserved old one."""
+def wait_ssh_ready(name: str, *, timeout: float = 90.0, interval: float = 2.0) -> bool:
+    """Poll until sshd is PID 1 with a valid configuration, or the timeout elapses."""
     deadline = time.monotonic() + timeout
     while True:
-        res = exec_in(name, ["systemctl", "is-active", "ssh"], timeout=15)
-        if res.ok and res.stdout.strip() == "active":
+        res = exec_in(
+            name,
+            ["sh", "-c", 'test "$(cat /proc/1/comm)" = sshd && /usr/sbin/sshd -t'],
+            timeout=15,
+        )
+        if res.ok:
             return True
         if time.monotonic() >= deadline:
             return False
         time.sleep(interval)
+
+
+def container_logs(name: str, *, tail: int = 200) -> str:
+    """Return recent container logs for provisioning errors without raising a second exception."""
+    res = run(["docker", "logs", "--tail", str(tail), name], timeout=30)
+    return "\n".join(part for part in (res.stdout.strip(), res.stderr.strip()) if part)
 
 
 def exec_in(name: str, argv: list[str], *, input_text: str | None = None,

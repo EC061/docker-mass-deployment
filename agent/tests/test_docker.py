@@ -23,6 +23,8 @@ def test_runc_userns_outer_container_contract():
     assert "source=/cold/bio,target=/cold-storage" in joined
     assert "target=/run/labquota,readonly" in joined
     assert "--storage-opt size=100g" in joined
+    assert "--stop-signal SIGTERM" in joined
+    assert "SIGRTMIN+3" not in joined
     for forbidden in ("--privileged", "--cap-add", "SYS_ADMIN", "/var/run/docker.sock",
                       "no-new-privileges", "seccomp=unconfined"):
         assert forbidden not in joined
@@ -51,7 +53,52 @@ def test_rejects_image_flag_injection():
         build_run_args("lab-bio", ContainerOptions(image="--privileged"), mounts(), gpus=False)
 
 
+def test_ensure_image_always_pulls_mutable_tag(monkeypatch):
+    calls = []
+
+    def pulled(argv, **kwargs):
+        calls.append(argv)
+        return CommandResult(True, argv, 0, "latest: Pulling from ec061/custom-ssh")
+
+    monkeypatch.setattr(docker, "run", pulled)
+    docker.ensure_image("ghcr.io/ec061/custom-ssh:latest")
+    assert calls == [["docker", "pull", "ghcr.io/ec061/custom-ssh:latest"]]
+
+
+def test_ensure_image_fails_closed_when_pull_fails(monkeypatch):
+    monkeypatch.setattr(
+        docker,
+        "run",
+        lambda argv, **kwargs: CommandResult(False, argv, 1, stderr="registry unavailable"),
+    )
+    with pytest.raises(DockerError, match="failed to pull image"):
+        docker.ensure_image("ghcr.io/ec061/custom-ssh:latest")
+
+
 def test_usage_helpers(monkeypatch):
     monkeypatch.setattr(docker, "run", lambda *a, **k: CommandResult(True, [], 0, "123\n", ""))
     assert docker.writable_layer_size("lab-bio") == 123
     assert docker.du_home("lab-bio", "alice") == 123
+
+
+def test_wait_ssh_ready_checks_sshd_as_pid_one(monkeypatch):
+    calls = []
+
+    def ready(name, argv, **kwargs):
+        calls.append((name, argv))
+        return CommandResult(True, argv, 0)
+
+    monkeypatch.setattr(docker, "exec_in", ready)
+    assert docker.wait_ssh_ready("lab-bio", timeout=0, interval=0)
+    assert calls == [("lab-bio", [
+        "sh", "-c", 'test "$(cat /proc/1/comm)" = sshd && /usr/sbin/sshd -t'
+    ])]
+
+
+def test_wait_ssh_ready_times_out(monkeypatch):
+    monkeypatch.setattr(
+        docker,
+        "exec_in",
+        lambda name, argv, **kwargs: CommandResult(False, argv, 1),
+    )
+    assert not docker.wait_ssh_ready("lab-bio", timeout=0, interval=0)

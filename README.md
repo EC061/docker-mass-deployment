@@ -122,8 +122,8 @@ Nodes are dedicated to managed labs because Docker user-namespace remapping is d
 ## 2. Get the lab image
 
 The default image is `ghcr.io/ec061/custom-ssh:latest`, built and pushed by the `Build lab image`
-GitHub Actions workflow (`image/Dockerfile`) on every merge to main. The agent pulls it automatically
-on first use, so nodes with GHCR access need no manual step here.
+GitHub Actions workflow (`image/Dockerfile`) on every merge to main. The agent pulls it before every
+create or recreate, so mutable tags never deploy a stale locally cached image.
 
 To customize the image or build offline instead, build it locally under that same tag and point
 placements at it (or override the image per-placement in the controller UI):
@@ -132,9 +132,10 @@ placements at it (or override the image per-placement in the controller UI):
 docker build -t ghcr.io/ec061/custom-ssh:latest image
 ```
 
-The image contains systemd, SSH, sudo, Python, Node.js LTS, bubblewrap, uidmap, seccomp support,
-Git, ripgrep, curl, proc tools, and a version-pinned Codex CLI. It intentionally contains no Docker
-packages, daemon configuration, socket, inner NVIDIA runtime, or NVIDIA service.
+The image runs OpenSSH directly as PID 1 and contains sudo, Python, Node.js LTS, bubblewrap, uidmap,
+seccomp support, Git, ripgrep, curl, proc tools, and a version-pinned Codex CLI. It intentionally
+contains no systemd, Docker packages, daemon configuration, socket, inner NVIDIA runtime, or NVIDIA
+service.
 
 ## 3. Start and validate the node
 

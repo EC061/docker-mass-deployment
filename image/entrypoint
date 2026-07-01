@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+# /run is a fresh tmpfs for every container start. sshd refuses to start without its runtime
+# directory, while ssh-keygen -A creates only host keys that do not already exist.
+install -d -m 0755 /run/sshd
+ssh-keygen -A
+/usr/sbin/sshd -t
+
+# Keep sshd in the foreground as PID 1 so Docker owns its lifecycle and captures its logs.
+exec /usr/sbin/sshd -D -e
