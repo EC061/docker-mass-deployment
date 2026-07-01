@@ -1,3 +1,15 @@
+/** Byte size of each quota-input unit, shared with the amount+unit quota forms and their server
+ * actions so the two always agree on what "1 GB" means (binary, matching fmtBytes above). */
+export const QUOTA_UNIT_BYTES = { MB: 1024 ** 2, GB: 1024 ** 3, TB: 1024 ** 4 } as const;
+export type QuotaUnit = keyof typeof QUOTA_UNIT_BYTES;
+
+/** Pick the largest whole unit (MB/GB/TB) for a byte quota, to pre-fill an editable amount+unit
+ * input pair. Rounded to 3 decimals so re-editing an already-set quota doesn't show float noise. */
+export function bytesToQuotaInput(bytes: number): { amount: number; unit: QuotaUnit } {
+  const unit: QuotaUnit = bytes >= QUOTA_UNIT_BYTES.TB ? "TB" : bytes >= QUOTA_UNIT_BYTES.GB ? "GB" : "MB";
+  return { amount: Math.round((bytes / QUOTA_UNIT_BYTES[unit]) * 1000) / 1000, unit };
+}
+
 export function fmtBytes(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
   const units = ["B", "KB", "MB", "GB", "TB", "PB"];
