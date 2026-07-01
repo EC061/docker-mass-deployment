@@ -141,7 +141,13 @@ def test_stale_seccomp_containers_detects_missing_and_changed_labels(monkeypatch
 
 def test_stale_systempaths_containers_detects_old_contract(monkeypatch):
     monkeypatch.setattr(system, "run", Runner({
-        "docker ps": (True, "lab-old\nlab-stale\tfalse\nlab-current\ttrue\n"),
+        "docker ps": (True, "lab-old\nlab-stale\nlab-current\n"),
+        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-old":
+            (True, "null\tnull"),
+        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-stale":
+            (True, '["/proc/kcore"]\t["/proc/sys"]'),
+        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-current":
+            (True, "[]\t[]"),
     }))
     assert system._stale_systempaths_containers() == ["lab-old", "lab-stale"]
 
