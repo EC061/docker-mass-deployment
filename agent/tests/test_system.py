@@ -27,7 +27,7 @@ def healthy_runner():
         "docker info --format {{.Driver}}": (True, "zfs"),
         "docker info --format {{.DockerRootDir}}": (True, "/var/lib/docker/231072.231072"),
         "docker info --format {{json .SecurityOptions}}":
-            (True, '["name=seccomp,profile=default","name=userns:user=labdockremap"]'),
+            (True, '["name=seccomp,profile=default","name=apparmor"]'),
         "sysctl -n kernel.unprivileged_userns_clone": (True, "1"),
         "sysctl -n user.max_user_namespaces": (True, "16384"),
         "nvidia-smi -L": (True, "GPU 0: A100"),
@@ -55,16 +55,19 @@ def test_structured_healthy_capabilities(monkeypatch):
     assert caps.to_dict()["runtime"]["userns_start"] == 231072
 
 
-def test_userns_misconfiguration_blocks_health(monkeypatch):
+def test_userns_remap_still_enabled_blocks_health(monkeypatch):
+    # A remapped daemon breaks setuid passwd/sudo under --userns=host, so it must be flagged
+    # critical until host-prepare removes the remap and placements are recreated.
     runner = healthy_runner()
-    runner.responses["docker info --format {{json .SecurityOptions}}"] = (True, '["name=seccomp"]')
+    runner.responses["docker info --format {{json .SecurityOptions}}"] = (
+        True, '["name=seccomp","name=userns:user=labdockremap"]'
+    )
     monkeypatch.setattr(system, "run", runner)
     monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
     caps = system.detect_capabilities(cfg(), deep=False)
     assert caps.health.status == "critical"
-    assert any(i.code == "docker_userns" and i.repairable for i in caps.issues)
+    assert any(i.code == "docker_userns" for i in caps.issues)
 
 
 def test_nvml_mismatch_requires_reboot(monkeypatch):

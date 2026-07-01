@@ -63,7 +63,6 @@ def test_daemon_config_preserves_unrelated_settings():
     merged = merge_daemon_config({"log-driver": "journald"}, cfg(), use_zfs=True, gpu_present=False)
     assert merged == {
         "log-driver": "journald",
-        "userns-remap": "labdockremap",
         "data-root": "/var/lib/docker",
         "storage-driver": "zfs",
     }
@@ -71,7 +70,15 @@ def test_daemon_config_preserves_unrelated_settings():
 
 def test_daemon_config_without_zfs_pools_omits_storage_driver():
     merged = merge_daemon_config({}, cfg(), use_zfs=False, gpu_present=False)
-    assert merged == {"userns-remap": "labdockremap", "data-root": "/var/lib/docker"}
+    assert merged == {"data-root": "/var/lib/docker"}
+
+
+def test_daemon_config_drops_stale_userns_remap():
+    # An earlier agent version enabled remap; re-running host-prepare must remove it so setuid
+    # passwd/sudo work under --userns=host.
+    merged = merge_daemon_config({"userns-remap": "labdockremap"}, cfg(), use_zfs=False,
+                                 gpu_present=False)
+    assert "userns-remap" not in merged
 
 
 def test_daemon_config_gpu_present_pins_cgroupfs():

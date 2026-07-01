@@ -93,13 +93,18 @@ sudo lab-agent host-prepare
   only when something is actually missing;
 - installs `nvidia-container-toolkit` (from NVIDIA's official apt repo) when it detects NVIDIA GPU
   hardware and the package isn't already present — it never installs the NVIDIA driver itself;
-- creates `labdockremap` and exact `/etc/subuid` and `/etc/subgid` entries;
+- reserves the `labdockremap` account and its exact `/etc/subuid` and `/etc/subgid` range (kept
+  stable for the cross-node cold-storage numeric mapping; the daemon no longer consumes it — see
+  below);
 - once the fast (and, if applicable, slow) zpool(s) exist, provisions the
   `<fast_pool>/<docker_dataset_name>` ZFS dataset, mounts it at the `data-root` (migrating in any
   existing content first), and applies `docker_quota_gb` as a live ZFS quota — otherwise leaves
   Docker on its plain default backing store;
-- writes Docker `userns-remap` and `data-root`, adds `storage-driver=zfs` once the dataset above is
-  in use, and on GPU nodes pins `exec-opts: ["native.cgroupdriver=cgroupfs"]` to work around a
+- writes Docker `data-root` and **removes any `userns-remap`** an earlier agent set (labs run
+  `--userns=host`, so a remapped daemon adds no containment but chowns the image's setuid
+  `passwd`/`sudo` to the subordinate base UID, breaking them inside the lab — see below), adds
+  `storage-driver=zfs` once the dataset above is in use, and on GPU nodes pins
+  `exec-opts: ["native.cgroupdriver=cgroupfs"]` to work around a
   [known runc/systemd-cgroup-driver bug](https://github.com/opencontainers/runc/discussions/1133)
   that drops a container's GPU device access on `systemctl daemon-reload`, then restarts Docker;
 - enforces `kernel.unprivileged_userns_clone=1`, `user.max_user_namespaces=16384`, and
@@ -122,12 +127,20 @@ unprivileged bubblewrap PID namespace. The `lab-codex` AppArmor profile preserve
 path restrictions without the conflicting submounts. Existing containers must be recreated after
 this contract changes; doctor reports them as `container_systempaths_stale`.
 
-Managed labs override the daemon default with `--userns=host`. Without that override, Linux locks
-the root mount inherited from Docker's remapped namespace and bubblewrap fails at `make / slave`
-before it can construct its sandbox. Students start unprivileged; each student has a real sudo rule
-that requires their assigned password. AppArmor, seccomp, the absence of Docker's socket, and the
-restricted bind mounts remain the outer boundary. This contract requires a clean lab reinstall
-because persistent ownership changes from remapped IDs to the stable student IDs.
+Managed labs run with `--userns=host` (the initial user namespace). Bubblewrap needs it: under a
+remapped namespace Linux locks the inherited root mount and bubblewrap fails at `make / slave`
+before it can construct its sandbox. Because every lab opts out of remapping this way, the daemon
+must **not** enable `userns-remap` at all — a remapped daemon unpacks the image into a remapped
+graph store and chowns every file (including setuid `/usr/bin/passwd` and `/usr/bin/sudo`) to the
+subordinate base UID, so under `--userns=host` those binaries elevate to that unprivileged UID
+instead of real root and fail with "Authentication token manipulation error" (`passwd`) or a setuid
+complaint (`sudo`). `lab-agent doctor` flags a still-remapped daemon as a critical `docker_userns`
+issue; the fix is to re-run `host-prepare` and recreate placements. Students start unprivileged;
+each has a real sudo rule that requires their assigned password. AppArmor, seccomp, the absence of
+Docker's socket, and the restricted bind mounts are the outer boundary. Migrating an
+already-remapped node requires recreating each placement, because the images and container layers
+live in the remapped graph store and persistent ownership moves from remapped IDs to the stable
+student IDs (the ZFS-backed `/home` and `/cold-storage` data is untouched).
 
 Inspect the resulting Docker settings before accepting work:
 
@@ -139,7 +152,8 @@ sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
   kernel.apparmor_restrict_unprivileged_userns
 ```
 
-Nodes are dedicated to managed labs because Docker user-namespace remapping is daemon-wide.
+Nodes are dedicated to managed labs: `host-prepare` sets daemon-wide Docker, AppArmor, and sysctl
+policy, and the security model assumes only agent-created containers run on the node.
 
 ## 2. Get the lab image
 
@@ -181,9 +195,10 @@ codex sandbox -- true
 ```
 
 Doctor still records whether the distribution `bwrap` binary can create a raw nested sandbox, but
-Codex's own sandbox smoke test is the supported pass/fail gate. Do not mark `/usr/bin/bwrap`
-setuid in managed labs; with Docker userns-remap it can appear owned by the remapped host ID or
-fail capability setup inside the outer container.
+Codex's own sandbox smoke test is the supported pass/fail gate. Keep `/usr/bin/bwrap` non-setuid in
+managed labs: it builds its sandbox from the unprivileged user namespace (`--userns=host` plus the
+`kernel.unprivileged_userns_clone` / `user.max_user_namespaces` sysctls above), which is the safer
+path, and the setuid mode has no benefit here. `host-prepare` and `Repair` re-assert `0755` on it.
 
 Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace
 isolation, and that container root cannot modify a host sentinel outside `/home` and
