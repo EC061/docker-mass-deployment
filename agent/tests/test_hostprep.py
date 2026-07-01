@@ -223,6 +223,8 @@ def test_running_labs_get_home_owned_npm_prefix(monkeypatch):
     assert len(exec_calls) == 2
     assert all("prefix=${HOME}/.local" in call for call in exec_calls)
     assert all("/etc/profile.d/lab-npm-user-prefix.sh" in call for call in exec_calls)
+    assert all('"$home/.npmrc"' in call for call in exec_calls)
+    assert all("10000" in call and "59999" in call for call in exec_calls)
 
 
 def test_lab_npm_configuration_script_has_valid_shell_syntax():

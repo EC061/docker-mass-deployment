@@ -26,6 +26,9 @@ def test_add_user_exact_ids_sudo_and_flat_links(monkeypatch):
     assert '/cold-storage/"$u"' in script
     assert '/fast/"$u"' not in script and '/cold/"$u"' not in script
     assert "docker" not in script
+    assert '/home/"$u"/.npmrc' in script
+    assert "prefix=/home/%s/.local" in script
+    assert '/home/"$u"/.local/bin' in script
 
 
 def test_uid_and_username_validation(monkeypatch):

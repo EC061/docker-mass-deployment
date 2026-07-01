@@ -74,6 +74,12 @@ fi
 ln -sfn /cold-storage/"$u" /home/"$u"/cold-storage
 chown -h {uid}:{gid} /home/"$u"/cold-storage
 grep -q '^umask ' /home/"$u"/.bashrc 2>/dev/null || echo 'umask 027' >> /home/"$u"/.bashrc
+install -d -m 0755 -o {uid} -g {gid} /home/"$u"/.local /home/"$u"/.local/bin
+touch /home/"$u"/.npmrc
+sed -i '/^[[:space:]]*prefix[[:space:]]*=/d' /home/"$u"/.npmrc
+printf 'prefix=/home/%s/.local\n' "$u" >> /home/"$u"/.npmrc
+chown {uid}:{gid} /home/"$u"/.npmrc
+chmod 0644 /home/"$u"/.npmrc
 printf '%s:%s' "$u" {_shell_quote(password)} | chpasswd
 """
     return _run_script(container, script)
