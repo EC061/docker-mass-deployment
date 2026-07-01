@@ -41,6 +41,10 @@ def test_outer_boundary_and_mounts():
     assert destinations == {"/home", "/cold-storage", "/run/labquota"}
     assert docker("exec", CONTAINER, "cat", "/proc/1/comm").stdout.strip() == "sshd"
     docker("exec", CONTAINER, "/usr/sbin/sshd", "-t")
+    keys = docker(
+        "exec", CONTAINER, "ssh-keyscan", "-T", "5", "-t", "ed25519", "127.0.0.1"
+    )
+    assert "ssh-ed25519" in keys.stdout
 
 
 def test_unprivileged_bubblewrap_and_codex():

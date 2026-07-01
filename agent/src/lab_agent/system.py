@@ -9,6 +9,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import AgentConfig
+from .executors import docker
 from .executors.base import run
 
 
@@ -194,6 +195,25 @@ def _security_profiles_ok(cfg: AgentConfig) -> bool:
     return status.ok and cfg.apparmor_profile in status.stdout
 
 
+def _stale_seccomp_containers(cfg: AgentConfig) -> list[str]:
+    """Return managed containers not created with the currently installed seccomp policy."""
+    expected = docker.security_profile_digest(cfg.seccomp_profile)
+    if not expected:
+        return []
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true",
+        "--format", '{{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}',
+    ], timeout=20)
+    if not listed.ok:
+        return []
+    stale: list[str] = []
+    for line in listed.stdout.splitlines():
+        parts = line.split("\t", 1)
+        if parts and (len(parts) == 1 or parts[1] != expected):
+            stale.append(parts[0])
+    return stale
+
+
 def _first_student_container() -> tuple[str, str] | None:
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
@@ -301,8 +321,24 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     codex_ok = False
     target: tuple[str, str] | None = None
     if deep and docker_ok:
+        stale_seccomp = _stale_seccomp_containers(cfg)
+        if stale_seccomp:
+            _issue(
+                issues,
+                "container_seccomp_stale",
+                "critical",
+                "Managed containers require recreation after a seccomp profile update: "
+                + ", ".join(stale_seccomp),
+            )
         target = _first_student_container()
         if target:
+            if not docker.wait_ssh_ready(target[0], timeout=10, interval=1):
+                _issue(
+                    issues,
+                    "ssh_handshake_failed",
+                    "critical",
+                    f"SSH key exchange failed in '{target[0]}'; inspect its Docker logs",
+                )
             mode = run(["docker", "exec", target[0], "stat", "-c", "%a", "/usr/bin/bwrap"],
                        timeout=20)
             mode_ok = mode.ok and mode.stdout.strip() == "755"
