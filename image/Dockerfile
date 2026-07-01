@@ -1,36 +1,27 @@
-# SSH-accessible Ubuntu lab image. Docker and NVIDIA integration live only on the host; this image
-# deliberately contains no Docker daemon, Docker CLI, containerd, Docker socket, or NVIDIA runtime.
-# Students retain sudo. Docker userns-remap is disabled on managed nodes so setuid-root binaries
-# keep their real root ownership. Bubblewrap is installed setuid-root for reliable nested sandboxing.
+# SSH-accessible CUDA development lab. Docker/NVIDIA device integration lives on the host; this
+# image contains the CUDA toolkit and libraries, but no Docker daemon, CLI, socket, or inner NVIDIA
+# container runtime. Students retain password-authenticated sudo. Bubblewrap is setuid-root.
 
-FROM ubuntu:noble@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
+FROM nvidia/cuda:13.3.0-devel-ubuntu24.04@sha256:ef2203909e80b8b976cfc672f7e2ae2b00bc0e25c404ee86d89e10a3802f1c52
 
-ARG CODEX_VERSION=0.142.4
 ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         openssh-server sudo \
         python3-pip python3-venv \
-        bubblewrap uidmap libseccomp2 \
+        bubblewrap \
+        build-essential cmake ninja-build pkg-config \
         git ripgrep curl ca-certificates procps util-linux nano gnupg \
-    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install --global "@openai/codex@${CODEX_VERSION}" \
     && chown root:root /usr/bin/bwrap \
     && chmod 4755 /usr/bin/bwrap \
     && test -u /usr/bin/bwrap \
-    && rm -rf /var/lib/apt/lists/* /root/.npm
-
-# Keep the pinned system Codex as a baseline while allowing its student-run in-app updater to
-# install a newer global package into the persistent home without sudo.
-RUN printf '%s\n' 'prefix=${HOME}/.local' > /etc/npmrc \
-    && printf '%s\n' \
-        'export NPM_CONFIG_PREFIX="$HOME/.local"' \
-        'export PATH="$HOME/.local/bin:$PATH"' \
-        > /etc/profile.d/lab-npm-user-prefix.sh \
-    && printf '%s\n' '. /etc/profile.d/lab-npm-user-prefix.sh' >> /etc/bash.bashrc \
-    && chmod 0644 /etc/npmrc /etc/profile.d/lab-npm-user-prefix.sh
+    && nvcc --version \
+    && printf '%s\n' '__global__ void kernel() {}' 'int main() { return 0; }' \
+        > /tmp/cuda-smoke.cu \
+    && nvcc -c /tmp/cuda-smoke.cu -o /tmp/cuda-smoke.o \
+    && rm -f /tmp/cuda-smoke.cu /tmp/cuda-smoke.o \
+    && rm -rf /var/lib/apt/lists/*
 
 # Password SSH remains the initial access mechanism; root login is disabled. Every container creates
 # unique host keys on first boot.

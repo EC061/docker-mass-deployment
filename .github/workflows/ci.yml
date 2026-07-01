@@ -58,12 +58,23 @@ jobs:
         run: sudo apparmor_parser -Q -T agent/src/lab_agent/assets/lab-codex.apparmor
       - name: Build pinned lab image
         run: docker build --tag custom-ssh:ci image
-      - name: Verify student npm prefix
+      - name: Verify CUDA toolkit and bubblewrap
         run: |
           docker run --rm --entrypoint sh custom-ssh:ci -c '
+            nvcc --version
+            ! command -v node
+            ! command -v npm
+            ! command -v codex
+            test "$(stat -c %U:%G /usr/bin/bwrap)" = root:root
+            test "$(stat -c %a /usr/bin/bwrap)" = 4755
             useradd -m -s /bin/bash student
-            su - student -c '\''
-              test "$(npm config get prefix)" = "$HOME/.local"
-              case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) exit 1 ;; esac
-            '\''
+          '
+          output=$(docker run --rm \
+            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
+            --security-opt apparmor=unconfined --security-opt systempaths=unconfined \
+            --entrypoint sh custom-ssh:ci -c '
+              useradd -m -s /bin/bash student
+              su - student -c '\''bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"'\''
+            ')
+          test "$output" = "bwrap works"
           '

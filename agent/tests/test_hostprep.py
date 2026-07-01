@@ -219,28 +219,3 @@ def test_security_assets_include_required_runtime_syscalls():
     assert "profile lab-codex//lab-codex-bwrap" in apparmor and "userns," in apparmor
     assert "  mount options=(rw, make-rslave) -> **,\n" in apparmor
     assert "  remount,\n" in apparmor
-
-
-def test_running_labs_get_home_owned_npm_prefix(monkeypatch):
-    runner = Runner({
-        "docker ps": (True, "lab-one\nlab-two\n"),
-        "docker exec": (True, ""),
-    })
-    monkeypatch.setattr(hostprep, "run", runner)
-    assert hostprep._configure_running_lab_npm() == ["lab-one", "lab-two"]
-    exec_calls = [call for call in runner.calls if call.startswith("docker exec")]
-    assert len(exec_calls) == 2
-    assert all("prefix=${HOME}/.local" in call for call in exec_calls)
-    assert all("/etc/profile.d/lab-npm-user-prefix.sh" in call for call in exec_calls)
-    assert all("chown root:root /usr/bin/bwrap" in call for call in exec_calls)
-    assert all("chmod 4755 /usr/bin/bwrap" in call for call in exec_calls)
-    assert all('"$home/.npmrc"' in call for call in exec_calls)
-    assert all('"$home/.codex/config.toml"' in call for call in exec_calls)
-    assert all("use_legacy_landlock" in call for call in exec_calls)
-    assert all("if [ -f" in call for call in exec_calls)
-    assert all("10000" in call and "59999" in call for call in exec_calls)
-
-
-def test_lab_npm_configuration_script_has_valid_shell_syntax():
-    result = real_run(["sh", "-n", "-c", hostprep._lab_npm_config_script()])
-    assert result.ok, result.logs
