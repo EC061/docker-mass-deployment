@@ -78,4 +78,3 @@ jobs:
               su - student -c '\''bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"'\''
             ')
           test "$output" = "bwrap works"
-          '
