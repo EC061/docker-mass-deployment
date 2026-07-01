@@ -6,8 +6,9 @@ lab, no host engine socket, and no privileged mode. Students retain full passwor
 daemon-remapped parent namespace locks the inherited mounts that nested bubblewrap must modify.
 
 Codex is a required workload. The lab image includes a pinned Codex CLI and distribution
-`/usr/bin/bwrap`; the outer container uses dedicated seccomp and AppArmor profiles that allow
-bubblewrap to create nested unprivileged namespaces without granting outer `CAP_SYS_ADMIN`.
+`/usr/bin/bwrap`; the outer container uses dedicated seccomp and AppArmor profiles for sandbox
+setup without granting outer `CAP_SYS_ADMIN`. `host-prepare` also enables Codex's legacy Landlock
+sandbox path for student homes, which avoids requiring setuid bubblewrap inside Docker.
 
 ## Persistent layout
 
@@ -105,6 +106,9 @@ sudo lab-agent host-prepare
   `kernel.apparmor_restrict_unprivileged_userns=1`;
 - installs and loads `lab-codex-seccomp.json`, `lab-codex`, and the distribution
   `bwrap-userns-restrict` profile when available;
+- restores non-setuid mode on `/usr/bin/bwrap` in running managed labs;
+- configures existing student homes with `~/.codex/config.toml` so Codex uses its legacy Landlock
+  sandbox path instead of requiring setuid bubblewrap inside Docker;
 - regenerates NVIDIA CDI at `/etc/cdi/nvidia.yaml` when `nvidia-ctk` is installed.
 
 Seccomp policy is fixed when Docker creates a container. If an agent upgrade changes
@@ -167,21 +171,19 @@ sudo lab-agent doctor
 ```
 
 The final doctor check needs a running lab with at least one provisioned student because it executes
-the real bubblewrap and Codex smoke tests as that ordinary user. A lab is not healthy until these
+the real namespace and Codex smoke tests as that ordinary user. A lab is not healthy until these
 commands pass inside its outer container:
 
 ```bash
-bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --proc /proc --dev /dev \
-  --unshare-pid --new-session true
 unshare --user --map-root-user true
 codex --version
 codex sandbox -- true
-codex sandbox -- bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --proc /proc \
-  --dev /dev --unshare-pid --new-session true
 ```
 
-The last command verifies the required nested case: a student command can create another complete
-bubblewrap user/PID/proc sandbox while already running inside Codex's bubblewrap sandbox.
+Doctor still records whether the distribution `bwrap` binary can create a raw nested sandbox, but
+Codex's own sandbox smoke test is the supported pass/fail gate. Do not mark `/usr/bin/bwrap`
+setuid in managed labs; with Docker userns-remap it can appear owned by the remapped host ID or
+fail capability setup inside the outer container.
 
 Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace
 isolation, and that container root cannot modify a host sentinel outside `/home` and
