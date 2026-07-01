@@ -25,7 +25,7 @@ def healthy_runner():
         "zfs version": (True, "zfs-2.2"),
         "docker version": (True, "27"),
         "docker info --format {{.Driver}}": (True, "zfs"),
-        "docker info --format {{.DockerRootDir}}": (True, "/var/lib/docker"),
+        "docker info --format {{.DockerRootDir}}": (True, "/var/lib/docker/231072.231072"),
         "docker info --format {{json .SecurityOptions}}":
             (True, '["name=seccomp,profile=default","name=userns:user=labdockremap"]'),
         "sysctl -n kernel.unprivileged_userns_clone": (True, "1"),
@@ -116,3 +116,16 @@ def test_driver_or_secure_boot_failure_is_operator_only(monkeypatch):
     caps = system.detect_capabilities(cfg(), deep=False)
     issue = next(i for i in caps.issues if i.code == "nvidia_kernel_failure")
     assert issue.repairable is False
+
+
+def test_docker_root_ok_accepts_userns_remap_nested_path(monkeypatch):
+    runner = healthy_runner()
+    monkeypatch.setattr(system, "run", runner)
+    assert system._docker_root_ok(cfg())
+
+
+def test_docker_root_ok_rejects_wrong_remap_suffix(monkeypatch):
+    runner = healthy_runner()
+    runner.responses["docker info --format {{.DockerRootDir}}"] = (True, "/var/lib/docker/0.0")
+    monkeypatch.setattr(system, "run", runner)
+    assert not system._docker_root_ok(cfg())

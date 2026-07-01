@@ -123,10 +123,17 @@ def _docker_userns(cfg: AgentConfig) -> bool:
 
 
 def _docker_root_ok(cfg: AgentConfig) -> bool:
+    # With userns-remap active, Docker nests its real root a level deeper at
+    # <data-root>/<remapped-uid>.<remapped-gid> and reports that nested path here rather than the
+    # configured data-root itself.
     result = run(["docker", "info", "--format", "{{.DockerRootDir}}"], timeout=20)
-    return result.ok and os.path.realpath(result.stdout.strip()) == os.path.realpath(
-        cfg.docker_data_root
+    if not result.ok:
+        return False
+    actual = os.path.realpath(result.stdout.strip())
+    remapped = os.path.realpath(
+        os.path.join(cfg.docker_data_root, f"{cfg.userns_start}.{cfg.userns_start}")
     )
+    return actual in (os.path.realpath(cfg.docker_data_root), remapped)
 
 
 def _subid_ok(cfg: AgentConfig) -> bool:
