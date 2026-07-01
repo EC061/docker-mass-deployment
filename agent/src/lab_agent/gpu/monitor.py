@@ -117,18 +117,32 @@ def _container_info(pid: int) -> tuple[str | None, bool, str | None]:
 
 
 def _proc_uid(pid: int) -> int | None:
+    """Return the process's effective UID as seen inside its own user namespace.
+
+    Docker's daemon-wide ``userns-remap`` means /proc/<pid>/status exposes the remapped host UID
+    to the root agent (for example, container UID 10000 appears as host UID 241072).  ``getent``
+    runs inside the container and therefore needs the namespace UID, not that host UID.
+    """
     try:
         with open(f"/proc/{pid}/status", encoding="utf-8") as fh:
             for line in fh:
                 if line.startswith("Uid:"):
-                    return int(line.split()[1])
+                    host_uid = int(line.split()[2])
+                    break
+            else:
+                return None
+        with open(f"/proc/{pid}/uid_map", encoding="utf-8") as fh:
+            for line in fh:
+                inside_start, outside_start, length = (int(value) for value in line.split())
+                if outside_start <= host_uid < outside_start + length:
+                    return inside_start + (host_uid - outside_start)
     except (OSError, ValueError, IndexError):
         return None
     return None
 
 
 def _student_user(container: str | None, pid: int) -> str | None:
-    """Resolve the in-container username for a host PID's uid."""
+    """Resolve the in-container username for a host PID's namespace UID."""
     if not container:
         return None
     uid = _proc_uid(pid)
