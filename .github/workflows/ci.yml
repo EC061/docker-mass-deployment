@@ -60,8 +60,13 @@ jobs:
         run: docker build --tag custom-ssh:ci image
       - name: Verify CUDA toolkit and bubblewrap
         run: |
+          image_size=$(docker image inspect custom-ssh:ci --format '{{.Size}}')
+          echo "Lab image size: $image_size bytes"
+          test "$image_size" -lt $((4 * 1024 * 1024 * 1024))
           docker run --rm --entrypoint sh custom-ssh:ci -c '
             nvcc --version
+            python --version
+            test "$(command -v python)" = /usr/bin/python
             ! command -v node
             ! command -v npm
             ! command -v codex

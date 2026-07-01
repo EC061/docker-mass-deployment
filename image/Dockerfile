@@ -1,22 +1,36 @@
-# SSH-accessible CUDA development lab. Docker/NVIDIA device integration lives on the host; this
-# image contains the CUDA toolkit and libraries, but no Docker daemon, CLI, socket, or inner NVIDIA
-# container runtime. Students retain password-authenticated sudo. Bubblewrap is setuid-root.
+# SSH-accessible CUDA development lab. Docker/NVIDIA device integration lives on the host. This
+# image installs NVIDIA's minimal CUDA build package rather than inheriting the much larger devel
+# image. Students retain password-authenticated sudo. Bubblewrap is setuid-root.
 
-FROM nvidia/cuda:13.3.0-devel-ubuntu24.04@sha256:ef2203909e80b8b976cfc672f7e2ae2b00bc0e25c404ee86d89e10a3802f1c52
+FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+
+ARG CUDA_KEYRING_SHA256=d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba
 
 RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates curl \
+    && curl -fsSL \
+        https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
+        -o /tmp/cuda-keyring.deb \
+    && echo "$CUDA_KEYRING_SHA256  /tmp/cuda-keyring.deb" | sha256sum -c - \
+    && dpkg -i /tmp/cuda-keyring.deb \
+    && rm -f /tmp/cuda-keyring.deb \
+    && apt-get update \
     && apt-get install -y --no-install-recommends \
+        cuda-minimal-build-13-3=13.3.1-1 \
         openssh-server sudo \
-        python3-pip python3-venv \
+        python3-pip python3-venv python-is-python3 \
         bubblewrap \
         build-essential cmake ninja-build pkg-config \
-        git ripgrep curl ca-certificates procps util-linux nano gnupg \
+        git ripgrep procps util-linux nano gnupg \
     && chown root:root /usr/bin/bwrap \
     && chmod 4755 /usr/bin/bwrap \
     && test -u /usr/bin/bwrap \
+    && test "$(readlink -f /usr/bin/python)" = "$(readlink -f /usr/bin/python3)" \
     && nvcc --version \
     && printf '%s\n' '__global__ void kernel() {}' 'int main() { return 0; }' \
         > /tmp/cuda-smoke.cu \
