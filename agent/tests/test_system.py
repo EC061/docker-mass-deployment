@@ -160,3 +160,40 @@ def test_stale_lab_userns_containers_detects_remapped_contract(monkeypatch):
         "docker inspect --format {{.HostConfig.UsernsMode}} lab-current": (True, "host"),
     }))
     assert system._stale_lab_userns_containers() == ["lab-old", "lab-remapped"]
+
+
+def test_deep_doctor_accepts_codex_sandbox_when_raw_bwrap_fails(monkeypatch):
+    runner = healthy_runner()
+    runner.responses.update({
+        'docker ps --filter label=lab-agent.managed=true --format {{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}':
+            (True, "lab-test\tcurrent\n"),
+        "docker ps --filter label=lab-agent.managed=true --format {{.Names}}": (True, "lab-test\n"),
+        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
+            (True, "[]\t[]"),
+        "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
+        "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
+        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "755"),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
+            (False, ""),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test unshare":
+            (True, ""),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test codex --version":
+            (True, "codex 1.2.3"),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test codex sandbox -- true":
+            (True, ""),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test sh -c test":
+            (True, ""),
+    })
+    monkeypatch.setattr(system, "run", runner)
+    monkeypatch.setattr(system.docker, "security_profile_digest", lambda path: "current")
+    monkeypatch.setattr(system.docker, "wait_ssh_ready", lambda container, **kwargs: True)
+    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
+    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
+    monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
+
+    caps = system.detect_capabilities(cfg(), deep=True)
+
+    assert caps.runtime.bwrap_ok
+    assert caps.runtime.codex_sandbox_ok
+    assert caps.health.status == "healthy"
+    assert not any(i.code == "bubblewrap_failed" for i in caps.issues)

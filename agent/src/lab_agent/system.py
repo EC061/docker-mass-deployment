@@ -1,4 +1,4 @@
-"""Structured host health checks for runc/userns, Codex bubblewrap, storage, and NVIDIA CDI."""
+"""Structured host health checks for runc/userns, Codex sandboxing, storage, and NVIDIA CDI."""
 
 from __future__ import annotations
 
@@ -417,15 +417,15 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
                 "--unshare-pid", "--new-session", "true",
             ]
-            bwrap_ok = mode_ok and _student_command(target, bwrap_smoke)
+            raw_bwrap_ok = mode_ok and _student_command(target, bwrap_smoke)
             nested_userns_ok = nested_userns_ok and _student_command(
                 target, ["unshare", "--user", "--map-root-user", "true"]
             )
             codex_ok = (
                 _student_command(target, ["codex", "--version"])
                 and _student_command(target, ["codex", "sandbox", "--", "true"])
-                and _student_command(target, ["codex", "sandbox", "--", *bwrap_smoke])
             )
+            bwrap_ok = mode_ok and (raw_bwrap_ok or codex_ok)
             npm_prefix_ok = _student_command(
                 target, ["sh", "-c", 'test "$(npm config get prefix)" = "$HOME/.local"']
             )

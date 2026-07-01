@@ -22,6 +22,7 @@ from typing import Any
 
 from .config import AgentConfig
 from .executors.base import run
+from .student_config import codex_config_patch_shell
 from .system import _nvidia_hardware_count, _pool_exists
 
 DAEMON_JSON = Path("/etc/docker/daemon.json")
@@ -299,6 +300,7 @@ def _lab_npm_config_script() -> str:
         "grep -qxF '. /etc/profile.d/lab-npm-user-prefix.sh' /etc/bash.bashrc || "
         "printf '%s\\n' '. /etc/profile.d/lab-npm-user-prefix.sh' >> /etc/bash.bashrc\n"
         "chmod 0644 /etc/npmrc /etc/profile.d/lab-npm-user-prefix.sh\n"
+        "if [ -e /usr/bin/bwrap ]; then chmod 0755 /usr/bin/bwrap; fi\n"
         "getent passwd | while IFS=: read -r user _ uid gid _ home _; do\n"
         "  if [ \"$uid\" -ge 10000 ] 2>/dev/null && [ \"$uid\" -le 59999 ]; then\n"
         "    install -d -m 0755 -o \"$uid\" -g \"$gid\" \"$home/.local\" \"$home/.local/bin\"\n"
@@ -307,6 +309,10 @@ def _lab_npm_config_script() -> str:
         "    printf 'prefix=%s/.local\\n' \"$home\" >> \"$home/.npmrc\"\n"
         "    chown \"$uid:$gid\" \"$home/.npmrc\"\n"
         "    chmod 0644 \"$home/.npmrc\"\n"
+        "    install -d -m 0755 -o \"$uid\" -g \"$gid\" \"$home/.codex\"\n"
+        + codex_config_patch_shell('"$home/.codex/config.toml"')
+        + "    chown \"$uid:$gid\" \"$home/.codex/config.toml\"\n"
+        "    chmod 0644 \"$home/.codex/config.toml\"\n"
         "  fi\n"
         "done\n"
     )
