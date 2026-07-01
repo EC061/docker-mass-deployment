@@ -13,13 +13,23 @@ process.env.SESSION_SECRET = "test-session-secret-test-session";
 // Capture the messages handed to nodemailer instead of opening an SMTP socket.
 const sent: any[] = [];
 let failNext = false;
+const failedHosts = new Set<string>();
 const sendMailImpl = vi.fn(async (msg: any) => {
   if (failNext) throw new Error("smtp down");
   sent.push(msg);
   return { messageId: "1" };
 });
+const transports: any[] = [];
 vi.mock("nodemailer", () => ({
-  default: { createTransport: () => ({ sendMail: sendMailImpl }) },
+  default: { createTransport: (options: any) => {
+    transports.push(options);
+    return {
+      sendMail: async (msg: any) => {
+        if (failedHosts.has(options.host)) throw new Error(`${options.host} down`);
+        return sendMailImpl(msg);
+      },
+    };
+  } },
 }));
 
 let dbmod: typeof import("../src/lib/db");
@@ -35,19 +45,22 @@ beforeAll(async () => {
 
 beforeEach(() => {
   sent.length = 0;
+  transports.length = 0;
+  failedHosts.clear();
   failNext = false;
   sendMailImpl.mockClear();
 });
 
 function configureSmtp() {
-  settings.setSetting("smtpHost", "smtp.uga.edu");
-  settings.setSetting("smtpFrom", "labs@uga.edu");
+  settings.setSetting("smtpConfigs", [{
+    id: "primary", name: "Primary", rank: 1, host: "smtp.uga.edu", port: 587,
+    user: "", pass: "", from: "labs@uga.edu", secure: false,
+  }]);
 }
 
 describe("sendMail gating", () => {
   it("skips when SMTP is not configured", async () => {
-    settings.setSetting("smtpHost", "");
-    settings.setSetting("smtpFrom", "");
+    settings.setSetting("smtpConfigs", []);
     const res = await mailer.sendMail("a@uga.edu", "s", "b");
     expect(res).toEqual({ sent: false, skipped: true });
     expect(sendMailImpl).not.toHaveBeenCalled();
@@ -74,6 +87,33 @@ describe("sendMail gating", () => {
     const res = await mailer.sendMail("a@uga.edu", "s", "b");
     expect(res.sent).toBe(false);
     expect(res.error).toBe("smtp down");
+  });
+
+  it("fails over through SMTP configs in rank order", async () => {
+    settings.setSetting("smtpConfigs", [
+      { id: "backup", name: "Backup", rank: 20, host: "smtp.backup", port: 465, user: "b", pass: "bp", from: "backup@example.com", secure: true },
+      { id: "primary", name: "Primary", rank: 10, host: "smtp.primary", port: 587, user: "p", pass: "pp", from: "primary@example.com", secure: false },
+    ]);
+    failedHosts.add("smtp.primary");
+
+    const res = await mailer.sendMail("a@uga.edu", "Subject", "Body");
+
+    expect(res).toEqual({ sent: true });
+    expect(transports.map((options) => options.host)).toEqual(["smtp.primary", "smtp.backup"]);
+    expect(sent[0].from).toBe("backup@example.com");
+  });
+
+  it("returns every ranked failure when all SMTP configs fail", async () => {
+    settings.setSetting("smtpConfigs", [
+      { id: "one", name: "First", rank: 1, host: "smtp.one", port: 587, user: "", pass: "", from: "one@example.com", secure: false },
+      { id: "two", name: "Second", rank: 2, host: "smtp.two", port: 587, user: "", pass: "", from: "two@example.com", secure: false },
+    ]);
+    failedHosts.add("smtp.one");
+    failedHosts.add("smtp.two");
+
+    const res = await mailer.sendMail("a@uga.edu", "Subject", "Body");
+
+    expect(res).toEqual({ sent: false, error: "First: smtp.one down; Second: smtp.two down" });
   });
 });
 

@@ -21,8 +21,9 @@ import {
   DEFAULT_WELCOME_SUBJECT,
   REMOVAL_DATA_DELETED,
   REMOVAL_DATA_RETAINED,
+  type SmtpConfig,
+  getSmtpConfigs,
   getSetting,
-  isSmtpConfigured,
 } from "./settings";
 
 // Re-exported for back-compat: callers (and tests) still import renderTemplate from the mailer.
@@ -34,13 +35,13 @@ export interface SendResult {
   error?: string;
 }
 
-function transport() {
+function transport(config: SmtpConfig) {
   return nodemailer.createTransport({
-    host: getSetting("smtpHost"),
-    port: getSetting("smtpPort"),
-    secure: getSetting("smtpSecure"),
-    auth: getSetting("smtpUser")
-      ? { user: getSetting("smtpUser"), pass: getSetting("smtpPass") }
+    host: config.host,
+    port: config.port,
+    secure: config.secure,
+    auth: config.user
+      ? { user: config.user, pass: config.pass }
       : undefined,
   });
 }
@@ -55,15 +56,21 @@ export function emailContent(body: string): { text: string } {
 }
 
 export async function sendMail(to: string, subject: string, text: string): Promise<SendResult> {
-  if (!isSmtpConfigured()) return { sent: false, skipped: true };
+  const configs = getSmtpConfigs().filter((config) => config.host && config.from);
+  if (configs.length === 0) return { sent: false, skipped: true };
   if (!to) return { sent: false, skipped: true };
-  try {
-    const content = emailContent(text);
-    await transport().sendMail({ from: getSetting("smtpFrom"), to, subject, ...content });
-    return { sent: true };
-  } catch (err) {
-    return { sent: false, error: err instanceof Error ? err.message : String(err) };
+  const content = emailContent(text);
+  const errors: string[] = [];
+  for (const config of configs) {
+    try {
+      await transport(config).sendMail({ from: config.from, to, subject, ...content });
+      return { sent: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(configs.length === 1 ? message : `${config.name}: ${message}`);
+    }
   }
+  return { sent: false, error: errors.join("; ") };
 }
 
 export async function sendTestEmail(to: string): Promise<SendResult> {

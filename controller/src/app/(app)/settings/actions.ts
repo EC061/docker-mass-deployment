@@ -1,9 +1,10 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { sendTestEmail } from "@/lib/mailer";
-import { broadcastGpuPolicy, setSetting, TIB } from "@/lib/settings";
+import { broadcastGpuPolicy, getSmtpConfigs, setSetting, TIB } from "@/lib/settings";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { pruneLogs } from "@/lib/maintenance";
@@ -79,14 +80,40 @@ export async function saveSmtpSettingsAction(formData: FormData) {
     String(formData.get("smtpHost") ?? ""),
     Number(formData.get("smtpPort")) || 587,
   );
-  setSetting("smtpHost", host);
-  setSetting("smtpPort", port);
-  setSetting("smtpSecure", secure);
-  setSetting("smtpUser", String(formData.get("smtpUser") ?? "").trim());
+  const configs = getSmtpConfigs();
+  const id = String(formData.get("smtpId") ?? "").trim() || randomUUID();
+  const existing = configs.find((config) => config.id === id);
   const pass = String(formData.get("smtpPass") ?? "");
-  // Only overwrite the stored password when a new one is entered (the field renders blank).
-  if (pass) setSetting("smtpPass", pass);
-  setSetting("smtpFrom", String(formData.get("smtpFrom") ?? "").trim());
+  const rankValue = Number(formData.get("smtpRank"));
+  const rank = Number.isFinite(rankValue) && rankValue > 0
+    ? Math.trunc(rankValue)
+    : existing?.rank ?? Math.max(0, ...configs.map((config) => config.rank)) + 1;
+  const updated = {
+    id,
+    name: String(formData.get("smtpName") ?? "").trim() || `SMTP ${rank}`,
+    rank,
+    host,
+    port,
+    secure,
+    user: String(formData.get("smtpUser") ?? "").trim(),
+    pass: pass || existing?.pass || "",
+    from: String(formData.get("smtpFrom") ?? "").trim(),
+  };
+  setSetting("smtpConfigs", existing
+    ? configs.map((config) => config.id === id ? updated : config)
+    : [...configs, updated]);
+  revalidatePath("/settings");
+}
+
+export async function deleteSmtpSettingsAction(formData: FormData) {
+  await requireAdmin();
+  const id = String(formData.get("smtpId") ?? "");
+  setSetting("smtpConfigs", getSmtpConfigs().filter((config) => config.id !== id));
+  revalidatePath("/settings");
+}
+
+export async function saveSshHostOverrideAction(formData: FormData) {
+  await requireAdmin();
   setSetting("sshHostOverride", String(formData.get("sshHostOverride") ?? "").trim());
   revalidatePath("/settings");
 }

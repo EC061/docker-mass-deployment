@@ -54,6 +54,18 @@ describe("getSetting / setSetting", () => {
     expect(raw.value).toContain("enc:v1:");
   });
 
+  it("encrypts passwords inside ranked SMTP configs", () => {
+    settings.setSetting("smtpConfigs", [{
+      id: "primary", name: "Primary", rank: 1, host: "smtp.example.com", port: 587,
+      user: "mailer", pass: "ranked-secret", from: "labs@example.com", secure: false,
+    }]);
+
+    expect(settings.getSmtpConfigs()[0].pass).toBe("ranked-secret");
+    const raw = dbmod.db().prepare("SELECT value FROM settings WHERE key = 'smtpConfigs'").get() as { value: string };
+    expect(raw.value).not.toContain("ranked-secret");
+    expect(raw.value).toContain("enc:v1:");
+  });
+
   it("falls back to default when the stored value is corrupt JSON", () => {
     dbmod
       .db()
@@ -77,6 +89,7 @@ describe("getSettings", () => {
 
 describe("configuration helpers", () => {
   it("isSmtpConfigured needs both host and from", () => {
+    dbmod.db().prepare("DELETE FROM settings WHERE key = 'smtpConfigs'").run();
     settings.setSetting("smtpHost", "");
     settings.setSetting("smtpFrom", "");
     expect(settings.isSmtpConfigured()).toBe(false);

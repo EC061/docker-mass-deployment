@@ -14,6 +14,18 @@ export const TIB = 1024 ** 4;
 // Credential settings encrypted at rest (M-05). Stored AES-GCM-encrypted; decrypted on read.
 const ENCRYPTED_KEYS = new Set<keyof Settings>(["smtpPass", "webdavPass"]);
 
+export interface SmtpConfig {
+  id: string;
+  name: string;
+  rank: number;
+  host: string;
+  port: number;
+  user: string;
+  pass: string;
+  from: string;
+  secure: boolean;
+}
+
 export interface Settings {
   fastQuotaDefaultBytes: number;
   slowQuotaDefaultBytes: number;
@@ -33,6 +45,9 @@ export interface Settings {
   smtpPass: string;
   smtpFrom: string;
   smtpSecure: boolean; // true = implicit TLS (465); false = STARTTLS/none
+  // Ranked SMTP servers. An explicitly stored empty array disables SMTP. When this key has never
+  // been stored, getSmtpConfigs() exposes the legacy single-server fields above for compatibility.
+  smtpConfigs: SmtpConfig[];
   // Plain-text signature appended by the mailer to every outbound email.
   emailSignatureText: string;
   // Optional public hostname students SSH to (falls back to the node name).
@@ -224,6 +239,7 @@ export const DEFAULT_SETTINGS: Settings = {
   smtpPass: "",
   smtpFrom: "",
   smtpSecure: false,
+  smtpConfigs: [],
   emailSignatureText: DEFAULT_EMAIL_SIGNATURE_TEXT,
   sshHostOverride: "",
   welcomeEmailSubject: DEFAULT_WELCOME_SUBJECT,
@@ -322,7 +338,43 @@ export function broadcastGpuPolicy(actor?: string): void {
 }
 
 export function isSmtpConfigured(): boolean {
-  return getSetting("smtpHost").trim() !== "" && getSetting("smtpFrom").trim() !== "";
+  return getSmtpConfigs().some((config) => config.host !== "" && config.from !== "");
+}
+
+/** Return every SMTP config in failover order (lowest rank is attempted first). */
+export function getSmtpConfigs(): SmtpConfig[] {
+  const hasRankedConfigs = !!db().prepare("SELECT 1 FROM settings WHERE key = 'smtpConfigs'").get();
+  if (hasRankedConfigs) {
+    return getSetting("smtpConfigs")
+      .filter((config) => config && typeof config === "object")
+      .map((config, index) => ({
+        id: String(config.id || `smtp-${index + 1}`),
+        name: String(config.name || `SMTP ${index + 1}`),
+        rank: Number.isFinite(Number(config.rank)) ? Math.max(1, Math.trunc(Number(config.rank))) : index + 1,
+        host: String(config.host || "").trim(),
+        port: Number(config.port) > 0 ? Math.trunc(Number(config.port)) : 587,
+        user: String(config.user || "").trim(),
+        pass: String(config.pass || ""),
+        from: String(config.from || "").trim(),
+        secure: !!config.secure,
+      }))
+      .sort((a, b) => a.rank - b.rank || a.name.localeCompare(b.name));
+  }
+
+  const host = getSetting("smtpHost").trim();
+  const from = getSetting("smtpFrom").trim();
+  if (!host && !from) return [];
+  return [{
+    id: "legacy",
+    name: "Primary SMTP",
+    rank: 1,
+    host,
+    port: getSetting("smtpPort"),
+    user: getSetting("smtpUser").trim(),
+    pass: getSetting("smtpPass"),
+    from,
+    secure: getSetting("smtpSecure"),
+  }];
 }
 
 export function getSetting<K extends keyof Settings>(key: K): Settings[K] {
@@ -332,6 +384,12 @@ export function getSetting<K extends keyof Settings>(key: K): Settings[K] {
   if (!row) return DEFAULT_SETTINGS[key];
   try {
     const parsed = JSON.parse(row.value) as Settings[K];
+    if (key === "smtpConfigs" && Array.isArray(parsed)) {
+      return parsed.map((config) => ({
+        ...config,
+        pass: typeof config?.pass === "string" ? decryptSecret(config.pass) : "",
+      })) as Settings[K];
+    }
     if (ENCRYPTED_KEYS.has(key) && typeof parsed === "string") {
       return decryptSecret(parsed) as Settings[K];
     }
@@ -350,8 +408,9 @@ export function getSettings(): Settings {
 }
 
 export function setSetting<K extends keyof Settings>(key: K, value: Settings[K]): void {
-  const toStore =
-    ENCRYPTED_KEYS.has(key) && typeof value === "string"
+  const toStore = key === "smtpConfigs" && Array.isArray(value)
+    ? value.map((config) => ({ ...config, pass: encryptSecret(config.pass) }))
+    : ENCRYPTED_KEYS.has(key) && typeof value === "string"
       ? (encryptSecret(value) as Settings[K])
       : value;
   db()

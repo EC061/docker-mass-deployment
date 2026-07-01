@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getSettings, TIB } from "@/lib/settings";
+import { getSettings, getSmtpConfigs, TIB } from "@/lib/settings";
 import { db } from "@/lib/db";
 import { fmtBytes } from "@/lib/format";
 import { logsContentBytes } from "@/lib/maintenance";
@@ -11,10 +11,12 @@ import { Select } from "@/components/ui/select";
 import { ConfirmButton } from "../_components/ConfirmButton";
 import {
   clearLogsAction,
+  deleteSmtpSettingsAction,
   saveAlertSettingsAction,
   saveGpuPolicyAction,
   saveScrubSettingsAction,
   saveSmtpSettingsAction,
+  saveSshHostOverrideAction,
   saveStorageSettingsAction,
   saveUsageScanSettingsAction,
   scrubNowAction,
@@ -45,6 +47,8 @@ export default async function SettingsPage({
 }) {
   const { smtp, scrub, logs: logsMsg } = await searchParams;
   const s = getSettings();
+  const smtpConfigs = getSmtpConfigs();
+  const nextSmtpRank = Math.max(0, ...smtpConfigs.map((config) => config.rank)) + 1;
   const logCount = (db().prepare("SELECT COUNT(*) AS n FROM logs").get() as { n: number }).n;
   const logBytes = logsContentBytes();
   return (
@@ -116,37 +120,94 @@ export default async function SettingsPage({
         <CardContent className="space-y-3">
           <h3 className="text-base font-semibold">Email (external SMTP)</h3>
           {smtp && <p className="text-sm text-primary">{smtp}</p>}
-          <form action={saveSmtpSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+          <p className="text-xs text-muted-foreground">
+            Servers are attempted from the lowest rank to the highest. A failed delivery automatically
+            falls through to the next configured server.
+          </p>
+          {smtpConfigs.map((config) => (
+            <div key={config.id} className="flex max-w-xl flex-col gap-3 rounded-md border p-3">
+              <form action={saveSmtpSettingsAction} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                <input type="hidden" name="smtpId" value={config.id} />
+                <div>
+                  <Label>Config name</Label>
+                  <Input name="smtpName" defaultValue={config.name} placeholder="Primary SMTP" />
+                </div>
+                <div>
+                  <Label>Rank</Label>
+                  <Input name="smtpRank" type="number" min={1} defaultValue={config.rank} />
+                </div>
+                <div>
+                  <Label>SMTP host</Label>
+                  <Input name="smtpHost" defaultValue={config.host} placeholder="https://smtp.uga.edu:465" />
+                  <small className="text-xs text-muted-foreground">
+                    Use https:// (or port 465) for implicit TLS; http:// for STARTTLS.
+                  </small>
+                </div>
+                <div>
+                  <Label>Port</Label>
+                  <Input name="smtpPort" type="number" min={1} defaultValue={config.port} />
+                </div>
+                <div>
+                  <Label>Username</Label>
+                  <Input name="smtpUser" defaultValue={config.user} />
+                </div>
+                <div>
+                  <Label>Password</Label>
+                  <Input name="smtpPass" type="password" placeholder={config.pass ? "•••••• (unchanged)" : ""} />
+                </div>
+                <div>
+                  <Label>From address</Label>
+                  <Input name="smtpFrom" defaultValue={config.from} placeholder="labs@uga.edu" />
+                </div>
+                <div className="flex items-end">
+                  <Button type="submit">Save config</Button>
+                </div>
+              </form>
+              <form action={deleteSmtpSettingsAction}>
+                <input type="hidden" name="smtpId" value={config.id} />
+                <Button type="submit" variant="destructive">Delete config</Button>
+              </form>
+            </div>
+          ))}
+          <form action={saveSmtpSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 rounded-md border p-3 sm:grid-cols-2">
+            <div>
+              <Label>Config name</Label>
+              <Input name="smtpName" placeholder="Backup SMTP" />
+            </div>
+            <div>
+              <Label>Rank</Label>
+              <Input name="smtpRank" type="number" min={1} defaultValue={nextSmtpRank} />
+            </div>
             <div>
               <Label>SMTP host</Label>
-              <Input name="smtpHost" defaultValue={s.smtpHost} placeholder="https://smtp.uga.edu:465" />
-              <small className="text-xs text-muted-foreground">
-                Use https:// (or port 465) for implicit TLS; http:// for STARTTLS.
-              </small>
+              <Input name="smtpHost" placeholder="https://smtp.example.com:465" />
             </div>
             <div>
               <Label>Port</Label>
-              <Input name="smtpPort" type="number" defaultValue={s.smtpPort} />
+              <Input name="smtpPort" type="number" min={1} defaultValue={587} />
             </div>
             <div>
               <Label>Username</Label>
-              <Input name="smtpUser" defaultValue={s.smtpUser} />
+              <Input name="smtpUser" />
             </div>
             <div>
               <Label>Password</Label>
-              <Input name="smtpPass" type="password" placeholder={s.smtpPass ? "•••••• (unchanged)" : ""} />
+              <Input name="smtpPass" type="password" />
             </div>
             <div>
               <Label>From address</Label>
-              <Input name="smtpFrom" defaultValue={s.smtpFrom} placeholder="labs@uga.edu" />
+              <Input name="smtpFrom" placeholder="labs@example.com" />
             </div>
+            <div className="flex items-end">
+              <Button type="submit" variant="secondary">Add SMTP config</Button>
+            </div>
+          </form>
+          <form action={saveSshHostOverrideAction} className="flex max-w-xl flex-wrap items-end gap-3">
             <div>
               <Label>SSH host override (optional)</Label>
               <Input name="sshHostOverride" defaultValue={s.sshHostOverride} placeholder="gpu.uga.edu" />
             </div>
-            <div className="sm:col-span-2">
-              <Button type="submit">Save SMTP</Button>
-            </div>
+            <Button type="submit" variant="secondary">Save SSH host</Button>
           </form>
           <form action={testEmailAction} className="flex flex-wrap items-end gap-3">
             <div>
