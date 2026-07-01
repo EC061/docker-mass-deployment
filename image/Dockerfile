@@ -21,6 +21,16 @@ RUN apt-get update \
     && test ! -u /usr/bin/bwrap \
     && rm -rf /var/lib/apt/lists/* /root/.npm
 
+# Keep the pinned system Codex as a baseline while allowing its student-run in-app updater to
+# install a newer global package into the persistent home without sudo.
+RUN printf '%s\n' 'prefix=${HOME}/.local' > /etc/npmrc \
+    && printf '%s\n' \
+        'export NPM_CONFIG_PREFIX="$HOME/.local"' \
+        'export PATH="$HOME/.local/bin:$PATH"' \
+        > /etc/profile.d/lab-npm-user-prefix.sh \
+    && printf '%s\n' '. /etc/profile.d/lab-npm-user-prefix.sh' >> /etc/bash.bashrc \
+    && chmod 0644 /etc/npmrc /etc/profile.d/lab-npm-user-prefix.sh
+
 # Password SSH remains the initial access mechanism; root login is disabled. Every container creates
 # unique host keys on first boot.
 RUN sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config \

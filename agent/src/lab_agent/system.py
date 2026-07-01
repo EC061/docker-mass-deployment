@@ -352,6 +352,17 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
             codex_ok = _student_command(target, ["codex", "--version"]) and _student_command(
                 target, ["codex", "sandbox", "--", "true"]
             )
+            npm_prefix_ok = _student_command(
+                target, ["sh", "-c", 'test "$(npm config get prefix)" = "$HOME/.local"']
+            )
+            if not npm_prefix_ok:
+                _issue(
+                    issues,
+                    "codex_update_prefix",
+                    "critical",
+                    "Student npm prefix is not home-owned; run lab-agent host-prepare",
+                    True,
+                )
         else:
             _issue(
                 issues,

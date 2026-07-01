@@ -142,6 +142,10 @@ seccomp support, Git, ripgrep, curl, proc tools, and a version-pinned Codex CLI.
 contains no systemd, Docker packages, daemon configuration, socket, inner NVIDIA runtime, or NVIDIA
 service.
 
+The pinned root-owned Codex is the image baseline. Student npm global installs use
+`$HOME/.local`, so Codex's in-app updater works without sudo and persists with the student's home.
+`host-prepare` applies the same npm configuration to already-running managed labs.
+
 ## 3. Start and validate the node
 
 ```bash
@@ -159,6 +163,10 @@ unshare --user --map-root-user true
 codex --version
 codex sandbox -- true
 ```
+
+Run a raw bubblewrap diagnostic directly from the student's shell, not as a Codex tool command.
+Codex tool commands already run inside a bubblewrap sandbox that intentionally blocks creating a
+further nested user namespace.
 
 Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace
 isolation, and that container root cannot modify a host sentinel outside `/home` and

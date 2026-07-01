@@ -210,3 +210,21 @@ def test_security_assets_include_required_runtime_syscalls():
     apparmor = root.joinpath("lab-codex.apparmor").read_text()
     assert "/usr/bin/bwrap cx -> lab-codex-bwrap" in apparmor
     assert "profile lab-codex-bwrap" in apparmor and "userns," in apparmor
+
+
+def test_running_labs_get_home_owned_npm_prefix(monkeypatch):
+    runner = Runner({
+        "docker ps": (True, "lab-one\nlab-two\n"),
+        "docker exec": (True, ""),
+    })
+    monkeypatch.setattr(hostprep, "run", runner)
+    assert hostprep._configure_running_lab_npm() == ["lab-one", "lab-two"]
+    exec_calls = [call for call in runner.calls if call.startswith("docker exec")]
+    assert len(exec_calls) == 2
+    assert all("prefix=${HOME}/.local" in call for call in exec_calls)
+    assert all("/etc/profile.d/lab-npm-user-prefix.sh" in call for call in exec_calls)
+
+
+def test_lab_npm_configuration_script_has_valid_shell_syntax():
+    result = real_run(["sh", "-n", "-c", hostprep._lab_npm_config_script()])
+    assert result.ok, result.logs

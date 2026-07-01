@@ -9,6 +9,9 @@ def test_lab_image_has_codex_bubblewrap_and_no_nested_engine():
     assert "bubblewrap uidmap libseccomp2" in dockerfile
     assert "chmod 0755 /usr/bin/bwrap" in dockerfile
     assert "test ! -u /usr/bin/bwrap" in dockerfile
+    assert "prefix=${HOME}/.local" in dockerfile
+    assert 'export PATH="$HOME/.local/bin:$PATH"' in dockerfile
+    assert ". /etc/profile.d/lab-npm-user-prefix.sh" in dockerfile
     assert "systemd" not in dockerfile
     assert "/sbin/init" not in dockerfile
     assert 'STOPSIGNAL SIGTERM' in dockerfile

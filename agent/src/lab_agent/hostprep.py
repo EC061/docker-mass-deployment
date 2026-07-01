@@ -13,6 +13,7 @@ import grp
 import json
 import os
 import pwd
+import shlex
 import shutil
 from collections.abc import Sequence
 from importlib import resources
@@ -28,6 +29,10 @@ SUBUID = Path("/etc/subuid")
 SUBGID = Path("/etc/subgid")
 SYSCTL_FILE = Path("/etc/sysctl.d/90-lab-codex.conf")
 APPARMOR_DEST = Path("/etc/apparmor.d/lab-codex")
+
+LAB_NPM_PROFILE = """export NPM_CONFIG_PREFIX="$HOME/.local"
+export PATH="$HOME/.local/bin:$PATH"
+"""
 
 # Packages available from the default Ubuntu archive. ca-certificates/curl/gnupg are fetched first
 # because adding the Docker/NVIDIA apt repos below needs them.
@@ -282,6 +287,43 @@ def _install_security_assets(cfg: AgentConfig) -> None:
             raise RuntimeError(f"could not load bwrap-userns-restrict: {loaded.logs}")
 
 
+def _lab_npm_config_script() -> str:
+    return (
+        "set -eu\n"
+        "touch /etc/npmrc\n"
+        "sed -i '/^[[:space:]]*prefix[[:space:]]*=/d' /etc/npmrc\n"
+        "printf '%s\\n' 'prefix=${HOME}/.local' >> /etc/npmrc\n"
+        "install -d -m 0755 /etc/profile.d\n"
+        "printf '%s' " + shlex.quote(LAB_NPM_PROFILE)
+        + " > /etc/profile.d/lab-npm-user-prefix.sh\n"
+        "grep -qxF '. /etc/profile.d/lab-npm-user-prefix.sh' /etc/bash.bashrc || "
+        "printf '%s\\n' '. /etc/profile.d/lab-npm-user-prefix.sh' >> /etc/bash.bashrc\n"
+        "chmod 0644 /etc/npmrc /etc/profile.d/lab-npm-user-prefix.sh\n"
+    )
+
+
+def _configure_running_lab_npm() -> list[str]:
+    """Give students a persistent, home-owned npm prefix in every running managed lab.
+
+    The image keeps a pinned root-owned Codex as its baseline.  Codex's in-app updater runs as the
+    student, so its global npm install must land in the persistent home instead of /usr/lib.
+    """
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
+    ], timeout=20)
+    if not listed.ok:
+        raise RuntimeError(f"could not list managed labs for npm configuration: {listed.logs}")
+
+    configured: list[str] = []
+    script = _lab_npm_config_script()
+    for name in listed.stdout.splitlines():
+        result = run(["docker", "exec", name, "sh", "-c", script], timeout=30)
+        if not result.ok:
+            raise RuntimeError(f"could not configure student npm prefix in {name}: {result.logs}")
+        configured.append(name)
+    return configured
+
+
 def _zfs_pools_ready(cfg: AgentConfig) -> bool:
     """Whether the zpool(s) the Docker ZFS dataset depends on already exist. Disk topology is an
     operator decision made outside host-prepare (see module docstring); until the pool(s) show up,
@@ -424,6 +466,7 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
     restarted = run(["systemctl", "restart", "docker"], timeout=120)
     if not restarted.ok:
         raise RuntimeError(restarted.logs)
+    npm_configured_labs = _configure_running_lab_npm()
     return {
         "userns_user": cfg.userns_user,
         "subordinate_range": [cfg.userns_start, cfg.userns_size],
@@ -434,4 +477,5 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
         "gpu_cgroupfs_workaround": gpu_present,
         "seccomp_profile": cfg.seccomp_profile,
         "apparmor_profile": cfg.apparmor_profile,
+        "npm_user_prefix_labs": npm_configured_labs,
     }
