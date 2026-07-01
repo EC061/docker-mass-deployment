@@ -190,10 +190,9 @@ def _userspace_driver_version() -> str:
 
 
 def _security_profiles_ok(cfg: AgentConfig) -> bool:
-    if not os.path.isfile(cfg.seccomp_profile):
-        return False
-    status = run(["aa-status"], timeout=20)
-    return status.ok and cfg.apparmor_profile in status.stdout
+    # Managed containers deliberately run apparmor=unconfined for the setuid-root bwrap contract.
+    # The dedicated seccomp policy remains mandatory.
+    return os.path.isfile(cfg.seccomp_profile)
 
 
 def _stale_seccomp_containers(cfg: AgentConfig) -> list[str]:
@@ -414,7 +413,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 )
             mode = run(["docker", "exec", target[0], "stat", "-c", "%a", "/usr/bin/bwrap"],
                        timeout=20)
-            mode_ok = mode.ok and mode.stdout.strip() == "755"
+            mode_ok = mode.ok and mode.stdout.strip() == "4755"
             bwrap_smoke = [
                 "bwrap", "--unshare-user", "--uid", "0", "--gid", "0",
                 "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",

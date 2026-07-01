@@ -232,7 +232,8 @@ def test_running_labs_get_home_owned_npm_prefix(monkeypatch):
     assert len(exec_calls) == 2
     assert all("prefix=${HOME}/.local" in call for call in exec_calls)
     assert all("/etc/profile.d/lab-npm-user-prefix.sh" in call for call in exec_calls)
-    assert all("chmod 0755 /usr/bin/bwrap" in call for call in exec_calls)
+    assert all("chown root:root /usr/bin/bwrap" in call for call in exec_calls)
+    assert all("chmod 4755 /usr/bin/bwrap" in call for call in exec_calls)
     assert all('"$home/.npmrc"' in call for call in exec_calls)
     assert all('"$home/.codex/config.toml"' in call for call in exec_calls)
     assert all("use_legacy_landlock" in call for call in exec_calls)

@@ -19,7 +19,7 @@ def test_runc_host_userns_outer_container_contract():
     assert "--userns=host" in args
     assert "--device nvidia.com/gpu=all" in joined
     assert "seccomp=/etc/lab-agent/security/lab-codex-seccomp.json" in joined
-    assert "apparmor=lab-codex" in joined
+    assert "apparmor=unconfined" in joined
     assert "systempaths=unconfined" in joined
     assert "source=/fast/bio,target=/home" in joined
     assert "source=/cold/bio,target=/cold-storage" in joined
@@ -28,7 +28,7 @@ def test_runc_host_userns_outer_container_contract():
     assert "--stop-signal SIGTERM" in joined
     assert "SIGRTMIN+3" not in joined
     for forbidden in ("--privileged", "--cap-add", "SYS_ADMIN", "/var/run/docker.sock",
-                      "no-new-privileges", "seccomp=unconfined", "apparmor=unconfined"):
+                      "no-new-privileges", "seccomp=unconfined"):
         assert forbidden not in joined
 
 
