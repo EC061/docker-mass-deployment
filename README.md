@@ -6,9 +6,10 @@ lab, no host engine socket, and no privileged mode. Students retain full passwor
 daemon-remapped parent namespace locks the inherited mounts that nested bubblewrap must modify.
 
 Codex is a required workload. The lab image includes a pinned Codex CLI and distribution
-`/usr/bin/bwrap`; the outer container uses a dedicated seccomp profile and deliberately runs with
-`apparmor=unconfined` for setuid bubblewrap setup without granting outer `CAP_SYS_ADMIN`. Doctor
-validates Codex's supported sandbox command directly.
+`/usr/bin/bwrap`; the outer container uses a dedicated seccomp profile, deliberately runs with
+`apparmor=unconfined`, and adds the three capabilities required by bubblewrap's setuid setup path:
+`SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`. Doctor validates Codex's supported sandbox command
+directly.
 
 ## Persistent layout
 
@@ -124,9 +125,10 @@ profile digest differs from the installed profile.
 Managed labs also use Docker's `systempaths=unconfined` creation option. Docker's default masked
 and read-only submounts below `/proc` make Linux reject the fresh procfs mount required by an
 unprivileged bubblewrap PID namespace. Managed containers pair this with `apparmor=unconfined`;
-the dedicated seccomp profile, restricted mounts, and lack of outer `CAP_SYS_ADMIN` remain active.
-Existing containers must be recreated after this contract changes; doctor reports them as
-`container_systempaths_stale`.
+the dedicated seccomp profile and restricted mounts remain active. Existing containers must be
+recreated after this contract changes; doctor reports stale system paths as
+`container_systempaths_stale` and missing setuid-bubblewrap capabilities as
+`container_bwrap_caps_stale`.
 
 Managed labs run with `--userns=host` (the initial user namespace). Bubblewrap needs it: under a
 remapped namespace Linux locks the inherited root mount and bubblewrap fails at `make / slave`
@@ -190,16 +192,22 @@ the real namespace and Codex smoke tests as that ordinary user. A lab is not hea
 commands pass inside its outer container:
 
 ```bash
-unshare --user --map-root-user true
+bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --proc /proc --dev /dev --unshare-pid true
 codex --version
 codex sandbox -- true
 ```
 
+A plain `unshare --user` may remain blocked by Ubuntu's AppArmor restriction. That is expected in
+the enforced Fix 3 model: the setuid-root distribution bwrap obtains its required setup
+capabilities, constructs the sandbox, and drops them before starting the payload.
+
 Doctor still records whether the distribution `bwrap` binary can create a raw nested sandbox, but
 Codex's own sandbox smoke test is the supported pass/fail gate. Managed labs enforce root ownership
 and setuid mode (`4755`) on `/usr/bin/bwrap`, and run the outer container with
-`--security-opt apparmor=unconfined` for the most reliable nested sandbox setup. The dedicated
-seccomp profile remains enabled. `host-prepare` and `Repair` re-assert this bwrap mode.
+`--security-opt apparmor=unconfined` plus `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`, which the
+setuid bubblewrap code requires while constructing the nested sandbox. The dedicated seccomp
+profile remains enabled. `host-prepare` and `Repair` re-assert this bwrap mode; capability changes
+require container recreation.
 
 Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace
 isolation, and that container root cannot modify a host sentinel outside `/home` and
