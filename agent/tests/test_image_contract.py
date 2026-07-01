@@ -7,6 +7,8 @@ def test_lab_image_has_cuda_bubblewrap_and_no_nested_engine():
     assert "ubuntu:24.04@sha256:" in dockerfile
     assert "cuda-minimal-build-13-3=13.3.1-1" in dockerfile
     assert "CUDA_KEYRING_SHA256=" in dockerfile
+    assert "ENV PATH=/usr/local/cuda/bin:${PATH}" in dockerfile
+    assert "ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64" in dockerfile
     assert "bubblewrap" in dockerfile
     assert "python-is-python3" in dockerfile
     assert "build-essential cmake ninja-build pkg-config" in dockerfile
