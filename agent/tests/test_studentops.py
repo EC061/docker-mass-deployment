@@ -1,5 +1,8 @@
+import pytest
+
 from lab_agent import studentops
 from lab_agent.config import AgentConfig
+from lab_agent.executors.coldfs import ColdFsError
 
 
 def cfg():
@@ -42,3 +45,14 @@ def test_remove_data_is_host_side_and_cold_is_independent(monkeypatch):
     })
     assert calls == [("remove", "lab-bio", "alice")]
     assert removed == [("/fast/bio", "alice")]
+
+
+def test_cold_cleanup_is_owner_only(monkeypatch):
+    _, removed, _ = patch_storage(monkeypatch)
+    result, _ = studentops.delete_cold_student(cfg(), {"lab": "bio", "username": "alice"})
+    assert result["cold_deleted"] is True
+    assert removed == [("/cold/bio", "alice")]
+
+    client = AgentConfig(controller_url="ws://x", token="t", slow_backend="smb")
+    with pytest.raises(ColdFsError, match="may not delete"):
+        studentops.delete_cold_student(client, {"lab": "bio", "username": "alice"})

@@ -6,7 +6,7 @@
  *   - PLACEMENT-LEVEL (`LabStats.live`): the whole-container writable layer
  *     (tier=rootfs, student_id NULL) plus the placement's fast/cold ZFS usage-vs-quota. The agent
  *     recomputes these every ~5 min and re-reports them each heartbeat, so they carry a freshness ts.
- *   - NIGHTLY per-student (`LabStats.students`): each student's container home, scratch, and cold
+ *   - NIGHTLY per-student (`LabStats.students`): each student's persistent fast home and cold
  *     the per-student usage scan (nightly + on-demand "Scan now").
  */
 
@@ -18,8 +18,7 @@ export interface StudentUsage {
   studentId: number;
   username: string;
   name: string | null;
-  homeUsed: number | null; // container home (installed software) attributed to this student
-  fast: number | null; // scratch
+  fast: number | null; // persistent home
   cold: number | null; // cold storage
 }
 
@@ -134,11 +133,10 @@ export function buildStats(): NodeStats[] {
       studentId: m.id,
       username: m.username,
       name: m.name ?? null,
-      homeUsed: used(p.id, m.id, "rootfs"),
       fast: used(p.id, m.id, "fast"),
       cold: used(p.id, m.id, "cold"),
     }));
-    students.sort((a, b) => (b.homeUsed ?? 0) - (a.homeUsed ?? 0) || a.username.localeCompare(b.username));
+    students.sort((a, b) => (b.fast ?? 0) - (a.fast ?? 0) || a.username.localeCompare(b.username));
 
     const usageScannedAt = p.usage_scanned_at ?? null;
     const liveTs = (["rootfs", "fast", "cold"] as const)

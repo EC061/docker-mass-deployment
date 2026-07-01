@@ -247,7 +247,7 @@ const USAGE_SCAN_MIN_GAP_MS = 20 * 3600 * 1000;
 
 /**
  * Enqueue a per-student usage (du) scan to each online lab once a night, during the configured hour
- * (in usageScanTimezone, default midnight). The agent measures each student's home/scratch/cold
+ * (in usageScanTimezone, default midnight). The agent measures each student's fast home and cold
  * usage and reports it back on its heartbeat; we only kick the scans off here. Returns the lab names
  * a scan was scheduled for. Lab-level usage (image + fast/cold) is NOT scheduled here — the agent
  * recomputes it on its own ~5-min cadence. Since the maintenance ticker runs hourly, the configured

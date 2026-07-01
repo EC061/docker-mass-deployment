@@ -192,9 +192,10 @@ describe("SMB placement rules + shared student removal", () => {
 
   beforeAll(() => {
     const d = dbmod.db();
-    d.prepare("INSERT INTO nodes (name, online, created_at, cold_backend, cold_ready) VALUES ('own-1', 1, 0, 'local_zfs', 1)").run();
+    const capabilities = JSON.stringify({ runtime: { userns_start: 231072, userns_size: 65536 } });
+    d.prepare("INSERT INTO nodes (name, online, created_at, cold_backend, cold_ready, capabilities) VALUES ('own-1', 1, 0, 'local_zfs', 1, ?)").run(capabilities);
     ownerId = (d.prepare("SELECT id FROM nodes WHERE name='own-1'").get() as any).id;
-    d.prepare("INSERT INTO nodes (name, online, created_at, cold_backend, cold_owner_node_id, cold_ready) VALUES ('smb-1', 1, 0, 'smb', ?, 1)").run(ownerId);
+    d.prepare("INSERT INTO nodes (name, online, created_at, cold_backend, cold_owner_node_id, cold_ready, capabilities) VALUES ('smb-1', 1, 0, 'smb', ?, 1, ?)").run(ownerId, capabilities);
     clientId = (d.prepare("SELECT id FROM nodes WHERE name='smb-1'").get() as any).id;
   });
 
@@ -222,7 +223,18 @@ describe("SMB placement rules + shared student removal", () => {
     dbmod.db().prepare("UPDATE nodes SET cold_ready = 1 WHERE id = ?").run(clientId);
   });
 
-  it("deletes shared cold only on the owner (delete_cold=false on the SMB client)", async () => {
+  it("refuses an SMB client with a different numeric userns mapping", async () => {
+    const lab = newLab("smbids");
+    const owner = await grant(lab.id, ownerId);
+    placements.markPlacementState(owner.id, "active");
+    dbmod.db().prepare("UPDATE nodes SET capabilities = ? WHERE id = ?")
+      .run(JSON.stringify({ runtime: { userns_start: 999999, userns_size: 65536 } }), clientId);
+    await expect(grant(lab.id, clientId)).rejects.toThrow(/same Docker userns numeric mapping/);
+    dbmod.db().prepare("UPDATE nodes SET capabilities = ? WHERE id = ?")
+      .run(JSON.stringify({ runtime: { userns_start: 231072, userns_size: 65536 } }), clientId);
+  });
+
+  it("defers shared cold cleanup until all placement removals succeed", async () => {
     const lab = newLab("smblab3");
     const owner = await grant(lab.id, ownerId);
     placements.markPlacementState(owner.id, "active");
@@ -236,8 +248,38 @@ describe("SMB placement rules + shared student removal", () => {
 
     const removes = enqueueTask.mock.calls.filter((c) => c[1] === "student.remove");
     const byNode = Object.fromEntries(removes.map((c) => [c[0], c[2]]));
-    expect(byNode["own-1"]).toMatchObject({ delete_data: true, delete_cold: true });
-    expect(byNode["smb-1"]).toMatchObject({ delete_data: true, delete_cold: false });
+    expect(byNode["own-1"]).toMatchObject({ delete_data: true, removal_id: expect.any(String) });
+    expect(byNode["smb-1"]).toMatchObject({ delete_data: true, removal_id: byNode["own-1"].removal_id });
+    expect(byNode["own-1"].cold_cleanup_nodes).toEqual(["own-1"]);
+    expect(byNode["own-1"]).not.toHaveProperty("delete_cold");
+  });
+
+  it("queues owner cold cleanup only after every removal task is ok", () => {
+    const d = dbmod.db();
+    const removalId = "removal-test-1";
+    const params = JSON.stringify({
+      lab: "smblab3", username: "alice", delete_data: true,
+      removal_id: removalId, cold_cleanup_nodes: ["own-1"],
+    });
+    const insert = d.prepare(
+      `INSERT INTO task_log
+       (task_uuid, node, action, params, state, created_at, updated_at)
+       VALUES (?, ?, 'student.remove', ?, ?, 1, 1)`,
+    );
+    insert.run("remove-owner-test", "own-1", params, "ok");
+    insert.run("remove-client-test", "smb-1", params, "sent");
+    enqueueTask.mockClear();
+    placements.completeStudentRemoval("remove-owner-test");
+    expect(enqueueTask).not.toHaveBeenCalled();
+
+    d.prepare("UPDATE task_log SET state = 'ok' WHERE task_uuid = 'remove-client-test'").run();
+    placements.completeStudentRemoval("remove-client-test");
+    expect(enqueueTask).toHaveBeenCalledWith(
+      "own-1",
+      "student.delete_cold",
+      { lab: "smblab3", username: "alice", removal_id: removalId },
+      undefined,
+    );
   });
 
   it("blocks tearing down the owner placement while an SMB client depends on it", async () => {

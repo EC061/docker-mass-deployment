@@ -188,9 +188,9 @@ export interface CreatePlacementInput {
  */
 export async function createPlacement(input: CreatePlacementInput): Promise<Placement> {
   const node = db()
-    .prepare("SELECT id, name, cold_backend, cold_owner_node_id, cold_ready FROM nodes WHERE id = ?")
+    .prepare("SELECT id, name, cold_backend, cold_owner_node_id, cold_ready, capabilities FROM nodes WHERE id = ?")
     .get(input.nodeId) as
-    | { id: number; name: string; cold_backend: string; cold_owner_node_id: number | null; cold_ready: number }
+    | { id: number; name: string; cold_backend: string; cold_owner_node_id: number | null; cold_ready: number; capabilities: string | null }
     | undefined;
   if (!node) throw new Error("Unknown node");
   validateContainerConfig(input.image, input.containerOptions);
@@ -204,7 +204,8 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
     if (!node.cold_owner_node_id) {
       throw new Error(`node '${node.name}' is an SMB client without a cold-storage owner — configure it on the Nodes page`);
     }
-    const owner = db().prepare("SELECT name FROM nodes WHERE id = ?").get(node.cold_owner_node_id) as { name: string };
+    const owner = db().prepare("SELECT name, capabilities FROM nodes WHERE id = ?").get(node.cold_owner_node_id) as
+      { name: string; capabilities: string | null };
     const ownerPlacement = db()
       .prepare("SELECT state FROM lab_placements WHERE lab_id = ? AND node_id = ?")
       .get(input.labId, node.cold_owner_node_id) as { state: string } | undefined;
@@ -216,6 +217,22 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
     }
     if (node.cold_ready !== 1) {
       throw new Error(`the SMB cold-storage mount on '${node.name}' is not an active mount yet`);
+    }
+    const mapping = (raw: string | null) => {
+      try {
+        const runtime = (JSON.parse(raw ?? "{}") as any).runtime;
+        if (Number.isInteger(runtime?.userns_start) && Number.isInteger(runtime?.userns_size)) {
+          return `${runtime.userns_start}:${runtime.userns_size}`;
+        }
+      } catch { /* handled below */ }
+      return null;
+    };
+    const clientMapping = mapping(node.capabilities);
+    const ownerMapping = mapping(owner.capabilities);
+    if (!clientMapping || !ownerMapping || clientMapping !== ownerMapping) {
+      throw new Error(
+        `SMB client '${node.name}' and owner '${owner.name}' must report the same Docker userns numeric mapping`,
+      );
     }
   } else if (coldQuota === null) {
     throw new Error("a local-ZFS placement requires a cold quota");
@@ -431,27 +448,77 @@ export function consumePlacementCredential(
 }
 
 /**
- * Remove one student from one placement: enqueue student.remove and drop the placement_member.
- * delete_cold is true only on a local-ZFS placement (which owns its cold dataset); an SMB client is
- * told delete_cold=false so it can never erase the owner's shared cold data — the owner deletes it
- * exactly once. delete_data (fast, node-local) is honored on every placement.
+ * Remove one student account and its node-local fast home from one placement. Shared cold cleanup
+ * is a separate owner-only task after every placement removal in the operation succeeds.
  */
 export function removeMemberFromPlacement(
   placement: Placement,
   student: { id: number; username: string },
   deleteData: boolean,
   actor?: string,
+  removal?: { id: string; coldCleanupNodes: string[] },
 ): void {
-  const deleteCold = deleteData && placement.node_cold_backend === "local_zfs";
   enqueueTask(
     placement.node_name,
     "student.remove",
-    { lab: placement.lab_name, username: student.username, delete_data: deleteData, delete_cold: deleteCold },
+    {
+      lab: placement.lab_name,
+      username: student.username,
+      delete_data: deleteData,
+      ...(removal ? { removal_id: removal.id, cold_cleanup_nodes: removal.coldCleanupNodes } : {}),
+    },
     actor,
   );
   db()
     .prepare("DELETE FROM placement_members WHERE placement_id = ? AND student_id = ?")
     .run(placement.id, student.id);
+}
+
+interface RemovalParams {
+  lab?: string;
+  username?: string;
+  removal_id?: string;
+  cold_cleanup_nodes?: string[];
+}
+
+/** Enqueue one cleanup for each locally-owned cold backing store, but only after all containers
+ * removed the account and node-local fast home. Cached/repeated results cannot duplicate cleanup. */
+export function completeStudentRemoval(taskUuid: string): void {
+  const task = db()
+    .prepare("SELECT params, requested_by FROM task_log WHERE task_uuid = ? AND action = 'student.remove' AND state = 'ok'")
+    .get(taskUuid) as { params: string | null; requested_by: string | null } | undefined;
+  if (!task?.params) return;
+  let params: RemovalParams;
+  try {
+    params = JSON.parse(task.params) as RemovalParams;
+  } catch {
+    return;
+  }
+  if (!params.removal_id || !params.lab || !params.username) return;
+  const states = db()
+    .prepare(
+      `SELECT state FROM task_log
+       WHERE action = 'student.remove' AND json_extract(params, '$.removal_id') = ?`,
+    )
+    .all(params.removal_id) as { state: string }[];
+  if (states.length === 0 || states.some((row) => row.state !== "ok")) return;
+
+  for (const node of new Set(params.cold_cleanup_nodes ?? [])) {
+    const exists = db()
+      .prepare(
+        `SELECT 1 FROM task_log WHERE node = ? AND action = 'student.delete_cold'
+         AND json_extract(params, '$.removal_id') = ? LIMIT 1`,
+      )
+      .get(node, params.removal_id);
+    if (!exists) {
+      enqueueTask(
+        node,
+        "student.delete_cold",
+        { lab: params.lab, username: params.username, removal_id: params.removal_id },
+        task.requested_by ?? undefined,
+      );
+    }
+  }
 }
 
 /** Live quota change (no recreate). Routes to lab.set_quota on the placement's node. */

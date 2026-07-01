@@ -21,9 +21,10 @@ def test_add_user_exact_ids_sudo_and_flat_links(monkeypatch):
     users.add_user("lab-bio", "alice", "secret", 10042, 10042)
     script = cap.calls[0][2]
     assert "groupadd -g 10042" in script
-    assert "useradd -m -u 10042 -g 10042" in script
+    assert 'useradd -M -d /home/"$u" -u 10042 -g 10042' in script
     assert "usermod -aG sudo" in script
-    assert "/fast/\"$u\"" in script and "/cold/\"$u\"" in script
+    assert '/cold-storage/"$u"' in script
+    assert '/fast/"$u"' not in script and '/cold/"$u"' not in script
     assert "docker" not in script
 
 
@@ -43,5 +44,6 @@ def test_remove_user_only_removes_account(monkeypatch):
     monkeypatch.setattr(users, "exec_in", cap)
     users.remove_user("lab-bio", "alice")
     script = cap.calls[0][2]
-    assert "userdel -r alice" in script
+    assert "userdel alice" in script
+    assert "userdel -r" not in script
     assert "/fast" not in script and "/cold" not in script

@@ -26,6 +26,8 @@ class RuntimeHealth:
     storage_driver: str
     userns_ok: bool
     userns_user: str
+    userns_start: int
+    userns_size: int
     bwrap_ok: bool
     nested_userns_ok: bool
     codex_sandbox_ok: bool
@@ -366,7 +368,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                f"Fast pool '{cfg.fast_pool}' is unavailable")
     if cfg.slow_is_zfs:
         cold_ok = (
-            _pool_exists(cfg.slow_pool) and _zfs_root_ok(cfg.labs_slow_root)
+            _pool_exists(cfg.slow_pool) and _zfs_root_ok(cfg.labs_slow_root, cfg.cold_mount_root)
             if zfs_ok else False
         )
     else:
@@ -380,7 +382,8 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     severity = {"warning": 1, "critical": 2}
     status = "healthy" if not issues else max(issues, key=lambda i: severity[i.severity]).severity
     return Capabilities(
-        runtime=RuntimeHealth(docker_ok, driver, userns_ok, cfg.userns_user, bwrap_ok,
+        runtime=RuntimeHealth(docker_ok, driver, userns_ok, cfg.userns_user,
+                              cfg.userns_start, cfg.userns_size, bwrap_ok,
                               nested_userns_ok, codex_ok),
         nvidia=NvidiaHealth(gpu_count, nvml_ok, loaded, userspace, cdi_ok, devices),
         storage=StorageHealth(zfs_ok, fast_ok, cold_ok, cfg.slow_backend),

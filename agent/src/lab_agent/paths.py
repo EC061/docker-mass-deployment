@@ -3,10 +3,10 @@
 Each lab has exactly one quota-bearing dataset per storage tier. Student storage is a directory
 directly below that lab root; there are no ``shared`` or ``users`` child datasets.
 
-    fast/labs/<lab> -> host /fast/<lab> -> container /fast
-    slow/labs/<lab> -> its ZFS mount     -> container /cold
-    /fast/<user>    -> /home/<user>/scratch
-    /cold/<user>    -> /home/<user>/cold-storage
+    fast/labs/<lab> -> host /fast/<lab>         -> container /home
+    slow/labs/<lab> -> host /cold-storage/<lab> -> container /cold-storage
+    /home/<user> is the student's persistent fast directory
+    /home/<user>/cold-storage -> /cold-storage/<user>
 """
 
 from __future__ import annotations
@@ -40,7 +40,8 @@ def fast_mount(cfg: AgentConfig, lab: str) -> str:
 
 
 # --- Cold storage as a filesystem path (SMB backend) -----------------------------------------
-# When cold storage is SMB there are no datasets, only one directory per lab.
+# When cold storage is SMB there are no local datasets: this path is the SMB view of the owner's
+# exact same per-lab directory.
 
 
 def cold_lab(cfg: AgentConfig, lab: str) -> str:

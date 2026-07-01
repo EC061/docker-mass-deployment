@@ -4,6 +4,8 @@
  * node, with credentials delivered only after agent confirmation); removal reverses every placement.
  */
 
+import { randomUUID } from "node:crypto";
+
 import { audit } from "./audit";
 import { db } from "./db";
 import { normalizeEmail } from "./email";
@@ -178,8 +180,21 @@ export function removeStudentFromLab(
     .get(labId, studentId) as { username: string; email: string | null } | undefined;
   if (!member) throw new Error("Student is not a member of this lab");
 
-  for (const p of listPlacements(labId)) {
-    removeMemberFromPlacement(p, { id: studentId, username: member.username }, deleteData, actor);
+  const placements = listPlacements(labId);
+  const coldCleanupNodes = deleteData
+    ? placements.filter((p) => p.node_cold_backend === "local_zfs").map((p) => p.node_name)
+    : [];
+  const removal = deleteData && placements.length > 0
+    ? { id: randomUUID(), coldCleanupNodes }
+    : undefined;
+  for (const p of placements) {
+    removeMemberFromPlacement(
+      p,
+      { id: studentId, username: member.username },
+      deleteData,
+      actor,
+      removal,
+    );
   }
   db().prepare("DELETE FROM lab_members WHERE lab_id = ? AND student_id = ?").run(labId, studentId);
   audit(actor, "member.remove", `${lab.name}/${member.username}`, deleteData ? "data deleted" : undefined);

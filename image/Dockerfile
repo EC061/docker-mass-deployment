@@ -29,7 +29,7 @@ RUN sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh
     && sed -i 's/^#\?LoginGraceTime.*/LoginGraceTime 30/' /etc/ssh/sshd_config \
     && printf '\nPermitRootLogin no\nMaxAuthTries 3\nLoginGraceTime 30\n' >> /etc/ssh/sshd_config \
     && passwd -l root \
-    && mkdir -p /fast /cold \
+    && mkdir -p /home /cold-storage \
     && rm -f /etc/ssh/ssh_host_*
 
 COPY labquota /usr/local/bin/labquota

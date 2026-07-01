@@ -3,11 +3,11 @@
 
 Reads the usage snapshot the lab agent publishes into the container. The numbers cover three things:
 
-  * scratch    — fast NVMe storage (~/scratch), quota-limited
+  * home       — fast NVMe storage (~), covered by the lab's fast quota
   * cold       — slow bulk storage (~/cold-storage), quota-limited
-  * installed  — software/envs you installed in the container itself (your home dir)
+  * rootfs     — the lab container's shared writable layer
 
-scratch/cold are always live. "installed" comes from a periodic scan; if it is stale you can ask for
+Lab totals are refreshed frequently; per-student home/cold sizes come from a periodic scan. Ask for
 a fresh one with `labquota --refresh` and watch the progress.
 
 This talks to the agent only through files in a shared directory — no network, no privileges.
@@ -25,8 +25,8 @@ import time
 LABQUOTA_DIR = os.environ.get("LABQUOTA_DIR", "/run/labquota")
 USAGE_FILE = os.path.join(LABQUOTA_DIR, "usage.json")
 STATUS_FILE = os.path.join(LABQUOTA_DIR, "status.json")
-# Each refresh marker lives in the student's own /fast/<user> directory.
-USERS_DIR = os.environ.get("LABQUOTA_USERS_DIR", "/fast")
+# Each refresh marker lives in the student's own persistent home directory.
+USERS_DIR = os.environ.get("LABQUOTA_USERS_DIR", "/home")
 REFRESH_MARKER = ".labquota-refresh"
 
 FRESH_MS = 60 * 60 * 1000  # a usage scan younger than this is "fresh"
@@ -90,7 +90,7 @@ def render(snapshot: dict, *, me: str, only_me: bool) -> None:
 
     print(f"Lab '{lab}' on node {snapshot.get('node', '?')} — storage usage")
     print(f"  updated {fmt_age(snapshot.get('generated_at'))}", end="")
-    print(f" · installed-scan {fmt_age(snapshot.get('usage_scanned_at'))}", end="")
+    print(f" · student-scan {fmt_age(snapshot.get('usage_scanned_at'))}", end="")
     if scanning:
         done, total = status.get("done", 0), status.get("total", 0)
         print(f" · scanning {done}/{total}…")
@@ -105,37 +105,33 @@ def render(snapshot: dict, *, me: str, only_me: bool) -> None:
         print("  (no students provisioned yet)")
         return
 
-    rows = [("STUDENT", "SCRATCH (fast)", "COLD (slow)", "INSTALLED")]
+    rows = [("STUDENT", "HOME (fast)", "COLD (slow)")]
     for s in students:
         name = s.get("username", "?")
         label = f"{name}  (you)" if name == me else name
         rows.append(
-            (label, fmt_pair(s.get("scratch")), fmt_pair(s.get("cold")),
-             fmt_bytes(s.get("home_used")))
+            (label, fmt_pair(s.get("home")), fmt_pair(s.get("cold")))
         )
-    widths = [max(len(r[i]) for r in rows) for i in range(4)]
+    widths = [max(len(r[i]) for r in rows) for i in range(3)]
     for i, row in enumerate(rows):
-        line = "  " + "  ".join(row[j].ljust(widths[j]) for j in range(4))
+        line = "  " + "  ".join(row[j].ljust(widths[j]) for j in range(3))
         print(line)
         if i == 0:
-            print("  " + "  ".join("-" * widths[j] for j in range(4)))
+            print("  " + "  ".join("-" * widths[j] for j in range(3)))
 
     totals = snapshot.get("totals", {})
     print()
-    print(f"  lab total  scratch {fmt_pair(totals.get('fast'))}"
+    print(f"  lab total  home {fmt_pair(totals.get('fast'))}"
           f"   cold {fmt_pair(totals.get('cold'))}"
-          f"   installed {fmt_bytes(totals.get('rootfs_used'))}")
-    if snapshot.get("rootfs_unattributed"):
-        print(f"  (installed includes {fmt_bytes(snapshot['rootfs_unattributed'])} not in any "
-              "home dir, e.g. /tmp)")
+          f"   rootfs {fmt_bytes(totals.get('rootfs_used'))}")
     print()
-    print("  Options: labquota --refresh   refresh installed-software sizes (if >1h old)")
+    print("  Options: labquota --refresh   refresh per-student sizes (if >1h old)")
     print("           labquota --me        show only your usage")
     print("           labquota --json      machine-readable output")
 
 
 def request_refresh(me: str) -> None:
-    """Touch a marker in your own scratch dir so the agent runs a fresh scan. Content is ignored.
+    """Touch a marker in your own home so the agent runs a fresh scan. Content is ignored.
 
     Writing into your own (quota-limited) dataset — not a shared directory — means you can only ever
     signal a refresh for yourself and cannot affect anyone else.
@@ -163,14 +159,14 @@ def do_refresh(force: bool) -> int:
     already_running = status.get("status") == "running"
 
     if not already_running and not force and age_ms is not None and age_ms < FRESH_MS:
-        print(f"Installed-software sizes are fresh ({fmt_age(scanned_at)}). "
+        print(f"Per-student sizes are fresh ({fmt_age(scanned_at)}). "
               "Use --refresh --force to scan anyway.")
         return 0
 
     me = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
     if not already_running:
         request_refresh(me)
-        print("Requested a fresh scan of installed software… (this can take a while on large homes)")
+        print("Requested a fresh storage scan… (this can take a while on large homes)")
 
     # Poll the status file until the scan finishes (or we time out).
     start = time.time()

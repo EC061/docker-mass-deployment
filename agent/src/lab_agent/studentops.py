@@ -38,21 +38,27 @@ def remove_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     username = params["username"]
     delete_data = bool(params.get("delete_data", False))
-    # delete_cold is sent separately by the controller: True only for the local-ZFS owner of the
-    # cold data (so shared cold is deleted exactly once), False on SMB clients (which must never
-    # touch the owner's share). Defaults to delete_data for a standalone local-ZFS lab / old caller.
-    delete_cold = bool(params.get("delete_cold", delete_data))
-
     users.remove_user(docker.container_name(lab), username)
     if delete_data:
         coldfs.remove_child(zfs.get_mountpoint(lab_fast(cfg, lab)), username)
-    if delete_cold:
-        coldfs.remove_child(coldstore.lab_mount(cfg, lab), username)
     msg = f"removed student '{username}' from lab '{lab}'"
     result = {
         "lab": lab,
         "username": username,
         "data_deleted": delete_data,
-        "cold_deleted": delete_cold,
+        "cold_deleted": False,
     }
     return result, msg
+
+
+def delete_cold_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
+    """Owner-only final cleanup after all containers have removed the student account."""
+    if not cfg.slow_is_zfs:
+        raise coldfs.ColdFsError("an SMB client may not delete shared cold-storage data")
+    lab = params["lab"]
+    username = params["username"]
+    users.validate_username(username)
+    coldfs.remove_child(coldstore.lab_mount(cfg, lab), username)
+    return {"lab": lab, "username": username, "cold_deleted": True}, (
+        f"deleted cold storage for '{username}' in lab '{lab}'"
+    )

@@ -38,7 +38,7 @@ def test_outer_boundary_and_mounts():
     assert "SYS_ADMIN" not in (host.get("CapAdd") or [])
     assert all("unconfined" not in item for item in host.get("SecurityOpt") or [])
     destinations = {mount["Destination"] for mount in config["Mounts"]}
-    assert destinations == {"/fast", "/cold", "/run/labquota"}
+    assert destinations == {"/home", "/cold-storage", "/run/labquota"}
 
 
 def test_unprivileged_bubblewrap_and_codex():
@@ -52,7 +52,7 @@ def test_unprivileged_bubblewrap_and_codex():
 
 
 def test_gpu_storage_and_quota_commands():
-    student_exec("sh", "-c", "test -w /fast/$USER && test -w /cold/$USER")
+    student_exec("sh", "-c", "test -w /home/$USER && test -w /cold-storage/$USER")
     student_exec("nvidia-smi")
     student_exec("codex", "sandbox", "linux", "--", "nvidia-smi")
     student_exec("labquota", "--me")

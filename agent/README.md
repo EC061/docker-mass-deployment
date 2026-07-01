@@ -1,7 +1,12 @@
 # lab-agent
 
-The node agent provisions flattened fast/cold storage, standard `runc` lab containers, exact-ID
+The node agent mounts `/fast/<lab>` at container `/home` and `/cold-storage/<lab>` at container
+`/cold-storage`, provisions standard `runc` lab containers and exact-ID
 student accounts, explicit storage telemetry, NVIDIA CDI devices, and node health/maintenance tasks.
+
+On an SMB client, `/cold-storage` must be an active mount of the owner node's cold tree. The same
+numeric Docker user-namespace mapping is required on both nodes so either placement can safely and
+idempotently converge student-directory ownership.
 
 Install and prepare a node:
 

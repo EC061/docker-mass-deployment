@@ -298,7 +298,7 @@ class Agent:
 
     def _publish_all_usage(self) -> None:
         # collect_zfs_usage returns a row per lab (lab-level fast), so it enumerates the labs; the
-        # roster (provisioned scratch subdirs) is added per lab so a freshly-provisioned student is
+        # roster (provisioned home directories) is added per lab so a freshly-provisioned student is
         # listed even before any per-student ZFS/docker numbers exist.
         grouped = usagereport.collect_zfs_usage(self.cfg)
         for lab, lab_usage in grouped.items():

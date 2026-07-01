@@ -38,7 +38,7 @@ def healthy_runner():
         "zfs get -H -o value mounted fast/labs": (True, "yes"),
         "zfs get -H -o value mountpoint fast/labs": (True, "/fast"),
         "zfs get -H -o value mounted slow/labs": (True, "yes"),
-        "zfs get -H -o value mountpoint slow/labs": (True, "/slow/labs"),
+        "zfs get -H -o value mountpoint slow/labs": (True, "/cold-storage"),
     })
 
 
@@ -52,6 +52,7 @@ def test_structured_healthy_capabilities(monkeypatch):
     assert caps.nvidia.gpu_count == 1 and caps.nvidia.cdi_ok
     assert caps.health.status == "healthy"
     assert caps.to_dict()["runtime"]["userns_user"] == "labdockremap"
+    assert caps.to_dict()["runtime"]["userns_start"] == 231072
 
 
 def test_userns_misconfiguration_blocks_health(monkeypatch):

@@ -24,14 +24,21 @@ def ensure_dir(path: str) -> None:
 
 
 def ensure_owned_dir(path: str, uid: int, gid: int, *, mode: int = 0o700) -> None:
-    """Create a real directory and give it exact numeric ownership without following symlinks."""
+    """Race-safely converge a real directory to exact numeric ownership and mode."""
     try:
         os.lstat(path)
-        if not os.path.isdir(path) or os.path.islink(path):
-            raise ColdFsError(f"refusing to use '{path}': expected a real directory")
     except FileNotFoundError:
-        os.mkdir(path, mode)
+        try:
+            os.mkdir(path, mode)
+        except FileExistsError:
+            # Another placement may be provisioning the same SMB-backed student directory.
+            pass
+    try:
         os.lstat(path)
+    except FileNotFoundError as exc:
+        raise ColdFsError(f"directory '{path}' disappeared during provisioning") from exc
+    if not os.path.isdir(path) or os.path.islink(path):
+        raise ColdFsError(f"refusing to use '{path}': expected a real directory")
     os.chown(path, uid, gid, follow_symlinks=False)
     os.chmod(path, mode, follow_symlinks=False)
 

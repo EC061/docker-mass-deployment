@@ -155,7 +155,10 @@ describe("removeStudentFromLab (deprovisions on every placement)", () => {
     expect(enqueueTask).toHaveBeenCalledWith(
       "gpu-1",
       "student.remove",
-      { lab: "bio", username: "dave", delete_data: true, delete_cold: true },
+      expect.objectContaining({
+        lab: "bio", username: "dave", delete_data: true,
+        removal_id: expect.any(String), cold_cleanup_nodes: ["gpu-1"],
+      }),
       "admin",
     );
     expect(sendRemovalEmail).toHaveBeenCalledWith("d@uga.edu", "bio", true);

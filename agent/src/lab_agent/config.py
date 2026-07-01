@@ -25,6 +25,7 @@ DEFAULT_USERNS_USER = "labdockremap"
 DEFAULT_USERNS_START = 231_072
 DEFAULT_USERNS_SIZE = 65_536
 DEFAULT_FAST_MOUNT_ROOT = "/fast"
+DEFAULT_COLD_MOUNT_ROOT = "/cold-storage"
 DEFAULT_DOCKER_DATA_ROOT = "/var/lib/docker"
 # Docker's data-root is a native ZFS dataset on the fast pool (storage-driver "zfs"): every image
 # layer and container is its own ZFS clone, and its rootfs_quota storage-opt maps straight onto the
@@ -55,12 +56,14 @@ class AgentConfig:
     slow_pool: str = DEFAULT_SLOW_POOL
     # Cold-storage backend: "zfs" (default) or "smb".
     slow_backend: str = SLOW_BACKEND_ZFS
-    # When slow_backend == "smb", the base mount path of the cold-storage share (labs live under
-    # <slow_path>/labs/...). Ignored for the zfs backend.
-    slow_path: str = "/mnt/cold"
+    # When slow_backend == "smb", the active mountpoint of the owner's cold-storage share. Lab
+    # directories live directly below it (/cold-storage/<lab>).
+    slow_path: str = DEFAULT_COLD_MOUNT_ROOT
     # Host mount root for the flattened per-lab fast datasets. A lab is mounted on the host at
-    # /fast/<lab> and bind-mounted into its container at /fast.
+    # /fast/<lab> and bind-mounted into its container at /home.
     fast_mount_root: str = DEFAULT_FAST_MOUNT_ROOT
+    # Explicit host mount root for locally-owned cold ZFS datasets.
+    cold_mount_root: str = DEFAULT_COLD_MOUNT_ROOT
     # Native Docker userns-remap contract. Container uid N maps to userns_start + N on the host.
     userns_user: str = DEFAULT_USERNS_USER
     userns_start: int = DEFAULT_USERNS_START
@@ -114,8 +117,9 @@ class AgentConfig:
 
     @property
     def cold_root(self) -> str:
-        """Filesystem root holding labs on an SMB cold-storage mount (smb backend only)."""
-        return f"{self.slow_path.rstrip('/')}/labs"
+        """Host root holding per-lab cold directories for either backend."""
+        root = self.cold_mount_root if self.slow_is_zfs else self.slow_path
+        return root.rstrip("/")
 
     @property
     def maintenance_state(self) -> str:
@@ -157,6 +161,7 @@ def load_config(path: Path | None = None) -> AgentConfig:
         "slow_backend",
         "slow_path",
         "fast_mount_root",
+        "cold_mount_root",
         "userns_user",
         "userns_start",
         "userns_size",
@@ -206,6 +211,7 @@ def render_config(cfg: AgentConfig) -> str:
         "slow_backend",
         "slow_path",
         "fast_mount_root",
+        "cold_mount_root",
         "userns_user",
         "userns_start",
         "userns_size",

@@ -7,13 +7,10 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   deleteNodeAction,
   checkNodeAction,
-  patchAllNodesAction,
   provisionNodeAction,
   rebootNodeAction,
   repairNodeAction,
@@ -49,13 +46,6 @@ interface ScrubEntry {
   scrubbing?: boolean;
   errors?: number;
   last_scrub?: string | null;
-}
-
-interface PatchResult {
-  node: string;
-  state: string;
-  error: string | null;
-  updated_at: number;
 }
 
 function scrubSummary(raw: string | null): { text: string; bad: boolean } {
@@ -130,16 +120,6 @@ export default async function NodesPage({
     )
     .all() as NodeRow[];
   const localZfsNodes = listLocalZfsNodes().map((n) => n.name);
-  const patchResults = db()
-    .prepare(
-      `SELECT t.node, t.state, t.error, t.updated_at
-       FROM task_log t
-       WHERE t.action = 'node.patch'
-         AND t.id = (SELECT MAX(t2.id) FROM task_log t2
-                     WHERE t2.action = 'node.patch' AND t2.node = t.node)
-       ORDER BY t.node`,
-    )
-    .all() as PatchResult[];
 
   return (
     <div className="space-y-4">
@@ -210,40 +190,6 @@ export default async function NodesPage({
             Adds the node to the allow-list and issues a per-node token. Only allow-listed nodes may
             connect.
           </p>
-        </CardContent>
-      </Card>
-
-      <Card>
-        <CardContent className="space-y-3">
-          <div>
-            <h3 className="text-base font-semibold">Patch all nodes</h3>
-            <p className="text-xs text-muted-foreground">
-              Administrator-approved, version-pinned APT manifest. One task and result is recorded per node.
-            </p>
-          </div>
-          <form action={patchAllNodesAction} className="space-y-2">
-            <Label htmlFor="patch-manifest">Package manifest</Label>
-            <Textarea id="patch-manifest" name="manifest" required
-              placeholder={"libnvidia-compute-570=570.00.00-0ubuntu1\nnvidia-container-toolkit=1.18.0-1"} />
-            <Button type="submit">Patch all nodes</Button>
-          </form>
-          {patchResults.length > 0 && (
-            <Table>
-              <TableHeader><TableRow><TableHead>Node</TableHead><TableHead>Result</TableHead>
-                <TableHead>Updated</TableHead></TableRow></TableHeader>
-              <TableBody>{patchResults.map((result) => (
-                <TableRow key={result.node}>
-                  <TableCell>{result.node}</TableCell>
-                  <TableCell>
-                    <Badge variant={result.state === "ok" ? "ok" :
-                      result.state === "failed" ? "err" : "warn"}>{result.state}</Badge>
-                    {result.error && <span className="ml-2 text-xs text-err">{result.error}</span>}
-                  </TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{ago(result.updated_at)}</TableCell>
-                </TableRow>
-              ))}</TableBody>
-            </Table>
-          )}
         </CardContent>
       </Card>
 

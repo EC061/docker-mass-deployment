@@ -24,8 +24,8 @@ def test_snapshot_uses_container_oriented_names():
     snap = usagereport.build_snapshot(cfg(), "bio", lab, usage, roster=["alice"], now=9)
     assert snap["totals"]["rootfs_used"] == 300
     assert snap["usage_scanned_at"] == 5
-    assert snap["students"][0]["home_used"] == 120
-    assert snap["students"][0]["scratch"] == {"used": 40, "quota": None}
+    assert snap["students"][0]["home"] == {"used": 40, "quota": None}
+    assert "home_used" not in snap["students"][0]
 
 
 def test_explicit_storage_telemetry(monkeypatch):
@@ -39,7 +39,7 @@ def test_explicit_storage_telemetry(monkeypatch):
         per_user_fast={"alice": 4}, per_user_slow={"alice": 1})
     rows = usagereport.rootfs_storage("bio", usage) + usagereport.tier_storage("bio", usage)
     assert {(r["tier"], r["user"]) for r in rows} == {
-        ("rootfs", "alice"), ("fast", "alice"), ("cold", "alice")}
+        ("fast", "alice"), ("cold", "alice")}
     assert all("dataset" not in row and "pool" not in row for row in rows)
 
 
@@ -51,8 +51,9 @@ def test_scan_uses_flat_container_paths(monkeypatch):
     monkeypatch.setattr(usagereport.docker, "du_path",
                         lambda name, path: paths.append(path) or 5)
     result = usagereport.run_container_scan(cfg(), "bio", ["alice"], now=1)
-    assert paths == ["/fast/alice", "/cold/alice"]
-    assert result.per_user_fast == {"alice": 5}
+    assert paths == ["/cold-storage/alice"]
+    assert result.per_user_fast == {"alice": 20}
+    assert result.per_user_slow == {"alice": 5}
 
 
 def test_refresh_marker_is_inside_user_fast_directory(tmp_path, monkeypatch):

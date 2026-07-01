@@ -507,10 +507,10 @@ We'll email again once everything is back online.`,
           subject: "Action needed: free up storage in your lab",
           body: `Hello {name},
 
-Storage on the cluster is running low. Please review the data in your scratch and cold-storage directories and remove anything you no longer need.
+Storage on the cluster is running low. Please review your home and cold-storage directories and remove anything you no longer need.
 
 You can check your usage by logging in and running:
-    du -sh ~/scratch ~/cold-storage
+    du -sh ~ ~/cold-storage
 
 Thanks for helping keep the cluster healthy.`,
         },

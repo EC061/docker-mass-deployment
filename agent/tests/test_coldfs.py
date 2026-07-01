@@ -1,4 +1,5 @@
 import os
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
@@ -16,6 +17,17 @@ def test_ensure_dir_is_idempotent(tmp_path):
     coldfs.ensure_dir(str(target))
     coldfs.ensure_dir(str(target))  # no raise on existing
     assert target.is_dir()
+
+
+def test_ensure_owned_dir_converges_under_concurrent_shared_creation(tmp_path):
+    target = tmp_path / "cold" / "alice"
+    target.parent.mkdir()
+    uid, gid = os.getuid(), os.getgid()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        list(pool.map(lambda _: coldfs.ensure_owned_dir(str(target), uid, gid), range(2)))
+    stat = target.stat()
+    assert target.is_dir()
+    assert (stat.st_uid, stat.st_gid, stat.st_mode & 0o777) == (uid, gid, 0o700)
 
 
 def test_remove_tree_deletes_subtree_inside_guard(tmp_path):
