@@ -82,8 +82,8 @@ export default async function SettingsPage({
         <CardContent className="space-y-3">
           <h3 className="text-base font-semibold">Per-student usage scan</h3>
           <p className="text-xs text-muted-foreground">
-            Once a night (by default at midnight) the controller measures each student&apos;s home /
-            scratch / cold usage (a <em>du</em> scan) on every online lab&apos;s node, shown on the
+            Once a night (by default at midnight) the controller measures each student&apos;s persistent
+            fast home and cold usage (a <em>du</em> scan) on every online lab&apos;s node, shown on the
             Stats page. Lab-level usage (image + fast/cold) is separate: the agent recomputes it on
             its own ~5-minute cadence.
           </p>

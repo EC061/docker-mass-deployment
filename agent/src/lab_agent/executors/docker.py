@@ -5,7 +5,7 @@ port/restart) are baked into ``docker run`` and frozen for the container's life;
 ``recreate`` (which preserves the ZFS data, since data lives in bind-mounted datasets, not the
 container layer). All NVIDIA GPUs are always passed.
 
-The only persistent data mounts are the flattened lab roots at ``/fast`` and ``/cold``, plus the
+The persistent mounts are the lab's fast root at ``/home`` and cold root at ``/cold-storage``, plus
 read-only agent-published quota snapshot at ``/run/labquota``. There is no lab-side engine or
 host Docker socket.
 """
@@ -114,8 +114,8 @@ def build_run_args(
         args += ["--storage-opt", f"size={opts.rootfs_quota}"]
     args += ["--restart", opts.restart]
     validate_image(opts.image)
-    args += ["--mount", f"type=bind,source={mounts.fast},target=/fast"]
-    args += ["--mount", f"type=bind,source={mounts.cold},target=/cold"]
+    args += ["--mount", f"type=bind,source={mounts.fast},target=/home"]
+    args += ["--mount", f"type=bind,source={mounts.cold},target=/cold-storage"]
     # labquota status dir, READ-ONLY: the agent publishes usage.json/status.json here (root-owned,
     # off any student-writable mount); students read it via the `labquota` command at /run/labquota.
     if mounts.labquota:
@@ -214,10 +214,8 @@ def exec_in(name: str, argv: list[str], *, input_text: str | None = None,
 
 
 # --------------------------------------------------------------------------- writable-layer usage
-# Per-student storage in scratch/cold-storage is ZFS and measured cheaply via dataset metadata.
-# Anything a student installs into their container home (pip/conda envs, software) lives in the
-# container's writable layer instead, which ZFS quota does not break down per student. These helpers
-# measure that layer (total + per-home `du`) for the labquota usage report.
+# The writable layer is a lab-level measurement only. Student homes are on the fast bind mount and
+# are measured as fast usage by the per-student scan.
 
 
 def writable_layer_size(name: str) -> int | None:
@@ -263,9 +261,5 @@ def du_path(name: str, path: str, *, timeout: float = 60.0) -> int | None:
 
 
 def du_home(name: str, username: str, *, timeout: float = 60.0) -> int | None:
-    """Bytes used by a student's home directory (installed software) inside the container.
-
-    Counts ``/home/<u>`` only; the student's scratch/cold-storage live there as symlinks, which
-    ``du`` does not follow, so the fast/cold tiers are measured separately (see ``du_path``).
-    """
+    """Bytes used by a student's persistent fast home directory."""
     return du_path(name, f"/home/{username}", timeout=timeout)

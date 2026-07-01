@@ -12,13 +12,14 @@ bubblewrap to create nested unprivileged namespaces without granting outer `CAP_
 
 | Host | Lab container | Purpose |
 |---|---|---|
-| `/fast/<lab>` | `/fast` | Fast lab dataset and quota |
-| local ZFS or SMB `<cold-root>/<lab>` | `/cold` | Cold lab root |
-| `/fast/<lab>/<user>` | `/home/<user>/scratch` | Student fast directory |
-| `<cold-root>/<lab>/<user>` | `/home/<user>/cold-storage` | Student cold directory |
+| `/fast/<lab>` | `/home` | Persistent fast homes and per-lab fast quota |
+| `/cold-storage/<lab>` | `/cold-storage` | Per-lab cold root |
+| `/fast/<lab>/<user>` | `/home/<user>` | Student persistent fast home |
+| `/cold-storage/<lab>/<user>` | `/cold-storage/<user>` | Student cold directory |
 | agent state `labquota/<lab>` | `/run/labquota` read-only | Usage communication |
 
-No additional shared or per-user dataset layers are created.
+`/home/<user>/cold-storage` is a symlink to `/cold-storage/<user>`. No `/fast`, `/cold`, or
+`~/scratch` path exists inside the container, and no per-user datasets are created.
 
 ## 1. Prepare every host
 
@@ -40,7 +41,7 @@ Create the storage roots. The agent creates the per-lab datasets, but the pools 
 
 ```bash
 sudo zfs create -o mountpoint=/fast fast/labs
-sudo zfs create slow/labs                    # local cold-storage nodes only
+sudo zfs create -o mountpoint=/cold-storage slow/labs  # local cold owners only
 ```
 
 `host-prepare` provisions the Docker backing store itself as a native ZFS dataset on the fast pool
@@ -66,9 +67,12 @@ the backup is removed. Nothing is discarded and nothing is left duplicated on th
 Once the fast (and, if applicable, slow) pool(s) exist, the doctor rejects any storage driver other
 than `zfs`; before that it accepts whatever Docker's plain install picked.
 
-If cold storage is SMB, mount it at the configured `slow_path` before starting the agent. The share
-must preserve numeric POSIX ownership and permit `chown`; an absent mount is a hard failure and the
-agent never creates a local fallback directory.
+If cold storage is SMB, mount the owner node's `/cold-storage` tree at `/cold-storage` on the client
+(the configurable `slow_path`) before starting the agent. Thus the owner path
+`/cold-storage/<lab>` and client path `/cold-storage/<lab>` are two views of the exact same backing
+directory. The share must preserve numeric POSIX ownership and permit `chown`; an absent mount is a
+hard failure and the agent never creates a local fallback directory. Owner and client must report
+the same `userns_start` and `userns_size`, or the controller rejects the SMB placement.
 
 Install the agent, edit its config, then converge host security and Docker configuration:
 
@@ -144,8 +148,9 @@ codex --version
 codex sandbox linux -- true
 ```
 
-Also verify `nvidia-smi`, Codex workspace writes under `~/scratch`, network namespace isolation, and
-that container root cannot modify a host sentinel outside `/fast` and `/cold`.
+Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace
+isolation, and that container root cannot modify a host sentinel outside `/home` and
+`/cold-storage`.
 
 ## 4. Controller operations
 
@@ -158,9 +163,12 @@ The Nodes page exposes:
 - **Check**: refresh structured Docker/userns, bubblewrap/Codex, NVIDIA, CDI, ZFS and SMB health;
 - **Repair**: reload AppArmor, restore non-setuid mode on `bwrap`, regenerate CDI, and restart
   affected lab containers;
-- **Patch all nodes**: queue an administrator-approved `package=version` APT manifest and retain one
-  result per node;
 - **Reboot**: schedule a reboot, which is the supported response to an NVML kernel/userspace mismatch.
+
+Cold quotas, aggregate cold usage, scrubs, and quota alerts are authoritative only on the local-ZFS
+owner. SMB placements scan the shared directory for their own per-student view, but the controller
+never sums that duplicate view. Student deletion removes accounts and node-local fast homes from
+every placement first, then queues one cold cleanup on each owning node.
 
 Unknown DKMS, Secure Boot, Fabric Manager, and kernel failures remain critical for operator repair.
 Missing storage and Docker/userns failures block lab creation. CDI/MIG changes regenerate CDI and

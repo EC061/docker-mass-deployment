@@ -66,7 +66,7 @@ def test_smb_backend_roundtrip_and_scrub_pools(tmp_path: Path):
     # SMB cold storage is never scrubbed -> only the fast pool is scrubbable.
     assert loaded.scrub_pools == ["fast"]
     # cold_root strips the trailing slash.
-    assert loaded.cold_root == "/mnt/cold/labs"
+    assert loaded.cold_root == "/mnt/cold"
 
 
 def test_invalid_slow_backend_rejected(tmp_path: Path):

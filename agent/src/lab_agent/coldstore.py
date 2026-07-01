@@ -30,15 +30,27 @@ from .executors.zfs import Usage
 def create_lab(cfg: AgentConfig, lab: str, quota_bytes: int | None = None) -> str:
     """Provision a lab's cold-storage datasets/directories. Returns a short log note."""
     if cfg.slow_is_zfs:
-        zfs.create_dataset(paths.lab_slow(cfg, lab), quota_bytes=quota_bytes)
+        zfs.create_dataset(
+            paths.lab_slow(cfg, lab), quota_bytes=quota_bytes,
+            mountpoint=paths.cold_lab(cfg, lab),
+        )
         return "cold lab dataset created (zfs)"
-    # SMB client: create the single lab root. The owner node manages quota and usage.
+    # SMB client: require the owner-created lab root on the mounted share. Creating it here could
+    # silently make an ordinary directory instead of the owner's quota-bearing ZFS dataset.
     if not os.path.ismount(cfg.slow_path):
         raise coldfs.ColdFsError(
             f"cold-storage SMB mount '{cfg.slow_path}' is not mounted; refusing fallback directory"
         )
-    coldfs.ensure_dir(paths.cold_lab(cfg, lab))
-    return "cold lab directory created (smb client; owner node manages quota/usage)"
+    path = paths.cold_lab(cfg, lab)
+    try:
+        os.lstat(path)
+    except FileNotFoundError as exc:
+        raise coldfs.ColdFsError(
+            f"owner cold-storage directory '{path}' does not exist; provision the owner first"
+        ) from exc
+    if not os.path.isdir(path) or os.path.islink(path):
+        raise coldfs.ColdFsError(f"refusing cold-storage path '{path}': expected a real directory")
+    return "owner cold lab directory verified (smb client; owner manages quota/usage)"
 
 
 def set_lab_quota(cfg: AgentConfig, lab: str, quota_bytes: int | None) -> str:
@@ -52,14 +64,16 @@ def destroy_lab(cfg: AgentConfig, lab: str) -> None:
     if cfg.slow_is_zfs:
         zfs.destroy_dataset(paths.lab_slow(cfg, lab), recursive=True)
     else:
-        coldfs.remove_tree(paths.cold_lab(cfg, lab), guard=cfg.cold_root)
+        # Never remove shared storage from a client. The controller tears clients down first and
+        # only the local-ZFS owner may destroy the backing dataset.
+        return
 
 
 # --------------------------------------------------------------------------- mounts (for docker)
 
 
 def lab_mount(cfg: AgentConfig, lab: str) -> str:
-    """Host path bind-mounted to /cold in the lab container."""
+    """Host path bind-mounted to /cold-storage in the lab container."""
     if cfg.slow_is_zfs:
         return zfs.get_mountpoint(paths.lab_slow(cfg, lab))
     if not os.path.ismount(cfg.slow_path):
@@ -84,17 +98,18 @@ def lab_usage(cfg: AgentConfig, lab: str) -> Usage:
 def cold_status(cfg: AgentConfig) -> dict[str, Any]:
     """Cold-storage backend + mount state for the controller's Nodes page / SMB-assignment checks.
 
-    A local-ZFS owner reports its slow-pool mountpoint and is always "ready" (storage is local). An
-    SMB client reports its mount root and whether it is an ACTIVE mount point (so the controller can
-    block provisioning onto a client whose share is not actually mounted).
+    A local-ZFS owner reports the cold lab-root mountpoint and is ready only at the configured
+    path. An SMB client reports its mount root and whether it is an ACTIVE mount point (so the
+    controller can block provisioning onto a client whose share is not actually mounted).
     """
     if cfg.slow_is_zfs:
         try:
-            mount = zfs.get_mountpoint(cfg.slow_pool)
+            mount = zfs.get_mountpoint(cfg.labs_slow_root)
         except Exception:
             mount = None
-        return {"backend": "zfs", "mount_path": mount, "ready": bool(mount)}
-    # The share is mounted at slow_path (labs/ live under it); report that mount point + whether it
-    # is an active mount, so the controller can refuse to provision onto an unmounted SMB client.
+        ready = bool(mount) and os.path.realpath(mount) == os.path.realpath(cfg.cold_mount_root)
+        return {"backend": "zfs", "mount_path": mount, "ready": ready}
+    # Lab directories live directly below the slow_path mount. Report whether it is active so the
+    # controller can refuse to provision onto an unmounted SMB client.
     root = cfg.slow_path
     return {"backend": "smb", "mount_path": root, "ready": bool(root) and os.path.ismount(root)}

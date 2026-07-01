@@ -11,13 +11,13 @@ network channel and without the agent ever writing into a student-writable mount
 Because the directory is root-only and the bind is read-only, students can read these files but
 cannot modify, delete, or replace them with symlinks, and root never follows a student-planted link.
 There is **no** shared writable directory: a student requests a fresh usage scan by touching
-``.labquota-refresh`` in their *own* scratch dataset (see ``marker_path``), which the agent stats
+``.labquota-refresh`` in their own persistent home (see ``marker_path``), which the agent stats
 with lstat and only honors if it is a regular file. Every student-writable surface stays inside that
 student's own quota and out of anything the agent parses.
 
 The snapshot has two kinds of numbers:
 
-* **Live tiers** — scratch (fast) and cold-storage (slow) `used`/`quota`. ZFS *metadata*, read for
+* **Live tiers** — home (fast) and cold-storage (slow) `used`/`quota`. ZFS *metadata*, read for
   every lab/student in a single ``zfs list -r`` per pool (see ``collect_zfs_usage``), so a publish
   is cheap regardless of scale.
 * **Container layer** — bytes a student installed into their container home (envs/software). This is
@@ -43,7 +43,7 @@ from .protocol import now_ms
 
 USAGE_FILE = "usage.json"
 STATUS_FILE = "status.json"
-# A student asks for a fresh scan by touching this file in their own /fast/<u> directory. Keeping
+# A student asks for a fresh scan by touching this file in their own /home/<u> directory. Keeping
 # the marker inside the student's own quota-limited
 # dataset — instead of a shared world-writable directory — means a flood of markers only ever costs
 # the student their own space, and the agent stats exactly one fixed path per known user (never an
@@ -59,19 +59,18 @@ REFRESH_MARKER = ".labquota-refresh"
 class ContainerUsage:
     """Cached per-student usage from the expensive ``du`` scan (updated only by a scan).
 
-    Holds the container writable layer total plus, for each student, the three numbers the cheap
-    publish loop cannot get from ZFS metadata: their container home (installed software), and —
-    since there are no per-student ZFS datasets — their scratch and cold directory sizes
-    measured with ``du``.
+    Holds the lab container writable-layer total plus each student's persistent fast home and cold
+    directory sizes measured with ``du``. The writable layer remains lab-only: homes are bind
+    mounts, so attributing SizeRw to students would be incorrect.
     """
 
     scanned_at: int | None = None  # epoch ms of the last successful scan
     status: str = "idle"  # "idle" | "running"
     total_used: int | None = None  # container writable layer (SizeRw)
-    per_user: dict[str, int] = field(default_factory=dict)  # username -> home du bytes
-    per_user_fast: dict[str, int] = field(default_factory=dict)  # username -> scratch du bytes
+    per_user: dict[str, int] = field(default_factory=dict)  # retained cache field; no rootfs rows
+    per_user_fast: dict[str, int] = field(default_factory=dict)  # username -> fast home du bytes
     per_user_slow: dict[str, int] = field(default_factory=dict)  # username -> cold-storage du bytes
-    unattributed: int | None = None  # total - sum(per_user), files outside any home (/tmp, etc.)
+    unattributed: int | None = None  # SizeRw is intentionally not attributed to bind-mounted homes
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -209,11 +208,12 @@ def build_snapshot(
 ) -> dict[str, Any]:
     """Assemble one lab snapshot from live ZFS metadata and cached container usage."""
     now = now if now is not None else now_ms()
-    # With no per-student ZFS datasets, scratch/cold no longer have cheap per-student metadata (the
+    # With no per-student ZFS datasets, home/cold have no cheap per-student metadata (the
     # lab quota covers everyone), so a student may appear only in the container-layer measurement,
-    # or before any scan has run, in neither. Union the explicit ``roster`` (provisioned scratch
+    # or before any scan has run, in neither. Union the explicit ``roster`` (provisioned home
     # subdirs) with both usage sources so every provisioned student is listed even without numbers.
-    names = set(lab_usage.users.keys()) | set(container_usage.per_user.keys())
+    names = (set(lab_usage.users.keys()) | set(container_usage.per_user_fast.keys()) |
+             set(container_usage.per_user_slow.keys()))
     if roster:
         names |= set(roster)
     usernames = sorted(names)
@@ -221,18 +221,17 @@ def build_snapshot(
     for name in usernames:
         tiers = lab_usage.users.get(name, {})
         # Use a scan's ``du`` measurement (used-only; the lab quota covers every student).
-        scratch = _usage_pair(tiers.get("fast"))
-        if scratch is None and name in container_usage.per_user_fast:
-            scratch = {"used": container_usage.per_user_fast[name], "quota": None}
+        home = _usage_pair(tiers.get("fast"))
+        if home is None and name in container_usage.per_user_fast:
+            home = {"used": container_usage.per_user_fast[name], "quota": None}
         cold = _usage_pair(tiers.get("slow"))
         if cold is None and name in container_usage.per_user_slow:
             cold = {"used": container_usage.per_user_slow[name], "quota": None}
         students.append(
             {
                 "username": name,
-                "scratch": scratch,
+                "home": home,
                 "cold": cold,
-                "home_used": container_usage.per_user.get(name),
             }
         )
     return {
@@ -325,30 +324,12 @@ def collect_lab_level(
 
 
 def rootfs_storage(lab: str, container_usage: ContainerUsage) -> list[dict[str, Any]]:
-    """Per-student container-home telemetry rows from the cached usage scan.
-
-    The lab-level container total is **not** emitted here — it lives in the lab-level cache
-    (``lab_level_for`` / ``live_container_dataset``), refreshed on the lab-usage cadence. These
-    per-student rows come from the ``du`` scan cache and only change when a scan runs. Quota is
-    omitted because the writable layer is not a per-student quota and must not alert.
-    """
-    rows: list[dict[str, Any]] = []
-    for user, used in container_usage.per_user.items():
-        rows.append(
-            {
-                "lab": lab,
-                "user": user,
-                "tier": "rootfs",
-                "used_bytes": used,
-                "quota_bytes": None,
-                "available_bytes": None,
-            }
-        )
-    return rows
+    """Rootfs SizeRw is lab-only; student homes are fast bind mounts, never rootfs rows."""
+    return []
 
 
 def tier_storage(lab: str, container_usage: ContainerUsage) -> list[dict[str, Any]]:
-    """Telemetry rows for the per-student scratch (fast) / cold (slow) ``du`` breakdown.
+    """Telemetry rows for the per-student home (fast) / cold (slow) ``du`` breakdown.
 
     With no per-student ZFS datasets, the scan measures each student's directory with ``du``. Quota
     is omitted because the per-student number is a breakdown, not a quota, so it must never raise a
@@ -391,7 +372,7 @@ def labquota_dir(cfg: AgentConfig, lab: str) -> str:
 
 
 def marker_path(cfg: AgentConfig, lab: str, user: str) -> str:
-    """A student's refresh marker, in their own scratch dataset (their quota, not a shared dir)."""
+    """A student's refresh marker, in their persistent fast home (not a shared directory)."""
     return os.path.join(_fast_lab_mp(cfg, lab), user, REFRESH_MARKER)
 
 
@@ -481,10 +462,9 @@ def run_container_scan(
 ) -> ContainerUsage:
     """Measure the container writable layer + per-student usage. The expensive path (`du` per dir).
 
-    For each student we ``du`` three directories inside the container: their container home
-    (installed software), their scratch (``/fast/<u>``) and — only when this node owns cold storage
-    (local ZFS; on the SMB client the owner node reports it) — their cold-storage
-    (``/cold/<u>``). Returns an idle ContainerUsage with whatever was measured. Missing
+    For each student we ``du`` their persistent fast home (``/home/<u>``) and cold-storage
+    (``/cold-storage/<u>``). This runs on owner and SMB placements so both container views have
+    per-student numbers; controller aggregation never sums the shared cold directory. Missing
     container / failed ``du`` degrade to None/omitted entries rather than raising, so one bad lab
     never breaks the loop.
     """
@@ -493,33 +473,23 @@ def run_container_scan(
     if not docker.container_exists(container):
         return ContainerUsage(scanned_at=now, status="idle")
     total = docker.writable_layer_size(container)
-    per_user: dict[str, int] = {}
     per_user_fast: dict[str, int] = {}
     per_user_slow: dict[str, int] = {}
     valid = [u for u in usernames if users.USERNAME_RE.match(u)]
-    measure_cold = cfg.slow_is_zfs
     for i, user in enumerate(valid):
         if progress is not None:
             progress(i, len(valid), user)
-        home = docker.du_home(container, user)
-        if home is not None:
-            per_user[user] = home
-        fast = docker.du_path(container, f"/fast/{user}")
+        fast = docker.du_home(container, user)
         if fast is not None:
             per_user_fast[user] = fast
-        if measure_cold:
-            cold = docker.du_path(container, f"/cold/{user}")
-            if cold is not None:
-                per_user_slow[user] = cold
-    unattributed = None
-    if total is not None:
-        unattributed = max(0, total - sum(per_user.values()))
+        cold = docker.du_path(container, f"/cold-storage/{user}")
+        if cold is not None:
+            per_user_slow[user] = cold
     return ContainerUsage(
         scanned_at=now,
         status="idle",
         total_used=total,
-        per_user=per_user,
         per_user_fast=per_user_fast,
         per_user_slow=per_user_slow,
-        unattributed=unattributed,
+        unattributed=None,
     )

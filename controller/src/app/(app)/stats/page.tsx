@@ -125,15 +125,14 @@ function LabBlock({ lab }: { lab: LabStats }) {
           <TableHeader>
             <TableRow>
               <TableHead>Student</TableHead>
-              <TableHead>Home (installed)</TableHead>
-              <TableHead>Fast</TableHead>
+              <TableHead>Home (fast)</TableHead>
               <TableHead>Cold</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {lab.students.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={4} className="text-muted-foreground">
+                <TableCell colSpan={3} className="text-muted-foreground">
                   No students enrolled.
                 </TableCell>
               </TableRow>
@@ -143,9 +142,6 @@ function LabBlock({ lab }: { lab: LabStats }) {
                   <TableCell>
                     {s.username}
                     {s.name && <span className="text-xs text-muted-foreground"> · {s.name}</span>}
-                  </TableCell>
-                  <TableCell>
-                    {s.homeUsed === null ? <span className="text-muted-foreground">—</span> : fmtBytes(s.homeUsed)}
                   </TableCell>
                   <TableCell>
                     {s.fast === null ? <span className="text-muted-foreground">—</span> : fmtBytes(s.fast)}
@@ -359,7 +355,7 @@ export default async function StatsPage({
             <strong className="text-foreground">Lab storage</strong> row (container image writable
             layer, plus Fast/Cold usage against the lab quota) is recomputed on the node about every 5
             minutes. The <strong className="text-foreground">Per-student</strong> table (each
-            student&apos;s installed software, scratch and cold-storage) comes from a once-a-day scan
+            student&apos;s persistent home and cold-storage) comes from a once-a-day scan
             (by default at midnight). Both carry an &ldquo;updated&rdquo; time, and{" "}
             <strong className="text-foreground">Scan now</strong> refreshes both on demand.
           </p>

@@ -166,7 +166,7 @@ describe("templated emails", () => {
     settings.setSetting("removalEmailBody", "Lab {lab}: {data_status}");
     await mailer.sendRemovalEmail("a@uga.edu", "bio", true);
     expect(sent[0].subject).toBe("Bye from bio");
-    expect(sent[0].text).toContain("Lab bio: Your scratch and cold-storage data in this lab has been deleted.");
+    expect(sent[0].text).toContain("Lab bio: Your home and cold-storage data in this lab has been deleted.");
 
     settings.setSetting("quotaEmailSubject", "{lab} {pct}% full");
     settings.setSetting("quotaEmailBody", "{used}/{quota} on {pool}\n{breakdown}");

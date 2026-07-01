@@ -37,7 +37,6 @@ class Dispatcher:
         self.register(P.A_NODE_REPORT_STATE, self._report_state)
         self.register(P.A_NODE_CHECK, maintenance.run_check)
         self.register(P.A_NODE_REPAIR, maintenance.run_repair)
-        self.register(P.A_NODE_PATCH, maintenance.run_node_patch)
         self.register(P.A_NODE_REBOOT, maintenance.run_reboot)
         self.register(P.A_NODE_SCRUB, maintenance.run_scrub)
         self.register(P.A_LAB_CREATE, labops.create_lab)
@@ -46,6 +45,7 @@ class Dispatcher:
         self.register(P.A_CONTAINER_RECREATE, containerops.recreate_container)
         self.register(P.A_STUDENT_ADD, studentops.add_student)
         self.register(P.A_STUDENT_REMOVE, studentops.remove_student)
+        self.register(P.A_STUDENT_DELETE_COLD, studentops.delete_cold_student)
         self.register(P.A_GPU_POLICY_UPDATE, gpu_policy.update_policy_handler)
 
     def _report_state(self, cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:

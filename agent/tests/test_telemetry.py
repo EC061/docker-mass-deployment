@@ -38,7 +38,8 @@ def test_heartbeat_uses_explicit_storage_rows(monkeypatch):
     hb = telemetry.collect_heartbeat(cfg(), state)
     rows = {(r["tier"], r["user"]): r["used_bytes"] for r in hb["storage"]}
     assert rows[("fast", None)] == 100
-    assert rows[("rootfs", "alice")] == 12
+    assert ("rootfs", "alice") not in rows
+    assert rows[("fast", "alice")] == 4
     assert rows[("cold", "alice")] == 1
     assert "datasets" not in hb
     assert hb["usage_scans"] == [{"lab": "bio", "scanned_at": 7}]

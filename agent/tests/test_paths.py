@@ -17,8 +17,8 @@ def test_flat_dataset_and_mount_paths():
 
 def test_smb_paths_have_no_shared_or_users_layer():
     c = cfg(slow_backend="smb", slow_path="/srv/cold/")
-    assert paths.cold_lab(c, "bio") == "/srv/cold/labs/bio"
-    assert paths.cold_user(c, "bio", "alice") == "/srv/cold/labs/bio/alice"
+    assert paths.cold_lab(c, "bio") == "/srv/cold/bio"
+    assert paths.cold_user(c, "bio", "alice") == "/srv/cold/bio/alice"
 
 
 def test_invalid_lab_name_is_rejected():

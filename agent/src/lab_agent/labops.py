@@ -35,8 +35,7 @@ def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 
     containerops.assert_node_ready(cfg)
 
-    # One quota-bearing dataset per tier. The fast dataset has an explicit, stable host mountpoint;
-    # cold storage goes through the local-ZFS/SMB abstraction.
+    # One quota-bearing dataset per tier with stable per-lab host mountpoints.
     zfs.create_dataset(
         lab_fast(cfg, lab), quota_bytes=fast_quota, mountpoint=fast_mount(cfg, lab)
     )

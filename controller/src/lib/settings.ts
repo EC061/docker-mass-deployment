@@ -21,7 +21,7 @@ export interface Settings {
   sshPortEnd: number;
   // Nightly per-student usage (du) scan. Once a day, during usageScanHour (in usageScanTimezone,
   // default midnight), the controller enqueues a usage.scan to each online lab's node; the agent
-  // measures each student's home/scratch/cold usage and reports it back. Lab-level usage is separate
+  // measures each student's persistent fast home and cold usage. Lab-level usage is separate
   // — the agent recomputes it on its own ~5-min cadence and it is not gated by this schedule.
   usageScanEnabled: boolean;
   usageScanHour: number; // hour of day (0-23, in usageScanTimezone) the nightly scan may start
@@ -136,7 +136,7 @@ You have been added to the lab "{lab}" on {node}. Connect over SSH:
   Password: {password}
 
 Your home directory contains:
-  ~/scratch        fast storage for working data
+  ~                fast storage for working data
   ~/cold-storage   slower storage for data you want to keep but rarely touch
 
 Please change your password after first login (run: passwd).`;
@@ -177,7 +177,7 @@ export const DEFAULT_REMOVAL_SUBJECT = "Removed from lab {lab}";
 export const DEFAULT_REMOVAL_BODY = `You have been removed from the lab "{lab}". {data_status}`;
 
 /** The two fixed sentences {data_status} resolves to (chosen by whether the data was deleted). */
-export const REMOVAL_DATA_DELETED = "Your scratch and cold-storage data in this lab has been deleted.";
+export const REMOVAL_DATA_DELETED = "Your home and cold-storage data in this lab has been deleted.";
 export const REMOVAL_DATA_RETAINED = "Your data has been retained for now; contact an admin if you need it.";
 
 /** Placeholders the quota-alert email understands, shown to the admin in the Templates UI. */

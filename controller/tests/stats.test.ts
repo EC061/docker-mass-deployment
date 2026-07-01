@@ -64,9 +64,9 @@ function findLab(name: string) {
 
 describe("buildStats", () => {
   it("groups latest per-student and placement-level usage by node and lab", () => {
-    sample(1, 1, "rootfs", 100, 100);
-    sample(1, 1, "rootfs", 150, 200);
-    sample(1, 2, "rootfs", 80, 200);
+    sample(1, 1, "fast", 100, 100);
+    sample(1, 1, "fast", 150, 200);
+    sample(1, 2, "fast", 80, 200);
     sample(1, null, "rootfs", 300, 200);
     sample(1, null, "fast", 500, 200, 2000);
     sample(1, null, "cold", 200, 200, 3000);
@@ -81,9 +81,8 @@ describe("buildStats", () => {
     expect(lab.image).toBe("img-x");
     expect(lab.placementId).toBe(1);
     expect(lab.students.map((s) => s.username)).toEqual(["alice", "bob"]);
-    expect(lab.students[0].homeUsed).toBe(150);
-    expect(lab.students[1].homeUsed).toBe(80);
-    expect(lab.students[0].fast).toBeNull();
+    expect(lab.students[0].fast).toBe(150);
+    expect(lab.students[1].fast).toBe(80);
     expect(lab.live.rootfs).toBe(300);
     expect(lab.live.fast).toEqual({ used: 500, quota: 2000 });
     expect(lab.live.cold).toEqual({ used: 200, quota: 3000 });

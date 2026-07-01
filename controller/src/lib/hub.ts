@@ -16,6 +16,7 @@ import { db } from "./db";
 import { env } from "./env";
 import { ingestTelemetry } from "./ingest";
 import {
+  completeStudentRemoval,
   confirmPlacementDestroyed,
   deliverPlacementCredential,
   getPlacementByLabNode,
@@ -289,7 +290,7 @@ function handleResult(node: string, frame: any): void {
     if (frame.ok && t.action === "node.check" && frame.result) {
       db().prepare("UPDATE nodes SET capabilities = ?, last_seen = ? WHERE name = ?")
         .run(JSON.stringify(frame.result), Date.now(), node);
-    } else if (frame.ok && ["node.repair", "node.patch"].includes(t.action) && frame.result?.health) {
+    } else if (frame.ok && t.action === "node.repair" && frame.result?.health) {
       db().prepare("UPDATE nodes SET capabilities = ?, last_seen = ? WHERE name = ?")
         .run(JSON.stringify(frame.result.health), Date.now(), node);
     } else if (labName && t.action === "lab.create") {
@@ -326,6 +327,8 @@ function handleResult(node: string, frame: any): void {
             );
         });
       }
+    } else if (labName && params.username && t.action === "student.remove" && frame.ok) {
+      completeStudentRemoval(frame.id);
     }
   }
   if (frame.logs) {

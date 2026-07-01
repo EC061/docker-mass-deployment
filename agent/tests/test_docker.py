@@ -19,8 +19,8 @@ def test_runc_userns_outer_container_contract():
     assert "--device nvidia.com/gpu=all" in joined
     assert "seccomp=/etc/lab-agent/security/lab-codex-seccomp.json" in joined
     assert "apparmor=lab-codex" in joined
-    assert "source=/fast/bio,target=/fast" in joined
-    assert "source=/cold/bio,target=/cold" in joined
+    assert "source=/fast/bio,target=/home" in joined
+    assert "source=/cold/bio,target=/cold-storage" in joined
     assert "target=/run/labquota,readonly" in joined
     assert "--storage-opt size=100g" in joined
     for forbidden in ("--privileged", "--cap-add", "SYS_ADMIN", "/var/run/docker.sock",

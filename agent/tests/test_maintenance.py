@@ -1,5 +1,3 @@
-import pytest
-
 from lab_agent import maintenance
 from lab_agent.config import AgentConfig
 from lab_agent.executors.base import CommandResult
@@ -79,20 +77,6 @@ def test_run_scrub_honours_requested_pools_within_scrubbable(monkeypatch):
     # A request for an unknown pool is ignored; only scrubbable pools run.
     maintenance.run_scrub(cfg, {"pools": ["slow", "bogus"]})
     assert started == ["slow"]
-
-
-def test_node_patch_requires_exact_approved_versions(monkeypatch):
-    calls = []
-    monkeypatch.setattr(maintenance, "run", lambda args, **kwargs:
-                        calls.append(args) or CommandResult(True, args, 0, "", ""))
-    result, _ = maintenance.run_node_patch(_cfg(), {"manifest": [
-        {"package": "nvidia-container-toolkit", "version": "1.18.0-1"},
-    ]})
-    assert result["installed"] == ["nvidia-container-toolkit=1.18.0-1"]
-    assert calls[0] == ["apt-get", "update"]
-    assert "nvidia-container-toolkit=1.18.0-1" in calls[1]
-    with pytest.raises(ValueError):
-        maintenance.run_node_patch(_cfg(), {"manifest": [{"package": "curl", "version": ""}]})
 
 
 def test_node_reboot_is_scheduled_after_result_delivery(monkeypatch):

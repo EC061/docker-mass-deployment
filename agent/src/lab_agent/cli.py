@@ -205,7 +205,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--slow-backend", choices=["zfs", "smb"],
                            help="cold-storage backend (default: zfs)")
     p_install.add_argument("--slow-path",
-                           help="cold-storage mount path for smb backend (default: /mnt/cold)")
+                           help="cold-storage mount path for smb backend (default: /cold-storage)")
     p_install.add_argument("--no-verify-tls", action="store_true",
                            help="skip TLS verification (self-signed controller)")
     p_install.add_argument("--no-enable", action="store_true",
