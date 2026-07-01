@@ -58,3 +58,12 @@ jobs:
         run: sudo apparmor_parser -Q -T agent/src/lab_agent/assets/lab-codex.apparmor
       - name: Build pinned lab image
         run: docker build --tag custom-ssh:ci image
+      - name: Verify student npm prefix
+        run: |
+          docker run --rm --entrypoint sh custom-ssh:ci -c '
+            useradd -m -s /bin/bash student
+            su - student -c '\''
+              test "$(npm config get prefix)" = "$HOME/.local"
+              case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) exit 1 ;; esac
+            '\''
+          '
