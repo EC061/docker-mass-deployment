@@ -199,14 +199,14 @@ def test_rewrite_nvidia_apt_list_injects_signed_by():
     )
 
 
-def test_security_assets_include_required_bubblewrap_syscalls():
+def test_security_assets_include_required_runtime_syscalls():
     root = resources.files("lab_agent").joinpath("assets")
     profile = json.loads(root.joinpath("lab-codex-seccomp.json").read_text())
     allowed = {name for group in profile["syscalls"] if group["action"] == "SCMP_ACT_ALLOW"
                for name in group["names"]}
     assert {"clone", "clone3", "unshare", "setns", "mount", "umount2", "pivot_root",
             "fsopen", "fsconfig", "fsmount", "move_mount", "open_tree", "mount_setattr",
-            "seccomp", "prctl", "capset"} <= allowed
+            "seccomp", "prctl", "capset", "chroot"} <= allowed
     apparmor = root.joinpath("lab-codex.apparmor").read_text()
     assert "/usr/bin/bwrap cx -> lab-codex-bwrap" in apparmor
     assert "profile lab-codex-bwrap" in apparmor and "userns," in apparmor
