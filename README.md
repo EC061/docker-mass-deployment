@@ -107,6 +107,11 @@ sudo lab-agent host-prepare
   `bwrap-userns-restrict` profile when available;
 - regenerates NVIDIA CDI at `/etc/cdi/nvidia.yaml` when `nvidia-ctk` is installed.
 
+Seccomp policy is fixed when Docker creates a container. If an agent upgrade changes
+`lab-codex-seccomp.json`, run `host-prepare` and recreate each existing placement; restarting its
+container does not apply the new policy. `lab-agent doctor` reports containers whose stamped
+profile digest differs from the installed profile.
+
 Inspect the resulting Docker settings before accepting work:
 
 ```bash

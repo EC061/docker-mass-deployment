@@ -129,3 +129,11 @@ def test_docker_root_ok_rejects_wrong_remap_suffix(monkeypatch):
     runner.responses["docker info --format {{.DockerRootDir}}"] = (True, "/var/lib/docker/0.0")
     monkeypatch.setattr(system, "run", runner)
     assert not system._docker_root_ok(cfg())
+
+
+def test_stale_seccomp_containers_detects_missing_and_changed_labels(monkeypatch):
+    monkeypatch.setattr(system.docker, "security_profile_digest", lambda path: "current")
+    monkeypatch.setattr(system, "run", Runner({
+        "docker ps": (True, "lab-old\nlab-stale\tprevious\nlab-current\tcurrent\n"),
+    }))
+    assert system._stale_seccomp_containers(cfg()) == ["lab-old", "lab-stale"]

@@ -81,7 +81,7 @@ def test_usage_helpers(monkeypatch):
     assert docker.du_home("lab-bio", "alice") == 123
 
 
-def test_wait_ssh_ready_checks_sshd_as_pid_one(monkeypatch):
+def test_wait_ssh_ready_completes_key_exchange(monkeypatch):
     calls = []
 
     def ready(name, argv, **kwargs):
@@ -91,7 +91,10 @@ def test_wait_ssh_ready_checks_sshd_as_pid_one(monkeypatch):
     monkeypatch.setattr(docker, "exec_in", ready)
     assert docker.wait_ssh_ready("lab-bio", timeout=0, interval=0)
     assert calls == [("lab-bio", [
-        "sh", "-c", 'test "$(cat /proc/1/comm)" = sshd && /usr/sbin/sshd -t'
+        "sh",
+        "-c",
+        'test "$(cat /proc/1/comm)" = sshd && /usr/sbin/sshd -t '
+        '&& test -n "$(ssh-keyscan -T 5 -t ed25519 127.0.0.1 2>/dev/null)"',
     ])]
 
 

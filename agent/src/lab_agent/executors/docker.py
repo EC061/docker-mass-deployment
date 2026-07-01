@@ -12,9 +12,11 @@ host Docker socket.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from .base import CommandResult, run
 
@@ -29,6 +31,14 @@ ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 class DockerError(RuntimeError):
     pass
+
+
+def security_profile_digest(path: str) -> str:
+    """Fingerprint a seccomp profile so running containers can be checked for stale policy."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError:
+        return ""
 
 
 def validate_image(image: str) -> str:
@@ -187,12 +197,23 @@ def start_container(name: str) -> None:
 
 
 def wait_ssh_ready(name: str, *, timeout: float = 90.0, interval: float = 2.0) -> bool:
-    """Poll until sshd is PID 1 with a valid configuration, or the timeout elapses."""
+    """Poll until sshd completes a real key exchange, or the timeout elapses.
+
+    ``sshd -t`` alone is insufficient: it does not exercise the pre-auth child, privilege
+    separation, host-key access, or the container security profiles.  ``ssh-keyscan`` completes
+    enough of the SSH handshake to catch those failures without needing a student account.
+    """
     deadline = time.monotonic() + timeout
     while True:
         res = exec_in(
             name,
-            ["sh", "-c", 'test "$(cat /proc/1/comm)" = sshd && /usr/sbin/sshd -t'],
+            [
+                "sh",
+                "-c",
+                'test "$(cat /proc/1/comm)" = sshd '
+                "&& /usr/sbin/sshd -t "
+                '&& test -n "$(ssh-keyscan -T 5 -t ed25519 127.0.0.1 2>/dev/null)"',
+            ],
             timeout=15,
         )
         if res.ok:

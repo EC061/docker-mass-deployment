@@ -24,6 +24,9 @@ def _labels(cfg: AgentConfig, lab: str) -> dict[str, str]:
         "lab-agent.managed": "true",
         "lab-agent.lab": lab,
         "lab-agent.node": cfg.node_name,
+        # Docker compiles seccomp policy at container creation. A profile file updated later does
+        # not change an existing container, so stamp the exact policy for doctor to compare.
+        "lab-agent.seccomp-sha256": docker.security_profile_digest(cfg.seccomp_profile),
     }
 
 
@@ -73,7 +76,7 @@ def ensure_container(cfg: AgentConfig, lab: str, params: dict[str, Any]) -> str:
         logs = docker.container_logs(name)
         docker.remove_container(name)
         detail = f": {logs}" if logs else ""
-        raise docker.DockerError(f"container did not become ready (sshd not active){detail}")
+        raise docker.DockerError(f"container did not become ready (SSH handshake failed){detail}")
     return container_id
 
 
@@ -115,7 +118,7 @@ def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, s
             logs = docker.container_logs(name)
             detail = f": {logs}" if logs else ""
             raise docker.DockerError(
-                f"candidate container did not become ready (sshd not active){detail}"
+                f"candidate container did not become ready (SSH handshake failed){detail}"
             )
     except Exception as exc:
         # 4a. Roll back: drop the broken candidate and restore the preserved container.

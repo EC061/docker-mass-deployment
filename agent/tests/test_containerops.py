@@ -38,6 +38,11 @@ def test_mount_contract(monkeypatch):
     assert mounts.apparmor_profile == "lab-codex"
 
 
+def test_labels_stamp_seccomp_digest(monkeypatch):
+    monkeypatch.setattr(containerops.docker, "security_profile_digest", lambda path: "abc123")
+    assert containerops._labels(cfg(), "bio")["lab-agent.seccomp-sha256"] == "abc123"
+
+
 def test_creation_requires_userns_and_passes_cdi(monkeypatch):
     common(monkeypatch)
     events = []
