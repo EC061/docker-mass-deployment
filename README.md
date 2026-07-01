@@ -5,9 +5,10 @@ lab, no host engine socket, and no privileged mode. Students retain full passwor
 `sudo` inside the lab. Managed labs use Docker's per-container host user namespace because a
 daemon-remapped parent namespace locks the inherited mounts that nested bubblewrap must modify.
 
-The lab image is based on NVIDIA's Ubuntu 24.04 CUDA development image. It includes `nvcc`, CUDA
-headers and libraries, NCCL, standard C/C++ build tooling, and distribution `/usr/bin/bwrap`; it
-does not install Node.js, npm, or Codex. The outer container uses a dedicated seccomp profile,
+The lab image starts from Ubuntu 24.04 and installs NVIDIA's minimal CUDA 13.3 build packages. It
+includes `nvcc`, the CUDA runtime and headers needed for basic CUDA applications, standard C/C++
+build tooling, Python, and distribution `/usr/bin/bwrap`; it does not install the full CUDA library
+suite, Node.js, npm, or Codex. The outer container uses a dedicated seccomp profile,
 `apparmor=unconfined`, and the three capabilities required by bubblewrap's setuid setup path:
 `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`.
 
@@ -169,11 +170,12 @@ placements at it (or override the image per-placement in the controller UI):
 docker build -t ghcr.io/ec061/custom-ssh:latest image
 ```
 
-The image runs OpenSSH directly as PID 1 and uses NVIDIA's pinned CUDA 13.3 development base. It
-contains `nvcc`, CUDA headers/runtime/math libraries, NCCL, GCC/G++, CMake, Ninja, pkg-config,
-Python, sudo, bubblewrap, Git, ripgrep, curl, and proc tools. It intentionally contains no Node.js,
-npm, Codex, systemd, Docker packages, daemon configuration, socket, or inner NVIDIA container
-runtime.
+The image runs OpenSSH directly as PID 1 and uses a pinned Ubuntu 24.04 base plus NVIDIA's
+`cuda-minimal-build-13-3` package. It contains `nvcc`, the basic CUDA headers/runtime, GCC/G++,
+CMake, Ninja, pkg-config, Python (as both `python` and `python3`), sudo, bubblewrap, Git, ripgrep,
+curl, and proc tools. Large optional CUDA math libraries, profilers, documentation, and samples are
+excluded. It intentionally contains no Node.js, npm, Codex, systemd, Docker packages, daemon
+configuration, socket, or inner NVIDIA container runtime.
 
 ## 3. Start and validate the node
 
