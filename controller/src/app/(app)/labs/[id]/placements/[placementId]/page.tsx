@@ -6,18 +6,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { db } from "@/lib/db";
 import { takeFlash } from "@/lib/flash";
-import { fmtBytes, pct } from "@/lib/format";
+import { bytesToQuotaInput, fmtBytes, pct } from "@/lib/format";
 import {
   containerOptionsOf,
   getPlacement,
   listPlacementMembers,
   listPlacements,
+  nodePoolCapacityBytes,
   type Placement,
 } from "@/lib/placements";
-import { getSetting, TIB } from "@/lib/settings";
+import { getSetting } from "@/lib/settings";
 import {
   removePlacementAction,
   revealPlacementCredentialAction,
@@ -76,12 +78,13 @@ function taskLabel(task: TaskStatus | null): { text: string; variant: "ok" | "wa
   return { text: "queued", variant: "warn" };
 }
 
-function QuotaStatus({ desired, usage }: { desired: number; usage: Usage | null }) {
+function QuotaStatus({ desired, usage, capBytes }: { desired: number; usage: Usage | null; capBytes: number | null }) {
   const percent = usage ? pct(usage.used, desired) : null;
   return (
     <p className="mt-1 text-xs text-muted-foreground">
       Desired {fmtBytes(desired)} · agent reported {usage?.quota ? fmtBytes(usage.quota) : "—"} · used{" "}
       {usage ? fmtBytes(usage.used) : "—"}{percent !== null ? ` (${percent}%)` : ""}
+      {capBytes !== null ? ` · node pool capacity ${fmtBytes(capBytes)}` : ""}
     </p>
   );
 }
@@ -117,6 +120,9 @@ export default async function PlacementPage({
   const opts = containerOptionsOf(placement);
   const host = getSetting("sshHostOverride").trim() || placement.node_name;
   const canEdit = placement.state !== "deleting";
+  const capacity = nodePoolCapacityBytes(placement.node_id);
+  const fastDefault = bytesToQuotaInput(placement.fast_quota_bytes);
+  const coldDefault = placement.cold_quota_bytes !== null ? bytesToQuotaInput(placement.cold_quota_bytes) : null;
 
   return (
     <div className="space-y-4">
@@ -186,20 +192,50 @@ export default async function PlacementPage({
           <form action={setPlacementQuotaAction} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <input type="hidden" name="placementId" value={placement.id} />
             <div>
-              <Label>Fast quota (TB)</Label>
-              <Input name="fastTb" type="number" min="0.001" max="100000" step="0.5" defaultValue={placement.fast_quota_bytes / TIB} disabled={!canEdit} />
-              <QuotaStatus desired={placement.fast_quota_bytes} usage={fastUsage} />
+              <Label>Fast quota</Label>
+              <div className="flex gap-2">
+                <Input
+                  name="fastAmount"
+                  type="number"
+                  min="0"
+                  step="any"
+                  defaultValue={fastDefault.amount}
+                  disabled={!canEdit}
+                  className="flex-1"
+                />
+                <Select name="fastUnit" defaultValue={fastDefault.unit} disabled={!canEdit} className="w-20">
+                  <option value="MB">MB</option>
+                  <option value="GB">GB</option>
+                  <option value="TB">TB</option>
+                </Select>
+              </div>
+              <QuotaStatus desired={placement.fast_quota_bytes} usage={fastUsage} capBytes={capacity.fastBytes} />
             </div>
             <div>
-              <Label>Cold quota (TB)</Label>
-              {placement.cold_quota_bytes === null ? (
+              <Label>Cold quota</Label>
+              {placement.cold_quota_bytes === null || coldDefault === null ? (
                 <p className="pt-2 text-sm text-muted-foreground">
                   Managed by {ownerPlacement?.node_name ?? placement.cold_owner_name ?? "owner node"}; change it on the owner placement.
                 </p>
               ) : (
                 <>
-                  <Input name="coldTb" type="number" min="0.001" max="100000" step="0.5" defaultValue={placement.cold_quota_bytes / TIB} disabled={!canEdit} />
-                  <QuotaStatus desired={placement.cold_quota_bytes} usage={coldUsage} />
+                  <div className="flex gap-2">
+                    <Input
+                      name="coldAmount"
+                      type="number"
+                      min="0"
+                      step="any"
+                      defaultValue={coldDefault.amount}
+                      disabled={!canEdit}
+                      className="flex-1"
+                    />
+                    <Select name="coldUnit" defaultValue={coldDefault.unit} disabled={!canEdit} className="w-20">
+                      <option value="MB">MB</option>
+                      <option value="GB">GB</option>
+                      <option value="TB">TB</option>
+                    </Select>
+                  </div>
+                  <QuotaStatus desired={placement.cold_quota_bytes} usage={coldUsage} capBytes={capacity.coldBytes} />
                 </>
               )}
             </div>

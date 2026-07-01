@@ -140,6 +140,28 @@ describe("updatePlacementQuota (live, no recreate)", () => {
     );
     expect(enqueueTask.mock.calls.some((c) => c[1] === "container.recreate")).toBe(false);
   });
+
+  it("rejects a quota larger than the node's reported pool capacity, and allows it once telemetry clears", async () => {
+    const lab = newLab("quota-capped");
+    const p = await grant(lab.id, nodeA);
+    dbmod
+      .db()
+      .prepare("UPDATE nodes SET pools = ? WHERE id = ?")
+      .run(JSON.stringify([{ name: "fast", size: 4000, alloc: 0, free: 4000 }, { name: "cold", size: 8000, alloc: 0, free: 8000 }]), nodeA);
+    enqueueTask.mockClear();
+
+    expect(() => placements.updatePlacementQuota(p.id, { fastQuotaBytes: 5000 }, "admin")).toThrow(/exceeds node/);
+    expect(enqueueTask).not.toHaveBeenCalled();
+
+    // At the reported cap it's allowed.
+    placements.updatePlacementQuota(p.id, { fastQuotaBytes: 4000 }, "admin");
+    expect(placements.getPlacement(p.id)!.fast_quota_bytes).toBe(4000);
+
+    // No telemetry at all (e.g. node never reported) skips the cap rather than blocking the change.
+    dbmod.db().prepare("UPDATE nodes SET pools = NULL WHERE id = ?").run(nodeA);
+    placements.updatePlacementQuota(p.id, { fastQuotaBytes: 999_999 }, "admin");
+    expect(placements.getPlacement(p.id)!.fast_quota_bytes).toBe(999_999);
+  });
 });
 
 describe("retryPlacement", () => {
@@ -183,6 +205,28 @@ describe("recreatePlacement", () => {
       expect.objectContaining({ lab: "recreate", image: "custom-ssh-v2" }),
       "admin",
     );
+  });
+
+  it("re-adds every existing member after recreate, since accounts live in the container's writable layer", async () => {
+    const lab = newLab("recreate-members");
+    await students.addStudentToLab(lab.id, { username: "alice", email: "a@uga.edu" }, "admin");
+    await students.addStudentToLab(lab.id, { username: "bob" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    enqueueTask.mockClear();
+
+    placements.recreatePlacement(p.id, { image: "custom-ssh-v2" }, "admin");
+
+    const calls = enqueueTask.mock.calls;
+    const recreateIdx = calls.findIndex((c) => c[1] === "container.recreate");
+    const addIdxs = calls.map((c, i) => (c[1] === "student.add" ? i : -1)).filter((i) => i >= 0);
+    expect(recreateIdx).toBeGreaterThanOrEqual(0);
+    // Every re-add must be queued after container.recreate — the agent's per-node queue is a single
+    // FIFO consumer, so ordering here is what guarantees the add lands on the new container.
+    expect(addIdxs.every((i) => i > recreateIdx)).toBe(true);
+    expect(addIdxs.map((i) => (calls[i][2] as any).username).sort()).toEqual(["alice", "bob"]);
+
+    const n = (dbmod.db().prepare("SELECT COUNT(*) AS n FROM placement_members WHERE placement_id=?").get(p.id) as any).n;
+    expect(n).toBe(2);
   });
 });
 

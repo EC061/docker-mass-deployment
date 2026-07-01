@@ -10,6 +10,7 @@
 
 import { audit } from "./audit";
 import { db } from "./db";
+import { fmtBytes } from "./format";
 import { sendCredentialEmail } from "./mailer";
 import { generatePassword } from "./passwords";
 import { enqueueTask } from "./queue";
@@ -521,6 +522,28 @@ export function completeStudentRemoval(taskUuid: string): void {
   }
 }
 
+export interface NodePoolCapacity {
+  fastBytes: number | null;
+  coldBytes: number | null;
+}
+
+/** The node's actual ZFS pool sizes from the latest heartbeat telemetry (see stats.ts's parsePools
+ * for the sibling reader). Null when the node hasn't reported yet — callers skip the cap in that case
+ * rather than blocking quota changes on missing telemetry. */
+export function nodePoolCapacityBytes(nodeId: number): NodePoolCapacity {
+  const row = db().prepare("SELECT pools FROM nodes WHERE id = ?").get(nodeId) as { pools: string | null } | undefined;
+  const sizeOf = (p: unknown): number | null =>
+    p && typeof p === "object" && typeof (p as { size?: unknown }).size === "number" ? (p as { size: number }).size : null;
+  if (!row?.pools) return { fastBytes: null, coldBytes: null };
+  try {
+    const arr = JSON.parse(row.pools) as unknown;
+    if (!Array.isArray(arr)) return { fastBytes: null, coldBytes: null };
+    return { fastBytes: sizeOf(arr[0]), coldBytes: sizeOf(arr[1]) };
+  } catch {
+    return { fastBytes: null, coldBytes: null };
+  }
+}
+
 /** Live quota change (no recreate). Routes to lab.set_quota on the placement's node. */
 export function updatePlacementQuota(
   placementId: number,
@@ -529,6 +552,21 @@ export function updatePlacementQuota(
 ): void {
   const p = getPlacement(placementId);
   if (!p) throw new Error("Unknown placement");
+  const capacity = nodePoolCapacityBytes(p.node_id);
+  if (input.fastQuotaBytes !== undefined && capacity.fastBytes !== null && input.fastQuotaBytes > capacity.fastBytes) {
+    throw new Error(
+      `Fast quota ${fmtBytes(input.fastQuotaBytes)} exceeds node '${p.node_name}'s fast pool capacity of ${fmtBytes(capacity.fastBytes)}`,
+    );
+  }
+  if (
+    input.coldQuotaBytes != null &&
+    capacity.coldBytes !== null &&
+    input.coldQuotaBytes > capacity.coldBytes
+  ) {
+    throw new Error(
+      `Cold quota ${fmtBytes(input.coldQuotaBytes)} exceeds node '${p.node_name}'s cold pool capacity of ${fmtBytes(capacity.coldBytes)}`,
+    );
+  }
   const params: Record<string, unknown> = { lab: p.lab_name };
   if (input.fastQuotaBytes !== undefined) {
     db().prepare("UPDATE lab_placements SET fast_quota_bytes = ? WHERE id = ?").run(input.fastQuotaBytes, placementId);
@@ -541,6 +579,46 @@ export function updatePlacementQuota(
   touch(placementId);
   enqueueTask(p.node_name, "lab.set_quota", params, actor);
   audit(actor, "placement.set_quota", `${p.lab_name}@${p.node_name}`, JSON.stringify(params));
+}
+
+/**
+ * Re-add every current member of a placement. Student accounts (useradd/chpasswd) live in the
+ * container's writable layer, not the bind-mounted ZFS datasets, so container.recreate wipes them
+ * even though their data survives — each member needs a fresh student.add after the container comes
+ * back. The agent's task queue is a single-consumer FIFO per node, so tasks enqueued here after
+ * container.recreate are guaranteed to run against the new container, not the old one.
+ */
+function reprovisionPlacementMembers(placement: Placement, actor?: string): void {
+  const members = db()
+    .prepare(
+      `SELECT pm.id AS member_id, students.username AS username, students.linux_uid AS linux_uid
+       FROM placement_members pm JOIN students ON students.id = pm.student_id
+       WHERE pm.placement_id = ? ORDER BY students.username`,
+    )
+    .all(placement.id) as { member_id: number; username: string; linux_uid: number }[];
+  const now = Date.now();
+  for (const m of members) {
+    const password = generatePassword();
+    db()
+      .prepare(
+        `UPDATE placement_members
+         SET state = 'provisioning', last_error = NULL, credential_secret = ?, updated_at = ?
+         WHERE id = ?`,
+      )
+      .run(encryptSecret(password), now, m.member_id);
+    enqueueTask(
+      placement.node_name,
+      "student.add",
+      {
+        lab: placement.lab_name,
+        username: m.username,
+        password,
+        uid: m.linux_uid,
+        gid: m.linux_uid,
+      },
+      actor,
+    );
+  }
 }
 
 /** Recreate the container with a (possibly changed) image / container options. Preserves data. */
@@ -577,6 +655,8 @@ export function recreatePlacement(
     },
     actor,
   );
+  // Re-add every current member — see reprovisionPlacementMembers for why this is necessary.
+  reprovisionPlacementMembers(fresh, actor);
   audit(actor, "placement.recreate", `${fresh.lab_name}@${fresh.node_name}`);
 }
 

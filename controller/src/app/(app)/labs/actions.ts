@@ -17,6 +17,7 @@ import {
   retryPlacement,
   updatePlacementQuota,
 } from "@/lib/placements";
+import { QUOTA_UNIT_BYTES, type QuotaUnit } from "@/lib/format";
 import { TIB } from "@/lib/settings";
 import { addStudentToLab, copyMembers, removeStudentFromLab } from "@/lib/students";
 
@@ -32,6 +33,24 @@ function tbToBytes(value: FormDataEntryValue | null, label: string): number {
     throw new Error(`${label} quota must be a positive number no greater than 100,000 TB`);
   }
   return Math.round(tb * TIB);
+}
+
+const MAX_QUOTA_BYTES = 100_000 * TIB;
+
+/** Amount+unit quota input (used by the live-quota form, which lets admins pick MB/GB/TB and any
+ * decimal amount instead of being pinned to whole-TB steps). */
+function amountToBytes(amount: FormDataEntryValue | null, unit: FormDataEntryValue | null, label: string): number {
+  const n = Number(amount);
+  const perUnit = QUOTA_UNIT_BYTES[String(unit) as QuotaUnit];
+  if (!perUnit) throw new Error(`${label} quota unit must be MB, GB, or TB`);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`${label} quota must be a positive number`);
+  }
+  const bytes = Math.round(n * perUnit);
+  if (bytes > MAX_QUOTA_BYTES) {
+    throw new Error(`${label} quota must be no greater than 100,000 TB`);
+  }
+  return bytes;
 }
 
 function containerOptionsFromForm(formData: FormData): ContainerOptions {
@@ -130,17 +149,20 @@ export async function setPlacementQuotaAction(formData: FormData) {
   const placementId = Number(formData.get("placementId"));
   const placement = getPlacement(placementId);
   if (!placement) return;
-  const fastTb = formData.get("fastTb");
-  const coldTb = formData.get("coldTb");
+  const fastAmount = formData.get("fastAmount");
+  const coldAmount = formData.get("coldAmount");
   try {
     updatePlacementQuota(
       placementId,
       {
-        fastQuotaBytes: fastTb !== null && fastTb !== "" ? tbToBytes(fastTb, "Fast") : undefined,
+        fastQuotaBytes:
+          fastAmount !== null && fastAmount !== ""
+            ? amountToBytes(fastAmount, formData.get("fastUnit"), "Fast")
+            : undefined,
         // SMB clients have no local cold quota; their owner placement is linked from the page.
         coldQuotaBytes:
-          placement.cold_quota_bytes !== null && coldTb !== null && coldTb !== ""
-            ? tbToBytes(coldTb, "Cold")
+          placement.cold_quota_bytes !== null && coldAmount !== null && coldAmount !== ""
+            ? amountToBytes(coldAmount, formData.get("coldUnit"), "Cold")
             : undefined,
       },
       who,
