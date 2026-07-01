@@ -299,6 +299,16 @@ def _lab_npm_config_script() -> str:
         "grep -qxF '. /etc/profile.d/lab-npm-user-prefix.sh' /etc/bash.bashrc || "
         "printf '%s\\n' '. /etc/profile.d/lab-npm-user-prefix.sh' >> /etc/bash.bashrc\n"
         "chmod 0644 /etc/npmrc /etc/profile.d/lab-npm-user-prefix.sh\n"
+        "getent passwd | while IFS=: read -r user _ uid gid _ home _; do\n"
+        "  if [ \"$uid\" -ge 10000 ] 2>/dev/null && [ \"$uid\" -le 59999 ]; then\n"
+        "    install -d -m 0755 -o \"$uid\" -g \"$gid\" \"$home/.local\" \"$home/.local/bin\"\n"
+        "    touch \"$home/.npmrc\"\n"
+        "    sed -i '/^[[:space:]]*prefix[[:space:]]*=/d' \"$home/.npmrc\"\n"
+        "    printf 'prefix=%s/.local\\n' \"$home\" >> \"$home/.npmrc\"\n"
+        "    chown \"$uid:$gid\" \"$home/.npmrc\"\n"
+        "    chmod 0644 \"$home/.npmrc\"\n"
+        "  fi\n"
+        "done\n"
     )
 
 
