@@ -22,8 +22,11 @@ No additional shared or per-user dataset layers are created.
 
 ## 1. Prepare every host
 
-Use a dedicated Ubuntu 22.04/24.04 node with Docker Engine, ZFS, AppArmor, NVIDIA drivers and
-NVIDIA Container Toolkit where GPUs are present. Every node must reserve the same IDs:
+Use a dedicated Ubuntu 22.04/24.04 node. `host-prepare` installs Docker Engine, ZFS tools, and
+AppArmor tooling itself (see below); the only prerequisites it does NOT automate are the zpool
+layout (disk topology is hardware-specific) and, on GPU nodes, the NVIDIA driver itself (needs a
+reboot and a hardware-matched version — install it before running `host-prepare`, which then adds
+the NVIDIA Container Toolkit once it sees GPU hardware). Every node must reserve the same IDs:
 
 ```text
 user:  labdockremap
@@ -33,27 +36,35 @@ student container IDs: 10000-59999
 mapped host ID: 231072 + container ID
 ```
 
-Create the storage roots. The agent creates the per-lab datasets, but the pools and Docker backing
-filesystem must already exist:
+Create the storage roots. The agent creates the per-lab datasets, but the pools must already exist:
 
 ```bash
 sudo zfs create -o mountpoint=/fast fast/labs
 sudo zfs create slow/labs                    # local cold-storage nodes only
 ```
 
-Choose one rootfs-quota-capable Docker backing store before `host-prepare`:
+`host-prepare` provisions the Docker backing store itself as a native ZFS dataset on the fast pool
+(`<fast_pool>/<docker_dataset_name>`, default `fast/docker`) mounted directly at the `data-root`,
+with `storage-driver: zfs` in `daemon.json`, **but only once the fast pool (and, on a local ZFS
+cold tier, the slow pool too) actually exist**. If the zpool(s) aren't there yet — e.g. this is a
+brand-new node and disks/zpools haven't been provisioned — `host-prepare` just installs Docker on
+its plain default backing store instead of failing outright; `lab-agent doctor` accepts that as
+expected until the pools show up (it already reports them missing separately). Docker's zfs driver
+clones the dataset per image layer and per container, so a configured `rootfs_quota`
+(`--storage-opt size=`) is enforced via ZFS's own `quota` property on each container's clone — no
+XFS, no zvol, no `/etc/fstab` entry to maintain. The dataset itself is capped by `docker_quota_gb`
+(default 1024 GiB; `0` = unlimited, sharing the rest of the fast pool). Unlike a zvol this is a
+**live** property: change `docker_quota_gb` and re-run `host-prepare` to resize immediately, with
+no unmount or reboot.
 
-```bash
-# ZFS option: put Docker's data-root on a dedicated dataset and set "storage-driver": "zfs"
-sudo systemctl stop docker
-sudo zfs create -o mountpoint=/var/lib/docker fast/docker
+Whenever the dataset doesn't exist yet and the data-root already has content — a fresh docker-ce
+install's just-created default state, or a data-root Docker has genuinely been running against
+under the plain backing store because the zpool(s) only just appeared — that content is moved
+aside, the dataset is created at the same mountpoint, and the content is copied back into it before
+the backup is removed. Nothing is discarded and nothing is left duplicated on the old filesystem.
 
-# OR overlay2 option: mount an XFS filesystem at /var/lib/docker with prjquota/pquota.
-findmnt -no FSTYPE,OPTIONS /var/lib/docker
-```
-
-The doctor rejects other storage drivers and rejects `overlay2` unless its backing filesystem is
-XFS with project quotas. This prevents a configured `rootfs_quota` from silently doing nothing.
+Once the fast (and, if applicable, slow) pool(s) exist, the doctor rejects any storage driver other
+than `zfs`; before that it accepts whatever Docker's plain install picked.
 
 If cold storage is SMB, mount it at the configured `slow_path` before starting the agent. The share
 must preserve numeric POSIX ownership and permit `chown`; an absent mount is a hard failure and the
@@ -71,8 +82,21 @@ sudo lab-agent host-prepare
 
 `host-prepare` is idempotent and does all of the following:
 
+- installs Docker Engine (from Docker's official apt repo), `zfsutils-linux`, and AppArmor tooling
+  if missing — a fully unprovisioned node needs nothing pre-installed but the OS itself; on an
+  already-provisioned node this step is a handful of fast `dpkg` checks and touches the network
+  only when something is actually missing;
+- installs `nvidia-container-toolkit` (from NVIDIA's official apt repo) when it detects NVIDIA GPU
+  hardware and the package isn't already present — it never installs the NVIDIA driver itself;
 - creates `labdockremap` and exact `/etc/subuid` and `/etc/subgid` entries;
-- writes Docker `userns-remap` and `data-root`, then restarts Docker;
+- once the fast (and, if applicable, slow) zpool(s) exist, provisions the
+  `<fast_pool>/<docker_dataset_name>` ZFS dataset, mounts it at the `data-root` (migrating in any
+  existing content first), and applies `docker_quota_gb` as a live ZFS quota — otherwise leaves
+  Docker on its plain default backing store;
+- writes Docker `userns-remap` and `data-root`, adds `storage-driver=zfs` once the dataset above is
+  in use, and on GPU nodes pins `exec-opts: ["native.cgroupdriver=cgroupfs"]` to work around a
+  [known runc/systemd-cgroup-driver bug](https://github.com/opencontainers/runc/discussions/1133)
+  that drops a container's GPU device access on `systemctl daemon-reload`, then restarts Docker;
 - enforces `kernel.unprivileged_userns_clone=1`, `user.max_user_namespaces=16384`, and
   `kernel.apparmor_restrict_unprivileged_userns=1`;
 - installs and loads `lab-codex-seccomp.json`, `lab-codex`, and the distribution

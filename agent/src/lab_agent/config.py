@@ -26,6 +26,14 @@ DEFAULT_USERNS_START = 231_072
 DEFAULT_USERNS_SIZE = 65_536
 DEFAULT_FAST_MOUNT_ROOT = "/fast"
 DEFAULT_DOCKER_DATA_ROOT = "/var/lib/docker"
+# Docker's data-root is a native ZFS dataset on the fast pool (storage-driver "zfs"): every image
+# layer and container is its own ZFS clone, and its rootfs_quota storage-opt maps straight onto the
+# clone's "quota" property. The dataset lives at <fast_pool>/<dataset-name>.
+DEFAULT_DOCKER_DATASET_NAME = "docker"
+# ZFS "quota" (GiB) applied to the dataset on every host-prepare run; 0 means unlimited (shares the
+# rest of the fast pool). Unlike a zvol this is a live property: change it and re-run host-prepare
+# to resize immediately, with no unmount/reformat/reboot.
+DEFAULT_DOCKER_QUOTA_GB = 1024
 DEFAULT_SECCOMP_PROFILE = "/etc/lab-agent/security/lab-codex-seccomp.json"
 DEFAULT_APPARMOR_PROFILE = "lab-codex"
 
@@ -58,6 +66,9 @@ class AgentConfig:
     userns_start: int = DEFAULT_USERNS_START
     userns_size: int = DEFAULT_USERNS_SIZE
     docker_data_root: str = DEFAULT_DOCKER_DATA_ROOT
+    # Name of the fast-pool dataset backing the Docker data-root (full name: <fast_pool>/<name>).
+    docker_dataset_name: str = DEFAULT_DOCKER_DATASET_NAME
+    docker_quota_gb: int = DEFAULT_DOCKER_QUOTA_GB
     seccomp_profile: str = DEFAULT_SECCOMP_PROFILE
     apparmor_profile: str = DEFAULT_APPARMOR_PROFILE
     # Local cache DB for the durable task buffer + offline event/log buffer.
@@ -87,6 +98,11 @@ class AgentConfig:
     @property
     def slow_is_zfs(self) -> bool:
         return self.slow_backend != SLOW_BACKEND_SMB
+
+    @property
+    def docker_dataset(self) -> str:
+        """Full ZFS dataset name backing Docker's data-root."""
+        return f"{self.fast_pool}/{self.docker_dataset_name}"
 
     @property
     def labs_fast_root(self) -> str:
@@ -145,6 +161,8 @@ def load_config(path: Path | None = None) -> AgentConfig:
         "userns_start",
         "userns_size",
         "docker_data_root",
+        "docker_dataset_name",
+        "docker_quota_gb",
         "seccomp_profile",
         "apparmor_profile",
         "state_db",
@@ -192,6 +210,8 @@ def render_config(cfg: AgentConfig) -> str:
         "userns_start",
         "userns_size",
         "docker_data_root",
+        "docker_dataset_name",
+        "docker_quota_gb",
         "seccomp_profile",
         "apparmor_profile",
         "state_db",
