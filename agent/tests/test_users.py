@@ -23,6 +23,9 @@ def test_add_user_exact_ids_sudo_and_flat_links(monkeypatch):
     assert "groupadd -g 10042" in script
     assert 'useradd -M -d /home/"$u" -u 10042 -g 10042' in script
     assert "usermod -aG sudo" in script
+    assert "PASSWD: ALL" in script
+    assert "NOPASSWD" not in script
+    assert "chmod 0440 /etc/sudoers.d/zz-lab-agent" in script
     assert '/cold-storage/"$u"' in script
     assert '/fast/"$u"' not in script and '/cold/"$u"' not in script
     assert "docker" not in script

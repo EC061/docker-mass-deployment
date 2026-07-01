@@ -112,9 +112,12 @@ def build_run_args(
     if opts.ssh_port:
         args += ["-p", f"{opts.ssh_port}:22"]
     args += ["--cpus", opts.cpus, "--memory", opts.memory, "--shm-size", opts.shm_size]
-    # Standard runc + daemon-wide userns-remap provide the outer boundary. The custom profiles keep
-    # outer boundary while allowing unprivileged bubblewrap to create nested namespaces.
-    args += ["--runtime=runc", "--cgroupns=private", "--stop-signal", "SIGTERM"]
+    # A daemon-remapped parent user namespace locks inherited mounts against a student's nested
+    # namespace, so bubblewrap cannot change root mount propagation. Labs use the initial user
+    # namespace; students are non-root by default and sudo requires their password.
+    args += [
+        "--runtime=runc", "--userns=host", "--cgroupns=private", "--stop-signal", "SIGTERM"
+    ]
     args += ["--tmpfs", "/run:rw,nosuid,nodev", "--tmpfs", "/run/lock:rw,nosuid,nodev"]
     args += ["--security-opt", f"seccomp={mounts.seccomp_profile}"]
     args += ["--security-opt", f"apparmor={mounts.apparmor_profile}"]

@@ -10,12 +10,13 @@ def mounts():
                   "/etc/lab-agent/security/lab-codex-seccomp.json", "lab-codex")
 
 
-def test_runc_userns_outer_container_contract():
+def test_runc_host_userns_outer_container_contract():
     opts = ContainerOptions(image="custom-ssh", cpus="8", memory="16g", shm_size="2g",
                             rootfs_quota="100g", ssh_port=50012)
     args = build_run_args("lab-bio", opts, mounts(), gpus=True)
     joined = " ".join(args)
     assert "--runtime=runc" in args
+    assert "--userns=host" in args
     assert "--device nvidia.com/gpu=all" in joined
     assert "seccomp=/etc/lab-agent/security/lab-codex-seccomp.json" in joined
     assert "apparmor=lab-codex" in joined

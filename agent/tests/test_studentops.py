@@ -27,14 +27,14 @@ def patch_storage(monkeypatch):
     return dirs, removed, users
 
 
-def test_add_student_uses_mapped_host_ownership(monkeypatch):
+def test_add_student_uses_native_host_ownership(monkeypatch):
     dirs, _, calls = patch_storage(monkeypatch)
     result, _ = studentops.add_student(cfg(), {
         "lab": "bio", "username": "alice", "password": "pw", "uid": 10042, "gid": 10042,
     })
     assert result["uid"] == 10042
-    assert dirs == [("/fast/bio/alice", 241114, 241114),
-                    ("/cold/bio/alice", 241114, 241114)]
+    assert dirs == [("/fast/bio/alice", 10042, 10042),
+                    ("/cold/bio/alice", 10042, 10042)]
     assert calls == [("add", "lab-bio", "alice", 10042, 10042)]
 
 

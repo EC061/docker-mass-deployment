@@ -229,6 +229,24 @@ def _stale_systempaths_containers() -> list[str]:
     ]
 
 
+def _stale_lab_userns_containers() -> list[str]:
+    """Return managed containers that still inherit Docker's remapped user namespace."""
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true",
+        "--format", "{{.Names}}",
+    ], timeout=20)
+    if not listed.ok:
+        return []
+    stale: list[str] = []
+    for container in listed.stdout.splitlines():
+        mode = run([
+            "docker", "inspect", "--format", "{{.HostConfig.UsernsMode}}", container,
+        ], timeout=20)
+        if not mode.ok or mode.stdout.strip() != "host":
+            stale.append(container)
+    return stale
+
+
 def _first_student_container() -> tuple[str, str] | None:
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
@@ -264,7 +282,7 @@ def _smb_posix_ok(cfg: AgentConfig) -> bool:
     if not os.path.ismount(cfg.slow_path):
         return False
     probe = os.path.join(cfg.slow_path, f".lab-agent-posix-probe-{os.getpid()}")
-    mapped = cfg.userns_start + 10_000
+    mapped = 10_000
     child = os.path.join(probe, "write-test")
     try:
         os.mkdir(probe, 0o700)
@@ -353,6 +371,15 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "critical",
                 "Managed containers require recreation for nested bubblewrap procfs: "
                 + ", ".join(stale_systempaths),
+            )
+        stale_lab_userns = _stale_lab_userns_containers()
+        if stale_lab_userns:
+            _issue(
+                issues,
+                "container_userns_stale",
+                "critical",
+                "Managed containers require reinstall for bubblewrap-compatible user namespaces: "
+                + ", ".join(stale_lab_userns),
             )
         target = _first_student_container()
         if target:

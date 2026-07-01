@@ -42,6 +42,7 @@ def test_labels_stamp_seccomp_digest(monkeypatch):
     monkeypatch.setattr(containerops.docker, "security_profile_digest", lambda path: "abc123")
     assert containerops._labels(cfg(), "bio")["lab-agent.seccomp-sha256"] == "abc123"
     assert containerops._labels(cfg(), "bio")["lab-agent.systempaths-unconfined"] == "true"
+    assert containerops._labels(cfg(), "bio")["lab-agent.userns"] == "host"
 
 
 def test_creation_requires_userns_and_passes_cdi(monkeypatch):
