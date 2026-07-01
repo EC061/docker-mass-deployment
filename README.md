@@ -112,6 +112,12 @@ Seccomp policy is fixed when Docker creates a container. If an agent upgrade cha
 container does not apply the new policy. `lab-agent doctor` reports containers whose stamped
 profile digest differs from the installed profile.
 
+Managed labs also use Docker's `systempaths=unconfined` creation option. Docker's default masked
+and read-only submounts below `/proc` make Linux reject the fresh procfs mount required by an
+unprivileged bubblewrap PID namespace. The `lab-codex` AppArmor profile preserves those sensitive
+path restrictions without the conflicting submounts. Existing containers must be recreated after
+this contract changes; doctor reports them as `container_systempaths_stale`.
+
 Inspect the resulting Docker settings before accepting work:
 
 ```bash
@@ -158,15 +164,17 @@ the real bubblewrap and Codex smoke tests as that ordinary user. A lab is not he
 commands pass inside its outer container:
 
 ```bash
-bwrap --version
+bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --proc /proc --dev /dev \
+  --unshare-pid --new-session true
 unshare --user --map-root-user true
 codex --version
 codex sandbox -- true
+codex sandbox -- bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --proc /proc \
+  --dev /dev --unshare-pid --new-session true
 ```
 
-Run a raw bubblewrap diagnostic directly from the student's shell, not as a Codex tool command.
-Codex tool commands already run inside a bubblewrap sandbox that intentionally blocks creating a
-further nested user namespace.
+The last command verifies the required nested case: a student command can create another complete
+bubblewrap user/PID/proc sandbox while already running inside Codex's bubblewrap sandbox.
 
 Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace
 isolation, and that container root cannot modify a host sentinel outside `/home` and

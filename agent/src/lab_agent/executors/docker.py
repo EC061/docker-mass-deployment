@@ -118,6 +118,11 @@ def build_run_args(
     args += ["--tmpfs", "/run:rw,nosuid,nodev", "--tmpfs", "/run/lock:rw,nosuid,nodev"]
     args += ["--security-opt", f"seccomp={mounts.seccomp_profile}"]
     args += ["--security-opt", f"apparmor={mounts.apparmor_profile}"]
+    # Docker normally bind-mounts masks/read-only overlays below /proc. Linux then rejects the
+    # fresh procfs mount that an unprivileged bubblewrap PID namespace requires because it would
+    # be less restrictive than the procfs already visible in the mount namespace. The dedicated
+    # AppArmor profile carries the equivalent system-path restrictions without those overmounts.
+    args += ["--security-opt", "systempaths=unconfined"]
     if gpus:
         args += ["--device", "nvidia.com/gpu=all"]
     if storage_quota_supported and opts.rootfs_quota:
