@@ -1,15 +1,15 @@
-# Lab Manager: runc, Docker user namespaces, and Codex
+# Lab Manager: runc, CUDA development, and bubblewrap
 
 This repository runs one standard `runc` container per lab. There is no container engine inside a
 lab, no host engine socket, and no privileged mode. Students retain full password-authenticated
 `sudo` inside the lab. Managed labs use Docker's per-container host user namespace because a
 daemon-remapped parent namespace locks the inherited mounts that nested bubblewrap must modify.
 
-Codex is a required workload. The lab image includes a pinned Codex CLI and distribution
-`/usr/bin/bwrap`; the outer container uses a dedicated seccomp profile, deliberately runs with
-`apparmor=unconfined`, and adds the three capabilities required by bubblewrap's setuid setup path:
-`SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`. Doctor validates Codex's supported sandbox command
-directly.
+The lab image is based on NVIDIA's Ubuntu 24.04 CUDA development image. It includes `nvcc`, CUDA
+headers and libraries, NCCL, standard C/C++ build tooling, and distribution `/usr/bin/bwrap`; it
+does not install Node.js, npm, or Codex. The outer container uses a dedicated seccomp profile,
+`apparmor=unconfined`, and the three capabilities required by bubblewrap's setuid setup path:
+`SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`.
 
 ## Persistent layout
 
@@ -110,11 +110,9 @@ sudo lab-agent host-prepare
   that drops a container's GPU device access on `systemctl daemon-reload`, then restarts Docker;
 - enforces `kernel.unprivileged_userns_clone=1`, `user.max_user_namespaces=16384`, and
   `kernel.apparmor_restrict_unprivileged_userns=1`;
-- installs and loads `lab-codex-seccomp.json`, `lab-codex`, and the distribution
+- installs and loads the existing `lab-codex-seccomp.json`, `lab-codex`, and distribution
   `bwrap-userns-restrict` profile when available;
 - restores root ownership and setuid mode (`4755`) on `/usr/bin/bwrap` in running managed labs;
-- removes the deprecated `features.use_legacy_landlock` opt-in from existing student Codex configs
-  while preserving all unrelated settings;
 - regenerates NVIDIA CDI at `/etc/cdi/nvidia.yaml` when `nvidia-ctk` is installed.
 
 Seccomp policy is fixed when Docker creates a container. If an agent upgrade changes
@@ -171,14 +169,11 @@ placements at it (or override the image per-placement in the controller UI):
 docker build -t ghcr.io/ec061/custom-ssh:latest image
 ```
 
-The image runs OpenSSH directly as PID 1 and contains sudo, Python, Node.js LTS, bubblewrap, uidmap,
-seccomp support, Git, ripgrep, curl, proc tools, and a version-pinned Codex CLI. It intentionally
-contains no systemd, Docker packages, daemon configuration, socket, inner NVIDIA runtime, or NVIDIA
-service.
-
-The pinned root-owned Codex is the image baseline. Student npm global installs use
-`$HOME/.local`, so Codex's in-app updater works without sudo and persists with the student's home.
-`host-prepare` applies the same npm configuration to already-running managed labs.
+The image runs OpenSSH directly as PID 1 and uses NVIDIA's pinned CUDA 13.3 development base. It
+contains `nvcc`, CUDA headers/runtime/math libraries, NCCL, GCC/G++, CMake, Ninja, pkg-config,
+Python, sudo, bubblewrap, Git, ripgrep, curl, and proc tools. It intentionally contains no Node.js,
+npm, Codex, systemd, Docker packages, daemon configuration, socket, or inner NVIDIA container
+runtime.
 
 ## 3. Start and validate the node
 
@@ -192,26 +187,19 @@ the real namespace and Codex smoke tests as that ordinary user. A lab is not hea
 commands pass inside its outer container:
 
 ```bash
-bwrap --unshare-user --uid 0 --gid 0 --ro-bind / / --proc /proc --dev /dev --unshare-pid true
-codex --version
-codex sandbox -- true
+bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"
+nvcc --version
 ```
 
-A plain `unshare --user` may remain blocked by Ubuntu's AppArmor restriction. That is expected in
-the enforced Fix 3 model: the setuid-root distribution bwrap obtains its required setup
-capabilities, constructs the sandbox, and drops them before starting the payload.
-
-Doctor still records whether the distribution `bwrap` binary can create a raw nested sandbox, but
-Codex's own sandbox smoke test is the supported pass/fail gate. Managed labs enforce root ownership
-and setuid mode (`4755`) on `/usr/bin/bwrap`, and run the outer container with
+Doctor executes that exact bwrap smoke test and `nvcc --version` as a provisioned ordinary student.
+Managed labs enforce root ownership and setuid mode (`4755`) on `/usr/bin/bwrap`, and run with
 `--security-opt apparmor=unconfined` plus `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`, which the
 setuid bubblewrap code requires while constructing the nested sandbox. The dedicated seccomp
 profile remains enabled. `host-prepare` and `Repair` re-assert this bwrap mode; capability changes
 require container recreation.
 
-Also verify `nvidia-smi`, Codex workspace writes under the student's home, network namespace
-isolation, and that container root cannot modify a host sentinel outside `/home` and
-`/cold-storage`.
+Also verify `nvidia-smi`, CUDA compilation, network namespace isolation, and that container root
+cannot modify a host sentinel outside `/home` and `/cold-storage`.
 
 ## 4. Controller operations
 

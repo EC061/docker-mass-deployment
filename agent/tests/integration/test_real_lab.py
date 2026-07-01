@@ -52,24 +52,20 @@ def test_outer_boundary_and_mounts():
     assert "ssh-ed25519" in keys.stdout
 
 
-def test_setuid_bubblewrap_and_codex():
+def test_setuid_bubblewrap_and_cuda_toolkit():
     bwrap_mode = docker(
         "exec", CONTAINER, "stat", "-c", "%U:%G %a", "/usr/bin/bwrap"
     ).stdout.strip()
     assert bwrap_mode == "root:root 4755"
-    bwrap = ("bwrap", "--unshare-user", "--uid", "0", "--gid", "0",
-             "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
-             "--unshare-pid", "--new-session", "true")
+    bwrap = ("bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+             "--unshare-pid", "--", "echo", "bwrap works")
     student_exec(*bwrap)
-    student_exec("codex", "--version")
-    student_exec("codex", "sandbox", "--", "true")
-    student_exec("codex", "sandbox", "--", *bwrap)
+    student_exec("nvcc", "--version")
 
 
 def test_gpu_storage_and_quota_commands():
     student_exec("sh", "-c", "test -w /home/$USER && test -w /cold-storage/$USER")
     student_exec("nvidia-smi")
-    student_exec("codex", "sandbox", "--", "nvidia-smi")
     student_exec("labquota", "--me")
 
 

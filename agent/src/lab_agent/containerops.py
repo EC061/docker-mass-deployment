@@ -48,9 +48,7 @@ def _mounts(cfg: AgentConfig, lab: str) -> Mounts:
 
 def assert_node_ready(cfg: AgentConfig) -> Any:
     caps = detect_capabilities(cfg, deep=False)
-    runtime_ok = (
-        caps.runtime.docker_ok and caps.runtime.userns_ok and caps.runtime.nested_userns_ok
-    )
+    runtime_ok = caps.runtime.docker_ok and caps.runtime.userns_ok and caps.runtime.bwrap_ok
     if not runtime_ok or caps.health.status == "critical":
         raise docker.DockerError(
             "node runtime/storage is unhealthy; run `lab-agent doctor` before changing labs"

@@ -1,4 +1,4 @@
-"""Structured host health checks for runc/userns, Codex sandboxing, storage, and NVIDIA CDI."""
+"""Structured health checks for Docker, bubblewrap, CUDA, storage, and NVIDIA CDI."""
 
 from __future__ import annotations
 
@@ -30,8 +30,7 @@ class RuntimeHealth:
     userns_start: int
     userns_size: int
     bwrap_ok: bool
-    nested_userns_ok: bool
-    codex_sandbox_ok: bool
+    cuda_toolkit_ok: bool
 
 
 @dataclass
@@ -100,14 +99,6 @@ def _zfs_root_ok(dataset: str, expected_mount: str | None = None) -> bool:
         return False
     path = mountpoint.stdout.strip()
     return path == expected_mount if expected_mount else path.startswith("/")
-
-
-def _sysctl_int(name: str) -> int:
-    res = run(["sysctl", "-n", name], timeout=10)
-    try:
-        return int(res.stdout.strip()) if res.ok else -1
-    except ValueError:
-        return -1
 
 
 def _docker_userns(cfg: AgentConfig) -> bool:
@@ -388,20 +379,8 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                "breaks setuid passwd/sudo inside the lab — re-run host-prepare and recreate "
                "placements")
 
-    clone_ok = _sysctl_int("kernel.unprivileged_userns_clone") == 1
-    max_userns = _sysctl_int("user.max_user_namespaces")
-    apparmor_restrict = _sysctl_int("kernel.apparmor_restrict_unprivileged_userns")
-    nested_userns_ok = clone_ok and max_userns >= 16_384
-    if not nested_userns_ok:
-        _issue(issues, "bubblewrap_namespace", "critical",
-               "Unprivileged user namespaces are disabled or below 16384", True)
-
-    if apparmor_restrict == 0:
-        _issue(issues, "apparmor_userns_unrestricted", "critical",
-               "AppArmor unprivileged-userns restriction was globally disabled", True)
-
     bwrap_ok = _security_profiles_ok(cfg)
-    codex_ok = False
+    cuda_ok = False
     target: tuple[str, str] | None = None
     if deep and docker_ok:
         stale_seccomp = _stale_seccomp_containers(cfg)
@@ -453,47 +432,25 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                        timeout=20)
             mode_ok = mode.ok and mode.stdout.strip() == "4755"
             bwrap_smoke = [
-                "bwrap", "--unshare-user", "--uid", "0", "--gid", "0",
-                "--ro-bind", "/", "/", "--proc", "/proc", "--dev", "/dev",
-                "--unshare-pid", "--new-session", "true",
+                "bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
+                "--unshare-pid", "--", "echo", "bwrap works",
             ]
             raw_bwrap_ok = mode_ok and _student_command(target, bwrap_smoke)
-            codex_ok = (
-                _student_command(target, ["codex", "--version"])
-                and _student_command(target, ["codex", "sandbox", "--", "true"])
-            )
-            # Fix 3 relies on setuid bwrap's narrowly scoped setup capabilities. Ubuntu may reject
-            # a plain unprivileged `unshare --user` under its global AppArmor restriction; that is
-            # expected and is not the sandbox contract deployed here.
-            nested_userns_ok = nested_userns_ok and (raw_bwrap_ok or codex_ok)
-            bwrap_ok = mode_ok and (raw_bwrap_ok or codex_ok)
-            npm_prefix_ok = _student_command(
-                target, ["sh", "-c", 'test "$(npm config get prefix)" = "$HOME/.local"']
-            )
-            if not npm_prefix_ok:
-                _issue(
-                    issues,
-                    "codex_update_prefix",
-                    "critical",
-                    "Student npm prefix is not home-owned; run lab-agent host-prepare",
-                    True,
-                )
+            bwrap_ok = mode_ok and raw_bwrap_ok
+            cuda_ok = _student_command(target, ["nvcc", "--version"])
         else:
             _issue(
                 issues,
-                "codex_smoke_unavailable",
+                "lab_smoke_unavailable",
                 "critical",
-                "No running lab with a provisioned student is available for the Codex smoke test",
+                "No running lab with a provisioned student is available for bwrap/CUDA checks",
             )
     if not bwrap_ok:
         _issue(issues, "bubblewrap_failed", "critical",
                "Distribution /usr/bin/bwrap cannot create a user/PID/proc sandbox", True)
-    if not nested_userns_ok and not any(i.code == "bubblewrap_namespace" for i in issues):
-        _issue(issues, "bubblewrap_namespace", "critical",
-               "Nested unprivileged user namespace test failed", True)
-    if deep and target is not None and not codex_ok:
-        _issue(issues, "codex_sandbox_failed", "critical",
-               "codex sandbox -- true failed as a provisioned student")
+    if deep and target is not None and not cuda_ok:
+        _issue(issues, "cuda_toolkit_failed", "critical",
+               "nvcc --version failed as a provisioned student")
 
     gpu_list = run(["nvidia-smi", "-L"], timeout=20)
     smi_count = sum(1 for line in gpu_list.stdout.splitlines()
@@ -552,8 +509,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     status = "healthy" if not issues else max(issues, key=lambda i: severity[i.severity]).severity
     return Capabilities(
         runtime=RuntimeHealth(docker_ok, driver, userns_ok, cfg.userns_user,
-                              cfg.userns_start, cfg.userns_size, bwrap_ok,
-                              nested_userns_ok, codex_ok),
+                              cfg.userns_start, cfg.userns_size, bwrap_ok, cuda_ok),
         nvidia=NvidiaHealth(gpu_count, nvml_ok, loaded, userspace, cdi_ok, devices),
         storage=StorageHealth(zfs_ok, fast_ok, cold_ok, cfg.slow_backend),
         health=Health(status, issues),

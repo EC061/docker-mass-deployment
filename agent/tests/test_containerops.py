@@ -12,7 +12,7 @@ def cfg():
 
 def healthy(gpu=True, cdi=True):
     return SimpleNamespace(
-        runtime=SimpleNamespace(docker_ok=True, userns_ok=True, nested_userns_ok=True),
+        runtime=SimpleNamespace(docker_ok=True, userns_ok=True, bwrap_ok=True),
         health=SimpleNamespace(status="healthy"),
         nvidia_gpu=gpu, nvidia_cdi=cdi,
     )
@@ -56,7 +56,7 @@ def test_creation_requires_userns_and_passes_cdi(monkeypatch):
     assert events == ["pull", "remove", True]
 
     common(monkeypatch, SimpleNamespace(
-        runtime=SimpleNamespace(docker_ok=True, userns_ok=False, nested_userns_ok=True),
+        runtime=SimpleNamespace(docker_ok=True, userns_ok=False, bwrap_ok=True),
         health=SimpleNamespace(status="critical"),
         nvidia_gpu=False, nvidia_cdi=False,
     ))

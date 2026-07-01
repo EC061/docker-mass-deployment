@@ -19,8 +19,8 @@ sudo lab-agent start
 ```
 
 After a lab and student have been provisioned, run `sudo lab-agent doctor`. Health is critical if
-Docker userns remapping, bubblewrap namespaces, the real `codex sandbox -- true` smoke test,
-NVML/CDI, ZFS, or the configured SMB mount fails.
+Docker userns remapping, the real setuid-bubblewrap smoke test, `nvcc --version`, NVML/CDI, ZFS, or
+the configured SMB mount fails.
 
 Development checks:
 

@@ -10,9 +10,11 @@ def cfg(**kw):
 class Runner:
     def __init__(self, responses):
         self.responses = responses
+        self.calls = []
 
     def __call__(self, args, **kwargs):
         command = " ".join(str(x) for x in args)
+        self.calls.append(command)
         for prefix, value in self.responses.items():
             if command.startswith(prefix):
                 ok, stdout = value
@@ -48,7 +50,7 @@ def test_structured_healthy_capabilities(monkeypatch):
     monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
     caps = system.detect_capabilities(cfg(), deep=False)
-    assert caps.runtime.docker_ok and caps.runtime.userns_ok and caps.runtime.nested_userns_ok
+    assert caps.runtime.docker_ok and caps.runtime.userns_ok and caps.runtime.bwrap_ok
     assert caps.nvidia.gpu_count == 1 and caps.nvidia.cdi_ok
     assert caps.health.status == "healthy"
     assert caps.to_dict()["runtime"]["userns_user"] == "labdockremap"
@@ -94,17 +96,15 @@ def test_missing_smb_mount_is_critical(monkeypatch):
     assert any(i.code == "cold_storage_missing" for i in caps.issues)
 
 
-def test_stale_cdi_and_namespace_failures_are_critical(monkeypatch):
+def test_stale_cdi_is_critical(monkeypatch):
     runner = healthy_runner()
     runner.responses["nvidia-ctk cdi list"] = (True, "nvidia.com/gpu=all")
-    runner.responses["sysctl -n user.max_user_namespaces"] = (True, "1024")
     monkeypatch.setattr(system, "run", runner)
     monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
     caps = system.detect_capabilities(cfg(), deep=False)
     assert any(i.code == "nvidia_cdi_stale" and i.repairable for i in caps.issues)
-    assert any(i.code == "bubblewrap_namespace" for i in caps.issues)
 
 
 def test_driver_or_secure_boot_failure_is_operator_only(monkeypatch):
@@ -177,7 +177,7 @@ def test_stale_bwrap_capability_containers_detects_missing_contract(monkeypatch)
     assert system._stale_bwrap_capability_containers() == ["lab-old", "lab-partial"]
 
 
-def test_deep_doctor_accepts_codex_sandbox_when_raw_bwrap_fails(monkeypatch):
+def test_deep_doctor_accepts_bwrap_and_cuda_toolkit(monkeypatch):
     runner = healthy_runner()
     runner.responses.update({
         'docker ps --filter label=lab-agent.managed=true --format {{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}':
@@ -191,12 +191,8 @@ def test_deep_doctor_accepts_codex_sandbox_when_raw_bwrap_fails(monkeypatch):
         "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
         "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
-            (False, ""),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test codex --version":
-            (True, "codex 1.2.3"),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test codex sandbox -- true":
-            (True, ""),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test sh -c test":
+            (True, "bwrap works"),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test nvcc --version":
             (True, ""),
     })
     monkeypatch.setattr(system, "run", runner)
@@ -209,6 +205,9 @@ def test_deep_doctor_accepts_codex_sandbox_when_raw_bwrap_fails(monkeypatch):
     caps = system.detect_capabilities(cfg(), deep=True)
 
     assert caps.runtime.bwrap_ok
-    assert caps.runtime.codex_sandbox_ok
+    assert caps.runtime.cuda_toolkit_ok
     assert caps.health.status == "healthy"
     assert not any(i.code == "bubblewrap_failed" for i in caps.issues)
+    assert any(command.endswith(
+        "bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo bwrap works"
+    ) for command in runner.calls)
