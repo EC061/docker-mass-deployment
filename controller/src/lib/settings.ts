@@ -50,8 +50,6 @@ export interface Settings {
   smtpConfigs: SmtpConfig[];
   // Plain-text signature appended by the mailer to every outbound email.
   emailSignatureText: string;
-  // Optional public hostname students SSH to (falls back to the node name).
-  sshHostOverride: string;
   // Welcome email sent to a student when added to a lab. Both fields support {placeholder}
   // substitution (see WELCOME_EMAIL_VARS / renderTemplate in lib/mailer.ts). Empty falls back to
   // the built-in default.
@@ -131,7 +129,8 @@ export const WELCOME_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "name", desc: "student's full name (falls back to username)" },
   { key: "username", desc: "login username" },
   { key: "password", desc: "generated initial password" },
-  { key: "host", desc: "SSH host (override or node name)" },
+  { key: "host", desc: "SSH host (node name)" },
+  { key: "host_alias", desc: "node alias (may be blank)" },
   { key: "port", desc: "SSH port" },
   { key: "lab", desc: "lab name" },
   { key: "node", desc: "node name the lab runs on" },
@@ -241,7 +240,6 @@ export const DEFAULT_SETTINGS: Settings = {
   smtpSecure: false,
   smtpConfigs: [],
   emailSignatureText: DEFAULT_EMAIL_SIGNATURE_TEXT,
-  sshHostOverride: "",
   welcomeEmailSubject: DEFAULT_WELCOME_SUBJECT,
   welcomeEmailBody: DEFAULT_WELCOME_BODY,
   gpuEnabled: false,

@@ -115,12 +115,6 @@ export async function deleteSmtpSettingsAction(formData: FormData) {
   redirect(`/settings?smtp=${encodeURIComponent(removed ? `Deleted ${removed.name}` : "SMTP server deleted")}`);
 }
 
-export async function saveSshHostOverrideAction(formData: FormData) {
-  await requireAdmin();
-  setSetting("sshHostOverride", String(formData.get("sshHostOverride") ?? "").trim());
-  revalidatePath("/settings");
-}
-
 export async function saveAlertSettingsAction(formData: FormData) {
   await requireAdmin();
   setSetting("alertsEnabled", formData.get("alertsEnabled") === "on");
