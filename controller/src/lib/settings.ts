@@ -130,7 +130,7 @@ export const WELCOME_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "username", desc: "login username" },
   { key: "password", desc: "generated initial password" },
   { key: "host", desc: "SSH host (node name)" },
-  { key: "host_alias", desc: "node alias (may be blank)" },
+  { key: "host_alias", desc: "node alias (falls back to node name)" },
   { key: "port", desc: "SSH port" },
   { key: "lab", desc: "lab name" },
   { key: "node", desc: "node name the lab runs on" },
