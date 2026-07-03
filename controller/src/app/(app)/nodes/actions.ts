@@ -13,6 +13,7 @@ import {
   rotateNodeToken,
   setNodeAlias,
   setNodeColdStorage,
+  setNodeSshHost,
 } from "@/lib/nodes";
 
 // The freshly issued token is shown once on the Nodes page so the admin can paste the printed
@@ -57,6 +58,20 @@ export async function setNodeAliasAction(formData: FormData) {
     setNodeAlias(name, alias, admin.email);
   } catch (e) {
     error = e instanceof Error ? e.message : "could not set alias";
+  }
+  if (error) redirect("/nodes?error=" + encodeURIComponent(error));
+  redirect("/nodes");
+}
+
+export async function setNodeSshHostAction(formData: FormData) {
+  const admin = await requireAdmin();
+  const name = String(formData.get("name") ?? "").trim().toLowerCase();
+  const sshHost = String(formData.get("sshHost") ?? "");
+  let error: string | null = null;
+  try {
+    setNodeSshHost(name, sshHost, admin.email);
+  } catch (e) {
+    error = e instanceof Error ? e.message : "could not set SSH host";
   }
   if (error) redirect("/nodes?error=" + encodeURIComponent(error));
   redirect("/nodes");

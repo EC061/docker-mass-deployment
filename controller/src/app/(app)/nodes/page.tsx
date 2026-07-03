@@ -18,6 +18,7 @@ import {
   rotateNodeTokenAction,
   setNodeAliasAction,
   setNodeColdStorageAction,
+  setNodeSshHostAction,
 } from "./actions";
 
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ export const dynamic = "force-dynamic";
 interface NodeRow {
   name: string;
   alias: string | null;
+  ssh_host: string | null;
   online: number;
   last_seen: number | null;
   capabilities: string | null;
@@ -107,7 +109,7 @@ export default async function NodesPage({
 
   const nodes = db()
     .prepare(
-      `SELECT n.name, n.alias, n.online, n.last_seen, n.capabilities, n.pools, n.scrub_status,
+      `SELECT n.name, n.alias, n.ssh_host, n.online, n.last_seen, n.capabilities, n.pools, n.scrub_status,
               n.allowed, n.cold_backend, n.cold_mount_path, n.cold_ready,
               owner.name AS owner_name,
               (SELECT COUNT(*) FROM lab_placements WHERE node_id = n.id) AS placements,
@@ -232,6 +234,19 @@ export default async function NodesPage({
                             defaultValue={n.alias ?? ""}
                             placeholder="alias"
                             maxLength={64}
+                            className="h-7 w-28 text-xs"
+                          />
+                          <Button type="submit" variant="secondary" size="sm" className="h-7">
+                            Save
+                          </Button>
+                        </form>
+                        <form action={setNodeSshHostAction} className="mt-1 flex gap-1">
+                          <input type="hidden" name="name" value={n.name} />
+                          <Input
+                            name="sshHost"
+                            defaultValue={n.ssh_host ?? ""}
+                            placeholder="SSH host"
+                            maxLength={255}
                             className="h-7 w-28 text-xs"
                           />
                           <Button type="submit" variant="secondary" size="sm" className="h-7">

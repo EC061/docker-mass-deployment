@@ -597,8 +597,15 @@ Thanks for helping keep the cluster healthy.`,
       `);
     },
   },
+  {
+    // Per-node SSH host override. When set, the controller uses this as the SSH hostname/IP in
+    // welcome emails and the placement detail page, taking priority over the global sshHostOverride
+    // setting and falling back to the node name.
+    id: "0021_node_ssh_host",
+    sql: "ALTER TABLE nodes ADD COLUMN ssh_host TEXT",
+  },
 ];
-
+ 
 function migrate(conn: Database.Database): void {
   conn.exec(`CREATE TABLE IF NOT EXISTS _migrations (
     id TEXT PRIMARY KEY, applied_at INTEGER NOT NULL

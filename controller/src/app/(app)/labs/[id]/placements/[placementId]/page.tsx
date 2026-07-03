@@ -118,7 +118,7 @@ export default async function PlacementPage({
   const quotaState = taskLabel(quotaTask);
   const recreateState = taskLabel(latestTask(placement, "container.recreate"));
   const opts = containerOptionsOf(placement);
-  const host = getSetting("sshHostOverride").trim() || placement.node_name;
+  const host = placement.ssh_host?.trim() || getSetting("sshHostOverride").trim() || placement.node_name;
   const canEdit = placement.state !== "deleting";
   const capacity = nodePoolCapacityBytes(placement.node_id);
   const fastDefault = bytesToQuotaInput(placement.fast_quota_bytes);

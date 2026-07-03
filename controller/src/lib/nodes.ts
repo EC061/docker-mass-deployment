@@ -123,6 +123,19 @@ export function setNodeAlias(name: string, alias: string, actor: string): void {
   audit(actor, "node.alias", name, clean ?? "(cleared)");
 }
 
+/**
+ * Set (or clear) a node's SSH host override. When set, the controller uses this hostname/IP in
+ * welcome emails and the placement detail page instead of the node name or global sshHostOverride.
+ * Pass an empty string to clear it.
+ */
+export function setNodeSshHost(name: string, sshHost: string, actor: string): void {
+  const exists = db().prepare("SELECT 1 FROM nodes WHERE name = ?").get(name);
+  if (!exists) throw new Error(`unknown node '${name}'`);
+  const clean = sshHost.trim().slice(0, 255) || null;
+  db().prepare("UPDATE nodes SET ssh_host = ? WHERE name = ?").run(clean, name);
+  audit(actor, "node.ssh_host", name, clean ?? "(cleared)");
+}
+
 /** Remove a node from the allow-list (its token stops working immediately). */
 export function revokeNode(name: string, actor: string): void {
   db().prepare("UPDATE nodes SET allowed = 0 WHERE name = ?").run(name);

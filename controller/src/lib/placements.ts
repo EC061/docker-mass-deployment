@@ -76,6 +76,7 @@ export interface Placement {
   lab_name: string;
   node_id: number;
   node_name: string;
+  ssh_host: string | null;
   online: number;
   fast_quota_bytes: number;
   cold_quota_bytes: number | null; // NULL on SMB-client placements (owner manages cold)
@@ -96,7 +97,8 @@ export interface Placement {
 }
 
 const PLACEMENT_SELECT = `
-  SELECT p.*, labs.name AS lab_name, nodes.name AS node_name, nodes.online AS online,
+  SELECT p.*, labs.name AS lab_name, nodes.name AS node_name, nodes.ssh_host AS ssh_host,
+         nodes.online AS online,
          nodes.cold_backend AS node_cold_backend, nodes.cold_owner_node_id AS node_cold_owner_node_id,
          owner.name AS cold_owner_name, nodes.cold_ready AS node_cold_ready
   FROM lab_placements p
@@ -368,6 +370,7 @@ interface PendingCredential {
   lab_name: string;
   node_name: string;
   node_alias: string | null;
+  ssh_host: string | null;
   ssh_port: number;
 }
 
@@ -376,7 +379,8 @@ function pendingCredential(labName: string, nodeName: string, username: string):
     .prepare(
       `SELECT pm.id AS member_id, pm.state, pm.credential_secret,
               students.email, students.name, students.username, students.student_id,
-              labs.name AS lab_name, nodes.name AS node_name, nodes.alias AS node_alias, p.ssh_port
+              labs.name AS lab_name, nodes.name AS node_name, nodes.alias AS node_alias,
+              nodes.ssh_host AS ssh_host, p.ssh_port
        FROM placement_members pm
        JOIN students ON students.id = pm.student_id
        JOIN lab_placements p ON p.id = pm.placement_id
@@ -399,7 +403,7 @@ export async function deliverPlacementCredential(
   if (!pending || pending.state !== "active" || !pending.credential_secret || !pending.email) return false;
   const password = decryptSecret(pending.credential_secret);
   if (!password) return false;
-  const host = getSetting("sshHostOverride").trim() || pending.node_name;
+  const host = pending.ssh_host?.trim() || getSetting("sshHostOverride").trim() || pending.node_name;
   const result = await sendCredentialEmail({
     to: pending.email,
     name: pending.name ?? undefined,
