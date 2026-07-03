@@ -1,6 +1,6 @@
 """Docker executor for the single, non-nested lab container.
 
-One shared container per lab (name + hostname ``<lab>-<node>``). Creation-time options (cpu/ram/shm/image-quota/
+One container per lab (name+hostname ``<lab>-<node>``). Creation options (cpu/ram/shm/image-quota/
 port/restart) are baked into ``docker run`` and frozen for the container's life; changing them means
 ``recreate`` (which preserves the ZFS data, since data lives in bind-mounted datasets, not the
 container layer). All NVIDIA GPUs are always passed.
