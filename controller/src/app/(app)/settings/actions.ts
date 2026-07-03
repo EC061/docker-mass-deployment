@@ -108,8 +108,11 @@ export async function saveSmtpSettingsAction(formData: FormData) {
 export async function deleteSmtpSettingsAction(formData: FormData) {
   await requireAdmin();
   const id = String(formData.get("smtpId") ?? "");
-  setSetting("smtpConfigs", getSmtpConfigs().filter((config) => config.id !== id));
+  const configs = getSmtpConfigs();
+  const removed = configs.find((config) => config.id === id);
+  setSetting("smtpConfigs", configs.filter((config) => config.id !== id));
   revalidatePath("/settings");
+  redirect(`/settings?smtp=${encodeURIComponent(removed ? `Deleted ${removed.name}` : "SMTP server deleted")}`);
 }
 
 export async function saveSshHostOverrideAction(formData: FormData) {

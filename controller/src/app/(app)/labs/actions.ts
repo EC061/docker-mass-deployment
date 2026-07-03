@@ -251,7 +251,9 @@ export async function removePlacementAction(formData: FormData) {
   const who = await actor();
   const placementId = Number(formData.get("placementId"));
   const placement = getPlacement(placementId);
-  if (!placement) return;
+  // Already gone (e.g. the node confirmed teardown while the page was open): land on the labs list
+  // instead of re-rendering a placement page that no longer exists.
+  if (!placement) redirect("/labs");
   try {
     destroyPlacement(placementId, who);
   } catch (e) {
@@ -313,7 +315,18 @@ export async function removeMemberAction(formData: FormData) {
   const labId = Number(formData.get("labId"));
   const studentId = Number(formData.get("studentId"));
   const deleteData = formData.get("deleteData") === "on";
-  removeStudentFromLab(labId, studentId, deleteData, who);
+  try {
+    removeStudentFromLab(labId, studentId, deleteData, who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not remove student");
+    redirect(`/labs/${labId}?error=${fid}`);
+  }
   revalidatePath(`/labs/${labId}`);
   revalidatePath("/students");
+  const fid = putFlash(
+    deleteData
+      ? "Student removed from the roster; their account and data are being deleted on every node."
+      : "Student removed from the roster; their account is being deprovisioned on every node (data kept).",
+  );
+  redirect(`/labs/${labId}?saved=${fid}`);
 }

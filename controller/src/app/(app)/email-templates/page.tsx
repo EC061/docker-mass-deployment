@@ -140,10 +140,11 @@ function AnnouncementTemplateCard({ tpl }: { tpl: AnnouncementTemplate }) {
 export default async function EmailTemplatesPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; saved?: string }>;
 }) {
-  const { error } = await searchParams;
+  const { error, saved } = await searchParams;
   const errorMsg = error ? takeFlash(error) : null;
+  const savedMsg = saved ? takeFlash(saved) : null;
   const s = getSettings();
   const gpuKillVars = GPU_EMAIL_VARS.filter((v) => v.key !== "grace_minutes");
   const announcementTemplates = listAnnouncementTemplates();
@@ -251,6 +252,7 @@ export default async function EmailTemplatesPage({
           </div>
 
           {errorMsg && <p className="text-sm text-destructive">{errorMsg}</p>}
+          {savedMsg && <p className="text-sm text-primary">{savedMsg}</p>}
 
           {announcementTemplates.length === 0 ? (
             <p className="text-sm text-muted-foreground">No templates yet — add one below.</p>

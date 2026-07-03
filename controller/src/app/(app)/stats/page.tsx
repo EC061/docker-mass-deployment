@@ -282,10 +282,12 @@ function PerNodeUsageSection({
   usage,
   groups,
   flash,
+  saved,
 }: {
   usage: NodeUsage[];
   groups: NodeGroup[];
   flash: string | null;
+  saved: string | null;
 }) {
   const grouped = new Set(groups.flatMap((g) => g.nodeIds));
   const ungrouped = usage.filter((n) => !grouped.has(n.nodeId));
@@ -303,6 +305,7 @@ function PerNodeUsageSection({
         </div>
 
         {flash && <p className="text-sm text-destructive">{flash}</p>}
+        {saved && <p className="text-sm text-primary">{saved}</p>}
 
         {usage.length === 0 ? (
           <p className="text-sm text-muted-foreground">No nodes yet.</p>
@@ -334,10 +337,11 @@ function PerNodeUsageSection({
 export default async function StatsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ error?: string }>;
+  searchParams: Promise<{ error?: string; saved?: string }>;
 }) {
-  const { error } = await searchParams;
+  const { error, saved } = await searchParams;
   const errorMsg = error ? takeFlash(error) : null;
+  const savedMsg = saved ? takeFlash(saved) : null;
   const nodes = buildStats();
   const nodeUsage = buildNodeUsage();
   const groups = listNodeGroups();
@@ -367,7 +371,7 @@ export default async function StatsPage({
         </form>
       </div>
 
-      <PerNodeUsageSection usage={nodeUsage} groups={groups} flash={errorMsg} />
+      <PerNodeUsageSection usage={nodeUsage} groups={groups} flash={errorMsg} saved={savedMsg} />
 
       <h2 className="pt-2 text-lg font-semibold tracking-tight">Per-lab breakdown</h2>
 
