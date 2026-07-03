@@ -31,7 +31,7 @@ def test_snapshot_uses_container_oriented_names():
 def test_explicit_storage_telemetry(monkeypatch):
     monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
     monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: 42)
-    assert usagereport.live_container_storage("bio") == {
+    assert usagereport.live_container_storage(cfg(), "bio") == {
         "lab": "bio", "user": None, "tier": "rootfs", "used_bytes": 42,
         "quota_bytes": None, "available_bytes": None,
     }

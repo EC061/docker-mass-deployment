@@ -10,6 +10,22 @@ def mounts():
                   "/etc/lab-agent/security/lab-codex-seccomp.json", "lab-codex")
 
 
+def test_container_name_and_hostname_scheme():
+    assert docker.container_name("bio", "node1") == "bio-node1"
+    assert docker.container_hostname("bio", "node1") == "bio-node1"
+    # Underscores are legal in a container --name but not in a hostname: only the hostname folds them.
+    assert docker.container_name("my_lab", "gpu_1") == "my_lab-gpu_1"
+    assert docker.container_hostname("my_lab", "gpu_1") == "my-lab-gpu-1"
+
+
+def test_hostname_is_set_on_run():
+    args = build_run_args("bio-node1", ContainerOptions(), mounts(), gpus=False,
+                          hostname="bio-node1")
+    assert "--hostname bio-node1" in " ".join(args)
+    # Omitted hostname leaves docker to its default (no flag emitted).
+    assert "--hostname" not in build_run_args("bio-node1", ContainerOptions(), mounts(), gpus=False)
+
+
 def test_runc_host_userns_outer_container_contract():
     opts = ContainerOptions(image="custom-ssh", cpus="8", memory="16g", shm_size="2g",
                             rootfs_quota="100g", ssh_port=50012)

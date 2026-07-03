@@ -250,7 +250,7 @@ def build_snapshot(
     }
 
 
-def live_container_storage(lab: str) -> dict[str, Any] | None:
+def live_container_storage(cfg: AgentConfig, lab: str) -> dict[str, Any] | None:
     """The lab-level outer-container writable-layer (``SizeRw``) telemetry row.
 
     This is the rootfs number, measured with one ``docker inspect --size``.
@@ -259,7 +259,7 @@ def live_container_storage(lab: str) -> dict[str, Any] | None:
     ``lab_level_for``). Returns None when the container is absent or the measurement fails, in which
     case the row is omitted and the controller keeps the last known value.
     """
-    container = docker.container_name(lab)
+    container = docker.container_name(lab, cfg.node_name)
     if not docker.container_exists(container):
         return None
     total = docker.writable_layer_size(container)
@@ -300,7 +300,7 @@ def lab_level_for(
         rows.append(_zfs_row(lab, "fast", lab_usage.fast))
     if lab_usage.slow is not None:
         rows.append(_zfs_row(lab, "cold", lab_usage.slow))
-    image = live_container_storage(lab)
+    image = live_container_storage(cfg, lab)
     if image is not None:
         rows.append(image)
     return LabLevelUsage(computed_at=now, storage=rows)
@@ -469,7 +469,7 @@ def run_container_scan(
     never breaks the loop.
     """
     now = now if now is not None else now_ms()
-    container = docker.container_name(lab)
+    container = docker.container_name(lab, cfg.node_name)
     if not docker.container_exists(container):
         return ContainerUsage(scanned_at=now, status="idle")
     total = docker.writable_layer_size(container)

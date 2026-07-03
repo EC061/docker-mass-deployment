@@ -1,6 +1,6 @@
 """Docker executor for the single, non-nested lab container.
 
-One shared container per lab (name ``lab-<lab>``). Creation-time options (cpu/ram/shm/image-quota/
+One shared container per lab (name + hostname ``<lab>-<node>``). Creation-time options (cpu/ram/shm/image-quota/
 port/restart) are baked into ``docker run`` and frozen for the container's life; changing them means
 ``recreate`` (which preserves the ZFS data, since data lives in bind-mounted datasets, not the
 container layer). All NVIDIA GPUs are always passed.
@@ -58,8 +58,23 @@ def sanitize_env(env: dict) -> dict[str, str]:
     return out
 
 
-def container_name(lab: str) -> str:
-    return f"lab-{lab}"
+def container_name(lab: str, node: str) -> str:
+    """The container's Docker ``--name``: ``<lab>-<node>``. One shared container per lab per node,
+    so the name is unique on the node and legible in ``docker ps`` / the controller UI."""
+    return f"{lab}-{node}"
+
+
+# Everything outside the RFC 1123 hostname set (letters, digits, '-', '.') folded to '-'. Lab names
+# may contain '_' (valid in a container --name, invalid in a hostname), so the hostname is sanitized
+# separately from container_name.
+_HOSTNAME_INVALID_RE = re.compile(r"[^A-Za-z0-9.-]+")
+
+
+def container_hostname(lab: str, node: str) -> str:
+    """DNS-safe hostname (the ``<lab>-<node>`` a student sees in their shell prompt). Without this,
+    the container hostname defaults to the random truncated container ID."""
+    cleaned = _HOSTNAME_INVALID_RE.sub("-", f"{lab}-{node}").strip("-.")
+    return cleaned[:63] or "lab"
 
 
 @dataclass
@@ -106,9 +121,12 @@ def build_run_args(
     gpus: bool,
     storage_quota_supported: bool = True,
     labels: dict[str, str] | None = None,
+    hostname: str | None = None,
 ) -> list[str]:
     """Pure function building the `docker run` argv (unit-tested without Docker)."""
     args = ["docker", "run", "-d", "--name", name]
+    if hostname:
+        args += ["--hostname", hostname]
     if opts.ssh_port:
         args += ["-p", f"{opts.ssh_port}:22"]
     args += ["--cpus", opts.cpus, "--memory", opts.memory, "--shm-size", opts.shm_size]
@@ -177,8 +195,12 @@ def create_container(
     *,
     gpus: bool,
     labels: dict[str, str] | None = None,
+    hostname: str | None = None,
 ) -> str:
-    res = run(build_run_args(name, opts, mounts, gpus=gpus, labels=labels), timeout=180)
+    res = run(
+        build_run_args(name, opts, mounts, gpus=gpus, labels=labels, hostname=hostname),
+        timeout=180,
+    )
     if not res.ok:
         raise DockerError(res.logs)
     return res.stdout.strip()

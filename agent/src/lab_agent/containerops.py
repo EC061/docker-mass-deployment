@@ -58,7 +58,7 @@ def assert_node_ready(cfg: AgentConfig) -> Any:
 
 def ensure_container(cfg: AgentConfig, lab: str, params: dict[str, Any]) -> str:
     """Create the lab container fresh and verify that sshd becomes ready."""
-    name = docker.container_name(lab)
+    name = docker.container_name(lab, cfg.node_name)
     opts = ContainerOptions.from_params(params)
     mounts = _mounts(cfg, lab)
     caps = assert_node_ready(cfg)
@@ -73,6 +73,7 @@ def ensure_container(cfg: AgentConfig, lab: str, params: dict[str, Any]) -> str:
         mounts,
         gpus=caps.nvidia_gpu and caps.nvidia_cdi,
         labels=_labels(cfg, lab),
+        hostname=docker.container_hostname(lab, cfg.node_name),
     )
     if not docker.wait_ssh_ready(name):
         logs = docker.container_logs(name)
@@ -88,13 +89,13 @@ def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, s
 
     Flow that never leaves the lab without a working container on failure:
       1. Validate + ensure the proposed image is available BEFORE stopping the running container.
-      2. Stop the old container and rename it aside (lab-<lab>-old) — preserved for rollback.
+      2. Stop the old container and rename it aside (<lab>-<node>-old) — preserved for rollback.
       3. Create the candidate under the real name and wait for sshd readiness.
       4. On success, delete the preserved old container (promote). On any failure, remove the
          candidate and restore + restart the old container, then surface the error.
     """
     lab = params["lab"]
-    name = docker.container_name(lab)
+    name = docker.container_name(lab, cfg.node_name)
     old = f"{name}-old"
     opts = ContainerOptions.from_params(params)
     mounts = _mounts(cfg, lab)
@@ -114,7 +115,8 @@ def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, s
     try:
         # 3. Bring up the candidate under the real name and verify it actually started.
         container_id = docker.create_container(
-            name, opts, mounts, gpus=gpus, labels=_labels(cfg, lab)
+            name, opts, mounts, gpus=gpus, labels=_labels(cfg, lab),
+            hostname=docker.container_hostname(lab, cfg.node_name),
         )
         if not docker.wait_ssh_ready(name):
             logs = docker.container_logs(name)

@@ -82,7 +82,7 @@ def run_apt_upgrade(cfg: AgentConfig, lab: str, *, timeout: float = 1800.0) -> t
     Returns ``(ok, note)`` and never raises, so the caller's weekly loop survives one bad lab. A
     non-interactive frontend + ``--force-confold`` keep dpkg from blocking on config prompts.
     """
-    name = docker.container_name(lab)
+    name = docker.container_name(lab, cfg.node_name)
     if not docker.container_exists(name):
         return False, f"lab '{lab}' container not running; apt upgrade skipped"
     env = ["env", "DEBIAN_FRONTEND=noninteractive"]

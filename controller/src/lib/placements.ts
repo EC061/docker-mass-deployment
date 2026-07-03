@@ -367,6 +367,7 @@ interface PendingCredential {
   student_id: string | null;
   lab_name: string;
   node_name: string;
+  node_alias: string | null;
   ssh_port: number;
 }
 
@@ -375,7 +376,7 @@ function pendingCredential(labName: string, nodeName: string, username: string):
     .prepare(
       `SELECT pm.id AS member_id, pm.state, pm.credential_secret,
               students.email, students.name, students.username, students.student_id,
-              labs.name AS lab_name, nodes.name AS node_name, p.ssh_port
+              labs.name AS lab_name, nodes.name AS node_name, nodes.alias AS node_alias, p.ssh_port
        FROM placement_members pm
        JOIN students ON students.id = pm.student_id
        JOIN lab_placements p ON p.id = pm.placement_id
@@ -407,7 +408,7 @@ export async function deliverPlacementCredential(
     host,
     port: pending.ssh_port,
     lab: pending.lab_name,
-    node: pending.node_name,
+    node: pending.node_alias?.trim() || pending.node_name,
     studentId: pending.student_id,
   });
   if (!result.sent) return false;

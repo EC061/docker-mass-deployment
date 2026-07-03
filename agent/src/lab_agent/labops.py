@@ -83,7 +83,7 @@ def destroy_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     # the teardown isn't already destroying.
     from .executors import docker
 
-    docker.remove_container(docker.container_name(lab))
+    docker.remove_container(docker.container_name(lab, cfg.node_name))
     zfs.destroy_dataset(lab_fast(cfg, lab), recursive=True)
     coldstore.destroy_lab(cfg, lab)
     return {"lab": lab, "destroyed": True}, f"destroyed container + datasets for lab '{lab}'"

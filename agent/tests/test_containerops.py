@@ -85,4 +85,4 @@ def test_creation_removes_container_and_reports_logs_when_ssh_fails(monkeypatch)
     with pytest.raises(containerops.docker.DockerError, match="sshd failed"):
         containerops.ensure_container(cfg(), "bio", {})
 
-    assert removed == ["lab-bio", "lab-bio"]
+    assert removed == ["bio-n", "bio-n"]

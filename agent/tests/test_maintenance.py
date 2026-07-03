@@ -9,7 +9,7 @@ def _ok_status(pool):
 
 
 def _cfg():
-    return AgentConfig(controller_url="ws://x", token="t")
+    return AgentConfig(controller_url="ws://x", token="t", node_name="n1")
 
 
 def test_run_apt_upgrade_runs_update_then_upgrade(monkeypatch):
@@ -24,7 +24,7 @@ def test_run_apt_upgrade_runs_update_then_upgrade(monkeypatch):
     ok, note = maintenance.run_apt_upgrade(_cfg(), "bio", timeout=1800)
     assert ok is True
     assert "patched lab 'bio'" in note
-    assert calls[0][0] == "lab-bio"
+    assert calls[0][0] == "bio-n1"
     # update first, then a non-interactive upgrade, both with the long timeout.
     assert calls[0][1] == ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "update"]
     assert calls[1][1] == ["env", "DEBIAN_FRONTEND=noninteractive", "apt-get", "-y",
