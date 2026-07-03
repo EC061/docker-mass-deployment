@@ -83,6 +83,8 @@ export async function renameNodeGroupAction(formData: FormData) {
 export async function deleteNodeGroupAction(formData: FormData) {
   const groupId = Number(formData.get("groupId"));
   await withGroupFlash((who) => deleteNodeGroup(groupId, who));
+  const fid = putFlash("Node group deleted. The nodes and their data are untouched.");
+  redirect(`/stats?saved=${fid}`);
 }
 
 export async function setNodeGroupMembersAction(formData: FormData) {

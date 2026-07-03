@@ -27,7 +27,12 @@ interface EventRow {
   ts: number;
 }
 
-export default function GpuPage() {
+export default async function GpuPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ cleared?: string }>;
+}) {
+  const { cleared } = await searchParams;
   const snapshot = db()
     .prepare("SELECT * FROM gpu_snapshot ORDER BY node, vram_bytes DESC")
     .all() as SnapRow[];
@@ -79,6 +84,7 @@ export default function GpuPage() {
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-base font-semibold">Recent idle-kill events</h3>
+            {cleared && <p className="text-sm text-primary">{cleared}</p>}
             {events.length > 0 ? (
               <form action={clearGpuEventsAction}>
                 <ConfirmButton

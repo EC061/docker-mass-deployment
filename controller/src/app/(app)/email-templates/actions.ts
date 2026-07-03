@@ -100,4 +100,6 @@ export async function updateAnnouncementTemplateAction(formData: FormData) {
 export async function deleteAnnouncementTemplateAction(formData: FormData) {
   const id = Number(formData.get("id"));
   await withTemplateFlash(() => deleteAnnouncementTemplate(id));
+  const fid = putFlash("Announcement template deleted.");
+  redirect(`/email-templates?saved=${fid}`);
 }
