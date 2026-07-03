@@ -16,7 +16,6 @@ import {
   saveGpuPolicyAction,
   saveScrubSettingsAction,
   saveSmtpSettingsAction,
-  saveSshHostOverrideAction,
   saveStorageSettingsAction,
   saveUsageScanSettingsAction,
   scrubNowAction,
@@ -201,13 +200,6 @@ export default async function SettingsPage({
             <div className="flex items-end">
               <Button type="submit" variant="secondary">Add SMTP config</Button>
             </div>
-          </form>
-          <form action={saveSshHostOverrideAction} className="flex max-w-xl flex-wrap items-end gap-3">
-            <div>
-              <Label>SSH host override (optional)</Label>
-              <Input name="sshHostOverride" defaultValue={s.sshHostOverride} placeholder="gpu.uga.edu" />
-            </div>
-            <Button type="submit" variant="secondary">Save SSH host</Button>
           </form>
           <form action={testEmailAction} className="flex flex-wrap items-end gap-3">
             <div>

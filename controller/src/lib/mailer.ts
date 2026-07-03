@@ -104,6 +104,7 @@ export interface CredentialEmail {
   port: number;
   lab: string;
   node?: string;
+  hostAlias?: string;
   studentId?: string | null;
 }
 
@@ -197,6 +198,7 @@ export function welcomeEmailVars(info: CredentialEmail): Record<string, string |
     username: info.username,
     password: info.password,
     host: info.host,
+    host_alias: info.hostAlias || info.host,
     port: info.port,
     lab: info.lab,
     node: info.node ?? info.host,

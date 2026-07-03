@@ -399,7 +399,7 @@ export async function deliverPlacementCredential(
   if (!pending || pending.state !== "active" || !pending.credential_secret || !pending.email) return false;
   const password = decryptSecret(pending.credential_secret);
   if (!password) return false;
-  const host = getSetting("sshHostOverride").trim() || pending.node_name;
+  const host = pending.node_name;
   const result = await sendCredentialEmail({
     to: pending.email,
     name: pending.name ?? undefined,
@@ -409,6 +409,7 @@ export async function deliverPlacementCredential(
     port: pending.ssh_port,
     lab: pending.lab_name,
     node: pending.node_alias?.trim() || pending.node_name,
+    hostAlias: pending.node_alias?.trim() || "",
     studentId: pending.student_id,
   });
   if (!result.sent) return false;
