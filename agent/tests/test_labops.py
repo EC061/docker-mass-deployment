@@ -4,7 +4,8 @@ from lab_agent.executors import zfs
 
 
 def _cfg():
-    return AgentConfig(controller_url="ws://x", token="t", fast_pool="fast", slow_pool="slow")
+    return AgentConfig(controller_url="ws://x", token="t", fast_pool="fast", slow_pool="slow",
+                       node_name="n1")
 
 
 def _patch_zfs(monkeypatch):
@@ -79,5 +80,5 @@ def test_destroy_lab_removes_container_before_datasets(monkeypatch):
     monkeypatch.setattr(labops.zfs, "destroy_dataset",
                         lambda name, *, recursive=True: order.append(f"destroy:{name}"))
     labops.destroy_lab(_cfg(), {"lab": "bio"})
-    assert order[0] == "rm:lab-bio"
+    assert order[0] == "rm:bio-n1"
     assert any(o.startswith("destroy:") for o in order[1:])

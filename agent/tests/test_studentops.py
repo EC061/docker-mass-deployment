@@ -6,7 +6,7 @@ from lab_agent.executors.coldfs import ColdFsError
 
 
 def cfg():
-    return AgentConfig(controller_url="ws://x", token="t", userns_start=231072)
+    return AgentConfig(controller_url="ws://x", token="t", userns_start=231072, node_name="n1")
 
 
 def patch_storage(monkeypatch):
@@ -35,7 +35,7 @@ def test_add_student_uses_native_host_ownership(monkeypatch):
     assert result["uid"] == 10042
     assert dirs == [("/fast/bio/alice", 10042, 10042),
                     ("/cold/bio/alice", 10042, 10042)]
-    assert calls == [("add", "lab-bio", "alice", 10042, 10042)]
+    assert calls == [("add", "bio-n1", "alice", 10042, 10042)]
 
 
 def test_remove_data_is_host_side_and_cold_is_independent(monkeypatch):
@@ -43,7 +43,7 @@ def test_remove_data_is_host_side_and_cold_is_independent(monkeypatch):
     studentops.remove_student(cfg(), {
         "lab": "bio", "username": "alice", "delete_data": True, "delete_cold": False,
     })
-    assert calls == [("remove", "lab-bio", "alice")]
+    assert calls == [("remove", "bio-n1", "alice")]
     assert removed == [("/fast/bio", "alice")]
 
 

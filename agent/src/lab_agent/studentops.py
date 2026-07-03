@@ -29,7 +29,7 @@ def add_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 
     # The directories already have the student's stable IDs; account creation populates the home
     # and creates its cold-storage symlink.
-    users.add_user(docker.container_name(lab), username, password, uid, gid)
+    users.add_user(docker.container_name(lab, cfg.node_name), username, password, uid, gid)
     return {"lab": lab, "username": username, "uid": uid}, (
         f"added student '{username}' (uid={uid}) to lab '{lab}'"
     )
@@ -39,7 +39,7 @@ def remove_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     username = params["username"]
     delete_data = bool(params.get("delete_data", False))
-    users.remove_user(docker.container_name(lab), username)
+    users.remove_user(docker.container_name(lab, cfg.node_name), username)
     if delete_data:
         coldfs.remove_child(zfs.get_mountpoint(lab_fast(cfg, lab)), username)
     msg = f"removed student '{username}' from lab '{lab}'"
