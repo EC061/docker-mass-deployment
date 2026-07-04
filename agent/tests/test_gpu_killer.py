@@ -27,14 +27,16 @@ def test_warn_then_kill_after_grace():
     assert k.evaluate(procs, pol, now=0) == []
     # t=10min: still within idle window.
     assert k.evaluate(procs, pol, now=600) == []
-    # t=20min: warn.
+    # t=20min: warn, having been idle the full 20 minutes.
     d = k.evaluate(procs, pol, now=1200)
     assert len(d) == 1 and d[0].action == "warn" and d[0].pid == 100 and d[0].user == "alice"
+    assert d[0].idle_s == 1200
     # t=25min: within grace, no further decision.
     assert k.evaluate(procs, pol, now=1500) == []
-    # t=30min: grace elapsed -> kill.
+    # t=30min: grace elapsed -> kill, idle_s covering the whole idle span.
     d = k.evaluate(procs, pol, now=1800)
     assert len(d) == 1 and d[0].action == "kill" and d[0].lab == "bio"
+    assert d[0].idle_s == 1800
 
 
 def test_active_process_resets_timer():

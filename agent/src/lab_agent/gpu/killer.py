@@ -30,6 +30,7 @@ class Decision:
     proc: dict[str, Any]
     lab: str | None
     user: str | None
+    idle_s: int = 0  # how long the process had been idle when the decision fired
 
 
 class GpuKiller:
@@ -79,17 +80,17 @@ class GpuKiller:
             user = proc.get("user")
 
             if policy.immediate:
-                decisions.append(Decision(pid, "kill", proc, lab, user))
+                decisions.append(Decision(pid, "kill", proc, lab, user, int(idle_for)))
                 self._state.pop(pid, None)
                 continue
 
             if st["warned_at"] is None:
                 if idle_for >= policy.idle_minutes * 60:
                     st["warned_at"] = now
-                    decisions.append(Decision(pid, "warn", proc, lab, user))
+                    decisions.append(Decision(pid, "warn", proc, lab, user, int(idle_for)))
             else:
                 if now - st["warned_at"] >= policy.grace_minutes * 60:
-                    decisions.append(Decision(pid, "kill", proc, lab, user))
+                    decisions.append(Decision(pid, "kill", proc, lab, user, int(idle_for)))
                     self._state.pop(pid, None)
 
         # Forget processes that are gone (finished or already killed).

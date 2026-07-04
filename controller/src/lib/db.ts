@@ -597,6 +597,16 @@ Thanks for helping keep the cluster healthy.`,
       `);
     },
   },
+  {
+    // Kill-event forensics: the offending process's command line and how long it had been idle
+    // when the agent acted, so the GPU page can show admins *what* keeps getting killed per
+    // student (repeat offenders), not just that something was.
+    id: "0021_gpu_event_forensics",
+    sql: `
+    ALTER TABLE gpu_events ADD COLUMN cmd TEXT;
+    ALTER TABLE gpu_events ADD COLUMN idle_s INTEGER;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {
