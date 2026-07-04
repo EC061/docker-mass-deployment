@@ -236,6 +236,8 @@ class Agent:
                         "lab": d.lab,
                         "vram_bytes": d.proc.get("vram_bytes"),
                         "state": "killed" if d.action == "kill" else "warned",
+                        "cmd": d.proc.get("cmd"),
+                        "idle_s": d.idle_s,
                     }
                     if d.action == "kill":
                         # Re-verify the PID identity right before killing (M-06): if the original

@@ -399,15 +399,17 @@ function handleEvent(node: string, frame: any): void {
     lab: boundedStr(raw.lab, 40),
     vram_bytes: intOrNull(raw.vram_bytes),
     state: GPU_STATES.has(raw.state) ? (raw.state as string) : "idle",
+    cmd: boundedStr(raw.cmd, 200),
+    idle_s: intOrNull(raw.idle_s),
   };
   // Attribute the event to a placement via its (label-derived) lab + the authenticated node.
   const placementId = p.lab ? (getPlacementByLabNode(p.lab, node)?.id ?? null) : null;
   db()
     .prepare(
-      `INSERT INTO gpu_events (node, pid, user, lab, placement_id, vram_bytes, state, ts)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO gpu_events (node, pid, user, lab, placement_id, vram_bytes, state, ts, cmd, idle_s)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
-    .run(node, p.pid, p.user, p.lab, placementId, p.vram_bytes, p.state, intOrNull(frame.ts) ?? Date.now());
+    .run(node, p.pid, p.user, p.lab, placementId, p.vram_bytes, p.state, intOrNull(frame.ts) ?? Date.now(), p.cmd, p.idle_s);
   void emailGpuEvent(node, p);
 }
 

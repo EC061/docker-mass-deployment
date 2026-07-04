@@ -31,6 +31,20 @@ export function ago(ts: number | null | undefined): string {
   return `${Math.floor(s / 86400)}d ago`;
 }
 
+/** Compact duration for a seconds count, e.g. 45s / 12m / 3h 20m / 2d 5h. */
+export function fmtDuration(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined || seconds < 0) return "—";
+  const s = Math.floor(seconds);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) {
+    const m = Math.floor((s % 3600) / 60);
+    return `${Math.floor(s / 3600)}h${m ? ` ${m}m` : ""}`;
+  }
+  const h = Math.floor((s % 86400) / 3600);
+  return `${Math.floor(s / 86400)}d${h ? ` ${h}h` : ""}`;
+}
+
 export function pct(used: number, quota: number | null | undefined): number | null {
   if (!quota || quota <= 0) return null;
   return Math.min(100, Math.round((used / quota) * 100));

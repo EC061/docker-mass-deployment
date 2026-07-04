@@ -93,6 +93,39 @@ def test_list_gpu_processes_empty_without_nvidia(monkeypatch):
     assert monitor.list_gpu_processes() == []
 
 
+def test_proc_cmd_joins_argv_and_clamps(monkeypatch):
+    from io import BytesIO
+
+    def fake_open(path, *args, **kwargs):
+        assert path == "/proc/77/cmdline"
+        return BytesIO(b"/usr/bin/python3\x00train.py\x00--epochs\x0010\x00")
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert monitor.proc_cmd(77) == "/usr/bin/python3 train.py --epochs 10"
+    assert monitor.proc_cmd(77, max_len=16) == "/usr/bin/python3"
+
+
+def test_proc_cmd_falls_back_to_comm_when_cmdline_empty(monkeypatch):
+    from io import BytesIO, StringIO
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/proc/88/cmdline":
+            return BytesIO(b"")
+        assert path == "/proc/88/comm"
+        return StringIO("cuda-worker\n")
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert monitor.proc_cmd(88) == "[cuda-worker]"
+
+
+def test_proc_cmd_none_for_missing_process(monkeypatch):
+    def fake_open(path, *args, **kwargs):
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    assert monitor.proc_cmd(99) is None
+
+
 def test_kill_pid_skips_on_start_time_mismatch(monkeypatch):
     killed = {}
     monkeypatch.setattr(monitor, "pid_start_time", lambda pid: 9999)  # current != expected

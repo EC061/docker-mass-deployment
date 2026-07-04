@@ -31,6 +31,7 @@ class GpuProcess:
     # process eligible for the idle-GPU killer. Host processes / unmanaged containers are False.
     managed: bool = False
     lab: str | None = None  # from the lab-agent.lab label (not the container name)
+    cmd: str | None = None  # process command line (path + args), for kill-event forensics
 
 
 def _query_compute_apps() -> dict[int, int]:
@@ -154,6 +155,24 @@ def _student_user(container: str | None, pid: int) -> str | None:
     return res.stdout.split(":", 1)[0].strip() or None
 
 
+def proc_cmd(pid: int, max_len: int = 200) -> str | None:
+    """The process's command line (argv joined with spaces), or its comm name for a process whose
+    cmdline is empty (kernel threads / zombies). Length-clamped: this rides in every kill event."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            raw = fh.read()
+    except OSError:
+        return None
+    cmd = raw.replace(b"\x00", b" ").decode("utf-8", "replace").strip()
+    if not cmd:
+        try:
+            with open(f"/proc/{pid}/comm", encoding="utf-8") as fh:
+                cmd = f"[{fh.read().strip()}]"
+        except OSError:
+            return None
+    return cmd[:max_len] or None
+
+
 def pid_start_time(pid: int) -> int | None:
     """Process start time (clock ticks since boot) from /proc/<pid>/stat field 22.
 
@@ -215,6 +234,7 @@ def list_gpu_processes() -> list[dict]:
                     start_time=pid_start_time(pid),
                     managed=managed,
                     lab=lab,
+                    cmd=proc_cmd(pid),
                 )
             )
         )
