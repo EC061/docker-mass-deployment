@@ -41,7 +41,7 @@ def test_outer_boundary_and_mounts():
     assert "systempaths=unconfined" in security
     assert host["UsernsMode"] == "host"
     assert "seccomp=unconfined" not in security
-    assert "apparmor=lab-codex" in security
+    assert "apparmor=unconfined" in security
     destinations = {mount["Destination"] for mount in config["Mounts"]}
     assert destinations == {"/home", "/cold-storage", "/run/labquota"}
     assert docker("exec", CONTAINER, "cat", "/proc/1/comm").stdout.strip() == "sshd"

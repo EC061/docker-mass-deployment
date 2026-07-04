@@ -35,7 +35,7 @@ def test_runc_host_userns_outer_container_contract():
     assert "--userns=host" in args
     assert "--device nvidia.com/gpu=all" in joined
     assert "seccomp=/etc/lab-agent/security/lab-codex-seccomp.json" in joined
-    assert "apparmor=lab-codex" in joined
+    assert "apparmor=unconfined" in joined
     assert "systempaths=unconfined" in joined
     for capability in ("SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"):
         assert f"--cap-add {capability}" in joined

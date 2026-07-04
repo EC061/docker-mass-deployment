@@ -87,82 +87,14 @@ jobs:
             ')
           test "$output" = "bwrap works"
 
-      - name: AppArmor enforcement tests
+      - name: AppArmor profile loads
         run: |
-          # Load the lab-codex AppArmor profile into the kernel.
+          # Managed labs run apparmor=unconfined (setuid bwrap breaks under confinement on
+          # production kernels, even where the CI kernel accepts it — do NOT add confinement
+          # tests back). host-prepare still hard-fails if apparmor_parser rejects the profile,
+          # so keep the parse/load path honest here.
           sudo apparmor_parser -r agent/src/lab_agent/assets/lab-codex.apparmor
-          # Verify the profile is loaded.
           sudo aa-status | grep -q "lab-codex" || { echo "FAIL: lab-codex profile not loaded"; exit 1; }
-          # Run a container confined by lab-codex (NOT apparmor=unconfined).
-          # Test 1: /proc/sys write must be denied by the outer profile.
-          docker run --rm \
-            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
-            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
-            --security-opt apparmor=lab-codex \
-            --entrypoint sh custom-ssh:ci -c '
-              useradd -m -s /bin/bash student
-              # As non-root, writing to /proc/sys must fail (deny /proc/sys/** wklx).
-              su - student -c "echo x > /proc/sys/kernel/hostname" 2>/dev/null && {
-                echo "FAIL: /proc/sys write should be denied by AppArmor"
-                exit 1
-              }
-              echo "PASS: /proc/sys write correctly denied"
-            '
-          # Test 2: mount must be denied by the outer profile (deny mount).
-          docker run --rm \
-            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
-            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
-            --security-opt apparmor=lab-codex \
-            --entrypoint sh custom-ssh:ci -c '
-              useradd -m -s /bin/bash student
-              su - student -c "mount -t tmpfs tmpfs /tmp" 2>/dev/null && {
-                echo "FAIL: mount should be denied by AppArmor"
-                exit 1
-              }
-              echo "PASS: mount correctly denied"
-            '
-          # Test 3: Verify the container is actually confined by lab-codex.
-          profile=$(docker run --rm \
-            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
-            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
-            --security-opt apparmor=lab-codex \
-            --entrypoint sh custom-ssh:ci -c 'cat /proc/self/attr/current')
-          echo "Container AppArmor profile: $profile"
-          echo "$profile" | grep -q "lab-codex" || {
-            echo "FAIL: container not confined by lab-codex"
-            exit 1
-          }
-          echo "PASS: container confined by lab-codex"
-          # Test 4: bwrap Px -> transition must fire — inner process gets lab-codex//lab-codex-bwrap.
-          docker run --rm \
-            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
-            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
-            --security-opt apparmor=lab-codex \
-            --entrypoint sh custom-ssh:ci -c '
-              useradd -m -s /bin/bash student
-              su - student -c "bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- cat /proc/self/attr/current"
-            ' | tee /tmp/bwrap_profile.txt
-          inner_profile=$(cat /tmp/bwrap_profile.txt)
-          echo "bwrap inner profile: $inner_profile"
-          echo "$inner_profile" | grep -q "lab-codex//lab-codex-bwrap" || {
-            echo "FAIL: bwrap Px transition did not fire"
-            exit 1
-          }
-          echo "PASS: bwrap Px transition fires correctly"
-          # Test 5: bwrap must still be able to mount inside its sandbox (inner profile grants mount).
-          docker run --rm \
-            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
-            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
-            --security-opt apparmor=lab-codex \
-            --entrypoint sh custom-ssh:ci -c '
-              useradd -m -s /bin/bash student
-              su - student -c "bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo bwrap-mount-works"
-            ' | tee /tmp/bwrap_mount.txt
-          grep -q "bwrap-mount-works" /tmp/bwrap_mount.txt || {
-            echo "FAIL: bwrap mount inside sandbox failed"
-            exit 1
-          }
-          echo "PASS: bwrap mount inside sandbox works"
 
       - name: Seccomp denial tests
         run: |

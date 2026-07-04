@@ -180,13 +180,10 @@ def _userspace_driver_version() -> str:
     return match.group(1) if match else ""
 
 
-APPARMOR_PROFILE_PATH = "/etc/apparmor.d/lab-codex"
-
-
 def _security_profiles_ok(cfg: AgentConfig) -> bool:
-    # Managed containers run under the dedicated seccomp policy AND the lab-codex AppArmor
-    # profile; its lab-codex-bwrap child keeps the setuid-root bwrap contract working.
-    return os.path.isfile(cfg.seccomp_profile) and os.path.isfile(APPARMOR_PROFILE_PATH)
+    # Managed containers deliberately run apparmor=unconfined: setuid bwrap cannot build its
+    # sandbox under the lab-codex profile on production kernels. The seccomp policy is mandatory.
+    return os.path.isfile(cfg.seccomp_profile)
 
 
 def _stale_seccomp_containers(cfg: AgentConfig) -> list[str]:
@@ -310,24 +307,12 @@ def _seccomp_enforcement_ok(container: str, user: str) -> bool:
     return result.ok
 
 
-def _apparmor_profile_ok(container: str) -> bool:
-    """Verify the container is confined by the lab-codex AppArmor profile.
+def _stale_apparmor_containers() -> list[str]:
+    """Return managed containers not created with the unconfined AppArmor contract.
 
-    Reads ``/proc/self/attr/current`` inside the container.  A confined process reports
-    ``lab-codex`` (possibly with ``enforce`` suffix); an unconfined container reports
-    ``unconfined``.
-    """
-    result = run([
-        "docker", "exec", container, "cat", "/proc/self/attr/current",
-    ], timeout=10)
-    return result.ok and "lab-codex" in result.stdout
-
-
-def _stale_apparmor_containers(cfg: AgentConfig) -> list[str]:
-    """Return managed containers not created under the expected AppArmor profile.
-
-    AppArmor confinement is fixed at container creation, so a container created with
-    ``apparmor=unconfined`` stays unconfined after the profile is (re)loaded on the host.
+    Setuid bubblewrap cannot build its sandbox under the lab-codex profile on production
+    kernels, so labs must run ``apparmor=unconfined``. Confinement is fixed at container
+    creation; a confined container needs recreation, not a host profile change.
     """
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
@@ -339,7 +324,7 @@ def _stale_apparmor_containers(cfg: AgentConfig) -> list[str]:
         profile = run([
             "docker", "inspect", "--format", "{{.AppArmorProfile}}", container,
         ], timeout=20)
-        if not profile.ok or profile.stdout.strip() != cfg.apparmor_profile:
+        if not profile.ok or profile.stdout.strip() != "unconfined":
             stale.append(container)
     return stale
 
@@ -477,14 +462,14 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "Managed containers require recreation with the setuid bubblewrap capability "
                 "contract: " + ", ".join(stale_bwrap_caps),
             )
-        stale_apparmor = _stale_apparmor_containers(cfg)
+        stale_apparmor = _stale_apparmor_containers()
         if stale_apparmor:
             _issue(
                 issues,
                 "container_apparmor_stale",
                 "critical",
-                "Managed containers require recreation under the lab-codex AppArmor profile: "
-                + ", ".join(stale_apparmor),
+                "Managed containers require recreation with the unconfined AppArmor contract "
+                "(setuid bwrap breaks under confinement): " + ", ".join(stale_apparmor),
             )
         target = _first_student_container()
         if target:
@@ -512,16 +497,6 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                     "critical",
                     "Seccomp profile is applied but does not block denied syscalls; "
                     "re-run host-prepare to refresh the profile",
-                    True,
-                )
-            apparmor_ok = bwrap_ok and _apparmor_profile_ok(target[0])
-            if bwrap_ok and not apparmor_ok:
-                _issue(
-                    issues,
-                    "apparmor_profile_missing",
-                    "critical",
-                    "Container is not confined by the lab-codex AppArmor profile; "
-                    "re-run host-prepare to reload the profile and recreate flagged containers",
                     True,
                 )
             cuda_ok = _student_command(target, ["nvcc", "--version"])
