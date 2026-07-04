@@ -24,78 +24,49 @@ Docker and does not expose the host Docker socket.
 
 The lab provides two persistent storage locations:
 
-| Location | Storage tier | Use it for |
-| --- | --- | --- |
-| `~` (`/home/<username>`) | Fast | Active projects, source code, environments, frequently accessed datasets, and current checkpoints |
-| `~/cold-storage` (`/cold-storage/<username>`) | Cold | Large source datasets, completed results, archives, and checkpoints that are not accessed frequently |
+| Storage tier | Relative path | Absolute path | Use it for |
+| --- | --- | --- | --- |
+| Fast | `~` | `/home/<username>` | Active projects, source code, environments, frequently accessed datasets, and current checkpoints |
+| Cold | `~/cold-storage` | `/cold-storage/<username>` | Large source datasets, completed results, archives, and checkpoints that are not accessed frequently |
+
+The relative paths above are what you normally type; they resolve to the absolute paths shown. For
+example, `~` in your shell is exactly `/home/<username>`, and `~/cold-storage` is exactly
+`/cold-storage/<username>`.
 
 `~/cold-storage` is a shortcut to your private cold-storage directory. Both locations survive lab
 container recreation, but persistence is not a backup guarantee. Keep another copy of irreplaceable
 data in an approved backup location.
 
-### How to use fast storage
-
-Run active work from your home directory. Fast storage is the appropriate place for repositories,
-Python or Conda environments, compiled files, caches needed by current work, and data being read or
-written repeatedly by a job. For example:
-
-```bash
-mkdir -p ~/projects
-cd ~/projects
-```
-
-Fast storage is limited and shared by everyone in the lab. Remove disposable caches, obsolete
-environments, duplicate downloads, and failed-run output regularly. Do not keep large inactive
-datasets in fast storage merely for convenience.
-
-Useful commands for finding fast-storage usage include:
-
-```bash
-du -sh ~
-du -h -d 1 ~ 2>/dev/null | sort -h
-```
-
-### How to use cold storage
-
-Move data to cold storage when it must be retained but is no longer part of day-to-day work. Good
-candidates include original datasets, completed experiment output, old checkpoints, and compressed
-archives. For example:
-
-```bash
-mkdir -p ~/cold-storage/datasets ~/cold-storage/archive
-mv ~/projects/completed-run ~/cold-storage/archive/
-```
-
-Cold storage has lower performance. Avoid running metadata-heavy workloads there, creating software
-environments there, or repeatedly training directly against many small files there. A typical
-workflow is:
-
-1. Keep the authoritative large dataset or archived result in `~/cold-storage`.
-2. Copy only the files needed for the current job into a working directory under `~`.
-3. Run the job from fast storage.
-4. Copy final results and checkpoints back to cold storage.
-5. Verify the copied data before deleting the fast working copy.
-
-Example:
-
-```bash
-mkdir -p ~/work/current-run
-rsync -a --info=progress2 ~/cold-storage/datasets/project-a/ ~/work/current-run/input/
-# Run the workload and write results under ~/work/current-run/output.
-rsync -a --info=progress2 ~/work/current-run/output/ ~/cold-storage/archive/project-a-output/
-du -sh ~/cold-storage/archive/project-a-output
-```
-
-`rsync` is preferable for large transfers because it can be run again to copy only missing or
-changed files. Confirm the destination is complete before using `rm -rf` on the source.
-
 ## Lab storage quota
 
-Fast and cold quotas apply to the lab as a whole, not separately to each student. Every student's
-files contribute to the same lab totals. If the lab reaches a quota, writes can fail for everyone,
-jobs may stop while saving output or checkpoints, and package installation may fail.
+Fast and cold quotas apply to your group as a whole, not separately to each student. Every group
+member's files contribute to the same group totals. If the group reaches a quota, writes can fail
+for everyone, jobs may stop while saving output or checkpoints, and package installation may fail.
 
-Show the lab totals and the latest per-student estimates with:
+The fast and image quotas depend on which server your group is assigned to:
+
+| Server | Fast quota (per group) | Image quota (per group) |
+| --- | --- | --- |
+| asimov1 | 1 TB | 200 GB |
+| asimov2 | 2 TB | 400 GB |
+
+Cold storage is the same on both servers: **3 TB per group**.
+
+The image quota covers the container's root filesystem — everything outside `~` and
+`~/cold-storage`, such as system packages installed with `sudo apt install`. Unlike fast and cold
+storage, the image does **not** survive container recreation, so keep anything you care about in
+your home directory or cold storage.
+
+Both the fast and cold quotas can be expanded temporarily on request — for example, for a large
+experiment or a one-time data migration. Contact the administrator with the amount and duration you
+need. The expansion is shrunk back to the standard quota once the stated need is over, so make sure
+your usage is back under the standard quota by then.
+
+### Checking usage with labquota
+
+The best way to check storage usage is the `labquota` command. It reports the group totals against
+the quotas and a per-student breakdown, without the cost of scanning directories yourself. Show the
+group totals and the latest per-student estimates with:
 
 ```bash
 labquota
@@ -107,7 +78,7 @@ Show only your per-student rows with:
 labquota --me
 ```
 
-The lab totals are updated frequently, while the per-student breakdown comes from a periodic file
+The group totals are updated frequently, while the per-student breakdown comes from a periodic file
 scan and can be older. The output displays when that scan last completed. Request a newer scan with:
 
 ```bash
@@ -126,7 +97,7 @@ When usage is high:
    on `~/cold-storage/` makes `du` inspect the linked cold directory.
 2. Delete files that can be regenerated, including obsolete outputs and caches.
 3. Move inactive data from fast storage to cold storage when cold capacity is available.
-4. Coordinate with labmates, because the quota is shared.
+4. Coordinate with your group members, because the quota is shared.
 5. Contact the administrator before a critical run if the remaining capacity is insufficient.
 
 Do not assume that deleting an open file immediately releases its space. If quota usage remains
@@ -135,27 +106,24 @@ scan.
 
 ## GPU use and process termination
 
-GPUs are shared resources. Request a GPU only when the program will use it, release GPU memory when
-work finishes, and checkpoint long-running jobs frequently. A process can reserve GPU memory while
-performing no GPU computation, preventing other students from using that capacity.
+### Automatic idle-process termination
 
-### Inspect your GPU processes
+GPUs are shared, so the lab automatically terminates processes that hold GPU memory (VRAM) without
+doing real GPU work. The policy is:
 
-Use `nvidia-smi` to see GPU utilization, memory usage, and the process IDs (PIDs) holding GPU memory:
+1. A process that holds VRAM with **less than 2% GPU utilization** is tracked as idle.
+2. After **more than 30 minutes** of continuous idleness, the system records a warning and emails
+   the owner.
+3. If the process is still idle **10 minutes after the warning**, it is killed automatically.
+4. If GPU utilization rises to 2% or above at any point before the kill, idle tracking resets.
 
-```bash
-nvidia-smi
-nvidia-smi pmon -c 1
-```
+The kill is a `SIGKILL`: the process gets no chance to save a checkpoint or clean up, so act on the
+warning email immediately — checkpoint or stop the job, make sure it resumes real GPU work, or
+contact the administrator.
 
-Before terminating anything, verify that the PID belongs to you and identify the command:
-
-```bash
-ps -o user,pid,ppid,stat,etime,cmd -p <pid>
-```
-
-Never terminate a PID that you have not identified. A PID can disappear and later be reused by a
-different process, so repeat `ps` immediately before sending a signal.
+Note that an active CPU-only stage (for example, data preprocessing) can still appear GPU-idle
+while holding VRAM. Structure jobs so they release the GPU during long CPU-only stages, or contact
+the administrator in advance if a legitimate workload needs an exemption.
 
 ### Stop your own GPU process safely
 
@@ -181,30 +149,7 @@ workers. Inspect the process tree with `ps -f --forest -u "$USER"` or `pstree -a
 available. Do not use broad commands such as `pkill python` unless you have verified every matching
 process.
 
-### Automatic idle-process termination
 
-The lab may enforce an administrator-configured idle GPU policy. It evaluates managed lab
-processes that hold GPU memory and compares their GPU compute utilization with the configured idle
-threshold. The idle duration, warning period, utilization threshold, and any exemptions can change;
-do not assume fixed values.
-
-Under the normal warning policy:
-
-1. A process that continuously holds GPU memory at or below the idle threshold is tracked as idle.
-2. When it exceeds the configured idle duration, the system records a warning and sends the owner a
-   warning email when email delivery is configured.
-3. If the process remains idle through the grace period, the system terminates it with `SIGKILL` and
-   sends a termination email when email delivery is configured.
-4. If GPU activity rises above the threshold before termination, idle tracking resets.
-
-Administrators can also enable immediate termination, which skips the warning grace period. Missing
-GPU utilization data is treated conservatively and is not considered proof that a process is idle.
-Only processes in managed lab containers are eligible for automatic termination.
-
-An active CPU preprocessing stage can still appear GPU-idle while holding GPU memory. Structure jobs
-so they release the GPU during long CPU-only stages, or contact the administrator before running a
-legitimate workload that requires an exemption. Warning emails should be acted on immediately:
-checkpoint or stop the job, make sure it resumes real GPU work, or contact the administrator.
 
 ## Administrative help
 
