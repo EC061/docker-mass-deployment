@@ -101,6 +101,26 @@ def test_usage_helpers(monkeypatch):
     assert docker.du_home("lab-bio", "alice") == 123
 
 
+def test_parse_human_size_matches_docker_storage_opt_forms():
+    assert docker.parse_human_size("300g") == 300 * 1024**3
+    assert docker.parse_human_size("2048G") == 2048 * 1024**3
+    assert docker.parse_human_size("1.5TiB") == int(1.5 * 1024**4)
+    assert docker.parse_human_size("512") == 512
+    assert docker.parse_human_size("100kb") == 100 * 1024
+    assert docker.parse_human_size("bogus") is None
+
+
+def test_rootfs_quota_bytes_reads_storage_opt(monkeypatch):
+    monkeypatch.setattr(
+        docker, "run", lambda *a, **k: CommandResult(True, [], 0, '{"size":"300g"}\n', "")
+    )
+    assert docker.rootfs_quota_bytes("lab-bio") == 300 * 1024**3
+    monkeypatch.setattr(docker, "run", lambda *a, **k: CommandResult(True, [], 0, "null\n", ""))
+    assert docker.rootfs_quota_bytes("lab-bio") is None
+    monkeypatch.setattr(docker, "run", lambda *a, **k: CommandResult(False, [], 1, "", "err"))
+    assert docker.rootfs_quota_bytes("lab-bio") is None
+
+
 def test_wait_ssh_ready_completes_key_exchange(monkeypatch):
     calls = []
 

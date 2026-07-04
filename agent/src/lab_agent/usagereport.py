@@ -197,6 +197,14 @@ def _usage_pair(u: zfs.Usage | None) -> dict[str, int | None] | None:
     return {"used": u.used_bytes, "quota": u.quota_bytes}
 
 
+def lab_rootfs_quota(cfg: AgentConfig, lab: str) -> int | None:
+    """The lab container's writable-layer quota in bytes (``--storage-opt size=``), if any."""
+    container = docker.container_name(lab, cfg.node_name)
+    if not docker.container_exists(container):
+        return None
+    return docker.rootfs_quota_bytes(container)
+
+
 def build_snapshot(
     cfg: AgentConfig,
     lab: str,
@@ -204,6 +212,7 @@ def build_snapshot(
     container_usage: ContainerUsage,
     *,
     roster: list[str] | None = None,
+    rootfs_quota: int | None = None,
     now: int | None = None,
 ) -> dict[str, Any]:
     """Assemble one lab snapshot from live ZFS metadata and cached container usage."""
@@ -241,6 +250,8 @@ def build_snapshot(
         "totals": {
             "fast": _usage_pair(lab_usage.fast),
             "cold": _usage_pair(lab_usage.slow),
+            "rootfs": {"used": container_usage.total_used, "quota": rootfs_quota},
+            # Legacy duplicate of totals.rootfs.used for labquota scripts baked into older images.
             "rootfs_used": container_usage.total_used,
         },
         "usage_scanned_at": container_usage.scanned_at,
@@ -265,13 +276,14 @@ def live_container_storage(cfg: AgentConfig, lab: str) -> dict[str, Any] | None:
     total = docker.writable_layer_size(container)
     if total is None:
         return None
+    quota = docker.rootfs_quota_bytes(container)
     return {
         "lab": lab,
         "user": None,
         "tier": "rootfs",
         "used_bytes": total,
-        "quota_bytes": None,
-        "available_bytes": None,
+        "quota_bytes": quota,
+        "available_bytes": max(0, quota - total) if quota is not None else None,
     }
 
 

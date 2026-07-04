@@ -13,6 +13,7 @@ host Docker socket.
 from __future__ import annotations
 
 import hashlib
+import json
 import re
 import time
 from dataclasses import dataclass, field
@@ -290,6 +291,38 @@ def writable_layer_size(name: str) -> int | None:
         return int(res.stdout.strip())
     except (ValueError, TypeError):
         return None
+
+
+# Human sizes as docker parses them for --storage-opt size= (binary multiples, optional i?B).
+SIZE_UNITS = {"": 1, "b": 1, "k": 1024, "m": 1024**2, "g": 1024**3, "t": 1024**4, "p": 1024**5}
+SIZE_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([bkmgtp]?)(?:i?b)?$", re.IGNORECASE)
+
+
+def parse_human_size(text: str) -> int | None:
+    """Bytes for a docker human size like '300g' or '1.5TiB', or None if unparseable."""
+    match = SIZE_RE.match(text.strip())
+    if not match:
+        return None
+    value, unit = match.groups()
+    return int(float(value) * SIZE_UNITS[unit.lower()])
+
+
+def rootfs_quota_bytes(name: str) -> int | None:
+    """The container's writable-layer quota (``--storage-opt size=``) in bytes, or None if unset.
+
+    Docker stores the option verbatim as a human size string, so it is parsed back to bytes here.
+    """
+    res = run(
+        ["docker", "inspect", "--format", "{{json .HostConfig.StorageOpt}}", name], timeout=30
+    )
+    if not res.ok:
+        return None
+    try:
+        opts = json.loads(res.stdout.strip() or "null") or {}
+    except json.JSONDecodeError:
+        return None
+    size = opts.get("size") if isinstance(opts, dict) else None
+    return parse_human_size(size) if isinstance(size, str) else None
 
 
 def du_path(name: str, path: str, *, timeout: float = 60.0) -> int | None:

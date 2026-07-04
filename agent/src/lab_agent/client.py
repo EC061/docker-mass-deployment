@@ -308,7 +308,8 @@ class Agent:
                 usagereport.ensure_labquota_dirs(self.cfg, lab)
                 roster = usagereport.list_lab_students(self.cfg, lab)
                 snapshot = usagereport.build_snapshot(
-                    self.cfg, lab, lab_usage, self.usage.container_for(lab), roster=roster
+                    self.cfg, lab, lab_usage, self.usage.container_for(lab), roster=roster,
+                    rootfs_quota=usagereport.lab_rootfs_quota(self.cfg, lab),
                 )
                 usagereport.publish_snapshot(self.cfg, lab, snapshot)
             except Exception as exc:  # one bad lab must not stop the others
@@ -383,7 +384,8 @@ class Agent:
             grouped = usagereport.collect_zfs_usage(self.cfg)
             roster = usagereport.list_lab_students(self.cfg, lab)
             snapshot = usagereport.build_snapshot(
-                self.cfg, lab, grouped.get(lab, usagereport.LabUsage()), usage, roster=roster
+                self.cfg, lab, grouped.get(lab, usagereport.LabUsage()), usage, roster=roster,
+                rootfs_quota=usagereport.lab_rootfs_quota(self.cfg, lab),
             )
             usagereport.publish_snapshot(self.cfg, lab, snapshot)
         except Exception as exc:

@@ -21,8 +21,11 @@ def test_snapshot_uses_container_oriented_names():
         per_user_slow={"alice": 10}, unattributed=180)
     lab = usagereport.LabUsage(fast=Usage("fast/labs/bio", 500, 1000, 500),
                                slow=Usage("slow/labs/bio", 200, 2000, 1800))
-    snap = usagereport.build_snapshot(cfg(), "bio", lab, usage, roster=["alice"], now=9)
+    snap = usagereport.build_snapshot(
+        cfg(), "bio", lab, usage, roster=["alice"], rootfs_quota=2048, now=9
+    )
     assert snap["totals"]["rootfs_used"] == 300
+    assert snap["totals"]["rootfs"] == {"used": 300, "quota": 2048}
     assert snap["usage_scanned_at"] == 5
     assert snap["students"][0]["home"] == {"used": 40, "quota": None}
     assert "home_used" not in snap["students"][0]
@@ -31,6 +34,12 @@ def test_snapshot_uses_container_oriented_names():
 def test_explicit_storage_telemetry(monkeypatch):
     monkeypatch.setattr(usagereport.docker, "container_exists", lambda name: True)
     monkeypatch.setattr(usagereport.docker, "writable_layer_size", lambda name: 42)
+    monkeypatch.setattr(usagereport.docker, "rootfs_quota_bytes", lambda name: 100)
+    assert usagereport.live_container_storage(cfg(), "bio") == {
+        "lab": "bio", "user": None, "tier": "rootfs", "used_bytes": 42,
+        "quota_bytes": 100, "available_bytes": 58,
+    }
+    monkeypatch.setattr(usagereport.docker, "rootfs_quota_bytes", lambda name: None)
     assert usagereport.live_container_storage(cfg(), "bio") == {
         "lab": "bio", "user": None, "tier": "rootfs", "used_bytes": 42,
         "quota_bytes": None, "available_bytes": None,

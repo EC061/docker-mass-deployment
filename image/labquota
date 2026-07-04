@@ -5,7 +5,11 @@ Reads the usage snapshot the lab agent publishes into the container. The numbers
 
   * home       — fast NVMe storage (~), covered by the lab's fast quota
   * cold       — slow bulk storage (~/cold-storage), quota-limited
-  * rootfs     — the lab container's shared writable layer
+  * rootfs     — the lab container's shared writable layer, covered by the container quota
+
+Everything renders as one table: you first, your labmates ranked by username, and the lab TOTAL
+(used / quota) last. Per-student percentages are shares of the lab's total quota for that tier;
+rootfs is shared by the whole lab, so only the TOTAL row carries it.
 
 Lab totals are refreshed frequently; per-student home/cold sizes come from a periodic scan. Ask for
 a fresh one with `labquota --refresh` and watch the progress.
@@ -52,6 +56,12 @@ def fmt_bytes(n) -> str:
     return f"{n:.1f} TiB"
 
 
+def fmt_pct(used, quota) -> str:
+    if used is None or not quota or quota <= 0:
+        return ""
+    return f" ({used * 100 // quota}%)"
+
+
 def fmt_pair(pair) -> str:
     """Format usage, adding quota and percentage only when an actual quota is present."""
     if not pair:
@@ -59,9 +69,15 @@ def fmt_pair(pair) -> str:
     used = pair.get("used")
     quota = pair.get("quota")
     base = f"{fmt_bytes(used)} / {fmt_bytes(quota)}" if quota else fmt_bytes(used)
-    if quota and used is not None and quota > 0:
-        base += f" ({used * 100 // quota}%)"
-    return base
+    return base + fmt_pct(used, quota)
+
+
+def fmt_share(pair, total_quota) -> str:
+    """Format a student's usage with their share of the lab's total quota for that tier."""
+    if not pair or pair.get("used") is None:
+        return "—"
+    used = pair["used"]
+    return fmt_bytes(used) + fmt_pct(used, total_quota)
 
 
 def fmt_age(ts_ms) -> str:
@@ -101,29 +117,39 @@ def render(snapshot: dict, *, me: str, only_me: bool) -> None:
     students = snapshot.get("students", [])
     if only_me:
         students = [s for s in students if s.get("username") == me]
+    totals = snapshot.get("totals", {})
+    # Older agents publish only totals.rootfs_used (no quota); accept both shapes.
+    rootfs = totals.get("rootfs") or {"used": totals.get("rootfs_used"), "quota": None}
+    fast_quota = (totals.get("fast") or {}).get("quota")
+    cold_quota = (totals.get("cold") or {}).get("quota")
+
     if not students:
         print("  (no students provisioned yet)")
-        return
 
-    rows = [("STUDENT", "HOME (fast)", "COLD (slow)")]
-    for s in students:
+    # One table: you first, labmates ranked by username, lab TOTAL last. Student percentages are
+    # shares of the lab's total quota; rootfs is shared, so only the TOTAL row carries it.
+    ordered = sorted(students, key=lambda s: (s.get("username") != me, s.get("username", "")))
+    rows = [("STUDENT", "HOME (fast)", "COLD (slow)", "ROOTFS (shared)")]
+    for s in ordered:
         name = s.get("username", "?")
         label = f"{name}  (you)" if name == me else name
-        rows.append(
-            (label, fmt_pair(s.get("home")), fmt_pair(s.get("cold")))
-        )
-    widths = [max(len(r[i]) for r in rows) for i in range(3)]
+        rows.append((
+            label,
+            fmt_share(s.get("home"), fast_quota),
+            fmt_share(s.get("cold"), cold_quota),
+            "—",
+        ))
+    rows.append(("TOTAL", fmt_pair(totals.get("fast")), fmt_pair(totals.get("cold")),
+                 fmt_pair(rootfs)))
+    ncols = len(rows[0])
+    widths = [max(len(r[i]) for r in rows) for i in range(ncols)]
+    rule = "  " + "  ".join("-" * widths[j] for j in range(ncols))
     for i, row in enumerate(rows):
-        line = "  " + "  ".join(row[j].ljust(widths[j]) for j in range(3))
-        print(line)
+        if i == len(rows) - 1:  # separate the TOTAL row from the students
+            print(rule)
+        print("  " + "  ".join(row[j].ljust(widths[j]) for j in range(ncols)).rstrip())
         if i == 0:
-            print("  " + "  ".join("-" * widths[j] for j in range(3)))
-
-    totals = snapshot.get("totals", {})
-    print()
-    print(f"  lab total  home {fmt_pair(totals.get('fast'))}"
-          f"   cold {fmt_pair(totals.get('cold'))}"
-          f"   rootfs {fmt_bytes(totals.get('rootfs_used'))}")
+            print(rule)
     print()
     print("  Options: labquota --refresh   refresh per-student sizes (if >1h old)")
     print("           labquota --me        show only your usage")
