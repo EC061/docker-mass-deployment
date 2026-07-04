@@ -192,6 +192,11 @@ def test_deep_doctor_accepts_bwrap_and_cuda_toolkit(monkeypatch):
         "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
             (True, "bwrap works"),
+        # Seccomp enforcement: keyctl returns EPERM (exit 0 in our script means blocked).
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test python3":
+            (True, ""),
+        # AppArmor: container is confined by lab-codex.
+        "docker exec lab-test cat /proc/self/attr/current": (True, "lab-codex (enforce)"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test nvcc --version":
             (True, ""),
     })
@@ -208,6 +213,108 @@ def test_deep_doctor_accepts_bwrap_and_cuda_toolkit(monkeypatch):
     assert caps.runtime.cuda_toolkit_ok
     assert caps.health.status == "healthy"
     assert not any(i.code == "bubblewrap_failed" for i in caps.issues)
+    assert not any(i.code == "seccomp_enforcement_failed" for i in caps.issues)
+    assert not any(i.code == "apparmor_profile_missing" for i in caps.issues)
     assert any(command.endswith(
         "bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo bwrap works"
     ) for command in runner.calls)
+
+
+def test_seccomp_enforcement_failure_is_critical(monkeypatch):
+    runner = healthy_runner()
+    runner.responses.update({
+        'docker ps --filter label=lab-agent.managed=true --format {{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}':
+            (True, "lab-test\tcurrent\n"),
+        "docker ps --filter label=lab-agent.managed=true --format {{.Names}}": (True, "lab-test\n"),
+        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
+            (True, "[]\t[]"),
+        "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test":
+            (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
+        "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
+        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
+            (True, "bwrap works"),
+        # Seccomp enforcement: keyctl succeeds (exit 1 = seccomp not working).
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test python3":
+            (False, ""),
+        "docker exec lab-test cat /proc/self/attr/current": (True, "lab-codex (enforce)"),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test nvcc --version":
+            (True, ""),
+    })
+    monkeypatch.setattr(system, "run", runner)
+    monkeypatch.setattr(system.docker, "security_profile_digest", lambda path: "current")
+    monkeypatch.setattr(system.docker, "wait_ssh_ready", lambda container, **kwargs: True)
+    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
+    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
+    monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
+
+    caps = system.detect_capabilities(cfg(), deep=True)
+
+    assert caps.runtime.bwrap_ok
+    issue = next(i for i in caps.issues if i.code == "seccomp_enforcement_failed")
+    assert issue.severity == "critical"
+    assert issue.repairable is True
+
+
+def test_apparmor_profile_missing_is_critical(monkeypatch):
+    runner = healthy_runner()
+    runner.responses.update({
+        'docker ps --filter label=lab-agent.managed=true --format {{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}':
+            (True, "lab-test\tcurrent\n"),
+        "docker ps --filter label=lab-agent.managed=true --format {{.Names}}": (True, "lab-test\n"),
+        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
+            (True, "[]\t[]"),
+        "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test":
+            (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
+        "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
+        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
+            (True, "bwrap works"),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test python3":
+            (True, ""),
+        # AppArmor: container is NOT confined.
+        "docker exec lab-test cat /proc/self/attr/current": (True, "unconfined"),
+        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test nvcc --version":
+            (True, ""),
+    })
+    monkeypatch.setattr(system, "run", runner)
+    monkeypatch.setattr(system.docker, "security_profile_digest", lambda path: "current")
+    monkeypatch.setattr(system.docker, "wait_ssh_ready", lambda container, **kwargs: True)
+    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
+    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
+    monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
+
+    caps = system.detect_capabilities(cfg(), deep=True)
+
+    assert caps.runtime.bwrap_ok
+    issue = next(i for i in caps.issues if i.code == "apparmor_profile_missing")
+    assert issue.severity == "critical"
+    assert issue.repairable is True
+
+
+def test_seccomp_enforcement_ok_returns_true_on_blocked(monkeypatch):
+    monkeypatch.setattr(system, "run", lambda *a, **k: CommandResult(True, [], 0, "", ""))
+    assert system._seccomp_enforcement_ok("lab-test", "alice")
+
+
+def test_seccomp_enforcement_ok_returns_false_on_unconfined(monkeypatch):
+    monkeypatch.setattr(system, "run", lambda *a, **k: CommandResult(False, [], 1, "", ""))
+    assert not system._seccomp_enforcement_ok("lab-test", "alice")
+
+
+def test_apparmor_profile_ok_returns_true_when_confined(monkeypatch):
+    monkeypatch.setattr(
+        system, "run",
+        lambda *a, **k: CommandResult(True, [], 0, "lab-codex (enforce)\n", ""),
+    )
+    assert system._apparmor_profile_ok("lab-test")
+
+
+def test_apparmor_profile_ok_returns_false_when_unconfined(monkeypatch):
+    monkeypatch.setattr(
+        system, "run",
+        lambda *a, **k: CommandResult(True, [], 0, "unconfined\n", ""),
+    )
+    assert not system._apparmor_profile_ok("lab-test")
