@@ -180,10 +180,13 @@ def _userspace_driver_version() -> str:
     return match.group(1) if match else ""
 
 
+APPARMOR_PROFILE_PATH = "/etc/apparmor.d/lab-codex"
+
+
 def _security_profiles_ok(cfg: AgentConfig) -> bool:
-    # Managed containers deliberately run apparmor=unconfined for the setuid-root bwrap contract.
-    # The dedicated seccomp policy remains mandatory.
-    return os.path.isfile(cfg.seccomp_profile)
+    # Managed containers run under the dedicated seccomp policy AND the lab-codex AppArmor
+    # profile; its lab-codex-bwrap child keeps the setuid-root bwrap contract working.
+    return os.path.isfile(cfg.seccomp_profile) and os.path.isfile(APPARMOR_PROFILE_PATH)
 
 
 def _stale_seccomp_containers(cfg: AgentConfig) -> list[str]:
@@ -286,21 +289,23 @@ def _stale_bwrap_capability_containers() -> list[str]:
     return stale
 
 
-def _seccomp_enforcement_ok(container: str, user: str) -> bool:
-    """Verify the seccomp profile actually blocks denied syscalls.
+# Probe run inside a lab to prove the seccomp policy is enforcing: add_key(2) (syscall 248 on
+# x86_64) is outside the allow-list, so the profile fails it with defaultErrnoRet EPERM (exit 0);
+# without the profile the bogus arguments fail with a different errno such as EFAULT (exit 1).
+# CI runs this exact script with and without the profile to keep the errno mapping honest.
+SECCOMP_PROBE = (
+    "import ctypes, sys; libc = ctypes.CDLL('libc.so.6', use_errno=True); "
+    "libc.syscall(248, 0, 0, 0, 0); "
+    "sys.exit(0 if ctypes.get_errno() == 1 else 1)"
+)
 
-    Attempts keyctl(2) (syscall 248, not in the allow-list) via python3 ctypes inside the container
-    as the given user.  A correctly applied profile returns EPERM; an unconfined container succeeds.
-    """
-    script = (
-        "import ctypes, sys; libc = ctypes.CDLL('libc.so.6', use_errno=True); "
-        "ret = libc.syscall(248, 0, 0, 0, 0); "
-        "import os; sys.exit(0 if ctypes.get_errno() != 1 else 1)"
-    )
+
+def _seccomp_enforcement_ok(container: str, user: str) -> bool:
+    """Verify the seccomp profile actually blocks denied syscalls (see SECCOMP_PROBE)."""
     result = run([
         "docker", "exec", "-u", user,
         "-e", f"HOME=/home/{user}", "-e", f"USER={user}", "-e", f"LOGNAME={user}",
-        container, "python3", "-c", script,
+        container, "python3", "-c", SECCOMP_PROBE,
     ], timeout=30)
     return result.ok
 
@@ -316,6 +321,27 @@ def _apparmor_profile_ok(container: str) -> bool:
         "docker", "exec", container, "cat", "/proc/self/attr/current",
     ], timeout=10)
     return result.ok and "lab-codex" in result.stdout
+
+
+def _stale_apparmor_containers(cfg: AgentConfig) -> list[str]:
+    """Return managed containers not created under the expected AppArmor profile.
+
+    AppArmor confinement is fixed at container creation, so a container created with
+    ``apparmor=unconfined`` stays unconfined after the profile is (re)loaded on the host.
+    """
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
+    ], timeout=20)
+    if not listed.ok:
+        return []
+    stale: list[str] = []
+    for container in listed.stdout.splitlines():
+        profile = run([
+            "docker", "inspect", "--format", "{{.AppArmorProfile}}", container,
+        ], timeout=20)
+        if not profile.ok or profile.stdout.strip() != cfg.apparmor_profile:
+            stale.append(container)
+    return stale
 
 
 def _first_student_container() -> tuple[str, str] | None:
@@ -451,6 +477,15 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "Managed containers require recreation with the setuid bubblewrap capability "
                 "contract: " + ", ".join(stale_bwrap_caps),
             )
+        stale_apparmor = _stale_apparmor_containers(cfg)
+        if stale_apparmor:
+            _issue(
+                issues,
+                "container_apparmor_stale",
+                "critical",
+                "Managed containers require recreation under the lab-codex AppArmor profile: "
+                + ", ".join(stale_apparmor),
+            )
         target = _first_student_container()
         if target:
             if not docker.wait_ssh_ready(target[0], timeout=10, interval=1):
@@ -486,7 +521,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                     "apparmor_profile_missing",
                     "critical",
                     "Container is not confined by the lab-codex AppArmor profile; "
-                    "re-run host-prepare to reload the profile",
+                    "re-run host-prepare to reload the profile and recreate flagged containers",
                     True,
                 )
             cuda_ok = _student_command(target, ["nvcc", "--version"])

@@ -167,27 +167,41 @@ jobs:
       - name: Seccomp denial tests
         run: |
           seccomp="$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json"
-          # keyctl (syscall 248) must be denied — not in the allow-list.
+          # add_key (syscall 248 on x86_64) must be denied — not in the allow-list.
           docker run --rm --entrypoint sh \
             --security-opt "seccomp=$seccomp" \
             custom-ssh:ci -c 'python3 -c "import sys; sys.exit(0)"' \
             || { echo "FAIL: python3 should run"; exit 1; }
-          # Verify keyctl is blocked by attempting it directly via python3 ctypes.
+          # Verify add_key is blocked by attempting it directly via python3 ctypes.
           docker run --rm --entrypoint sh \
             --security-opt "seccomp=$seccomp" \
             custom-ssh:ci -c '
               python3 -c "
           import ctypes, sys
           libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
-          # keyctl = syscall 248 on x86_64
+          # add_key = syscall 248 on x86_64
           ctypes.set_errno(0)
           ret = libc.syscall(248, 0, 0, 0, 0)
           if ret == 0:
-              print(\"FAIL: keyctl should be blocked\", file=sys.stderr)
+              print(\"FAIL: add_key should be blocked\", file=sys.stderr)
               sys.exit(1)
-          print(\"PASS: keyctl denied\")
+          print(\"PASS: add_key denied\")
           "
-            ' && echo "seccomp: keyctl correctly denied"
+            ' && echo "seccomp: add_key correctly denied"
+          # Doctor probe parity: the exact _seccomp_enforcement_ok script must exit 0 under the
+          # enforcing profile (EPERM) and exit 1 when seccomp is off. Guards against the probe's
+          # errno mapping inverting again.
+          probe=$(PYTHONPATH=agent/src python3 -c 'from lab_agent.system import SECCOMP_PROBE; print(SECCOMP_PROBE)')
+          docker run --rm --entrypoint python3 \
+            --security-opt "seccomp=$seccomp" \
+            custom-ssh:ci -c "$probe" \
+            || { echo "FAIL: doctor seccomp probe should exit 0 under the enforcing profile"; exit 1; }
+          if docker run --rm --entrypoint python3 \
+            --security-opt seccomp=unconfined \
+            custom-ssh:ci -c "$probe"; then
+            echo "FAIL: doctor seccomp probe should exit 1 without seccomp"; exit 1
+          fi
+          echo "seccomp: doctor probe parity holds"
           # userfaultfd (syscall 323) must be denied.
           docker run --rm --entrypoint sh \
             --security-opt "seccomp=$seccomp" \

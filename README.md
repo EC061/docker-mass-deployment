@@ -8,8 +8,9 @@ daemon-remapped parent namespace locks the inherited mounts that nested bubblewr
 The lab image starts from Ubuntu 24.04 and installs NVIDIA's minimal CUDA 13.3 build packages. It
 includes `nvcc`, the CUDA runtime and headers needed for basic CUDA applications, standard C/C++
 build tooling, Python, and distribution `/usr/bin/bwrap`; it does not install the full CUDA library
-suite, Node.js, npm, or Codex. The outer container uses a dedicated seccomp profile,
-`apparmor=unconfined`, and the three capabilities required by bubblewrap's setuid setup path:
+suite, Node.js, npm, or Codex. The outer container uses a dedicated seccomp profile, the
+`lab-codex` AppArmor profile (whose `lab-codex//lab-codex-bwrap` child keeps setuid bubblewrap
+working), and the three capabilities required by bubblewrap's setuid setup path:
 `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`.
 
 ## Host preparation
@@ -88,10 +89,11 @@ nvcc --version
 
 Doctor executes that exact bwrap smoke test and `nvcc --version` as a provisioned ordinary student.
 Managed labs enforce root ownership and setuid mode (`4755`) on `/usr/bin/bwrap`, and run with
-`--security-opt apparmor=unconfined` plus `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`, which the
-setuid bubblewrap code requires while constructing the nested sandbox. The dedicated seccomp profile
-remains enabled. `host-prepare` and `Repair` re-assert this bwrap mode; capability changes
-require container recreation.
+`--security-opt apparmor=lab-codex` plus `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`, which the
+setuid bubblewrap code requires while constructing the nested sandbox; the profile's
+`lab-codex//lab-codex-bwrap` child grants the sandbox its mounts. The dedicated seccomp profile
+remains enabled. `host-prepare` and `Repair` re-assert this bwrap mode; capability or AppArmor
+changes require container recreation.
 
 Also verify `nvidia-smi`, CUDA compilation, network namespace isolation, and that container root
 cannot modify a host sentinel outside `/home` and `/cold-storage`.

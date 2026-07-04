@@ -143,9 +143,9 @@ def build_run_args(
         args += ["--cap-add", capability]
     args += ["--tmpfs", "/run:rw,nosuid,nodev", "--tmpfs", "/run/lock:rw,nosuid,nodev"]
     args += ["--security-opt", f"seccomp={mounts.seccomp_profile}"]
-    # The setuid-root bubblewrap image contract is paired with an unconfined outer AppArmor policy.
-    # Seccomp remains enabled through the dedicated profile above.
-    args += ["--security-opt", "apparmor=unconfined"]
+    # The lab-codex profile confines the outer container; its lab-codex//lab-codex-bwrap child
+    # (a Px transition on /usr/bin/bwrap) still grants the mounts the setuid sandbox needs.
+    args += ["--security-opt", f"apparmor={mounts.apparmor_profile}"]
     # Docker normally bind-mounts masks/read-only overlays below /proc. Linux then rejects the
     # fresh procfs mount that an unprivileged bubblewrap PID namespace requires because it would
     # be less restrictive than the procfs already visible in the mount namespace. The dedicated
