@@ -11,11 +11,14 @@ idempotently converge student-directory ownership.
 Install and prepare a node:
 
 ```bash
-sudo python3 -m pip install .
-sudo lab-agent install
-sudo lab-agent edit-config
-sudo lab-agent host-prepare
-sudo lab-agent start
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+REPO="git+https://github.com/EC061/docker-mass-deployment.git#subdirectory=agent"
+
+sudo uvx --from "$REPO" lab-agent install
+sudo uvx --from "$REPO" lab-agent edit-config
+sudo uvx --from "$REPO" lab-agent host-prepare
+sudo uvx --from "$REPO" lab-agent start
 ```
 
 After a lab and student have been provisioned, run `sudo lab-agent doctor`. Health is critical if
