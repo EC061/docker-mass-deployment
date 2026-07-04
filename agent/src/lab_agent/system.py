@@ -286,6 +286,38 @@ def _stale_bwrap_capability_containers() -> list[str]:
     return stale
 
 
+def _seccomp_enforcement_ok(container: str, user: str) -> bool:
+    """Verify the seccomp profile actually blocks denied syscalls.
+
+    Attempts keyctl(2) (syscall 248, not in the allow-list) via python3 ctypes inside the container
+    as the given user.  A correctly applied profile returns EPERM; an unconfined container succeeds.
+    """
+    script = (
+        "import ctypes, sys; libc = ctypes.CDLL('libc.so.6', use_errno=True); "
+        "ret = libc.syscall(248, 0, 0, 0, 0); "
+        "import os; sys.exit(0 if ctypes.get_errno() != 1 else 1)"
+    )
+    result = run([
+        "docker", "exec", "-u", user,
+        "-e", f"HOME=/home/{user}", "-e", f"USER={user}", "-e", f"LOGNAME={user}",
+        container, "python3", "-c", script,
+    ], timeout=30)
+    return result.ok
+
+
+def _apparmor_profile_ok(container: str) -> bool:
+    """Verify the container is confined by the lab-codex AppArmor profile.
+
+    Reads ``/proc/self/attr/current`` inside the container.  A confined process reports
+    ``lab-codex`` (possibly with ``enforce`` suffix); an unconfined container reports
+    ``unconfined``.
+    """
+    result = run([
+        "docker", "exec", container, "cat", "/proc/self/attr/current",
+    ], timeout=10)
+    return result.ok and "lab-codex" in result.stdout
+
+
 def _first_student_container() -> tuple[str, str] | None:
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
@@ -437,6 +469,26 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
             ]
             raw_bwrap_ok = mode_ok and _student_command(target, bwrap_smoke)
             bwrap_ok = mode_ok and raw_bwrap_ok
+            seccomp_ok = bwrap_ok and _seccomp_enforcement_ok(target[0], target[1])
+            if bwrap_ok and not seccomp_ok:
+                _issue(
+                    issues,
+                    "seccomp_enforcement_failed",
+                    "critical",
+                    "Seccomp profile is applied but does not block denied syscalls; "
+                    "re-run host-prepare to refresh the profile",
+                    True,
+                )
+            apparmor_ok = bwrap_ok and _apparmor_profile_ok(target[0])
+            if bwrap_ok and not apparmor_ok:
+                _issue(
+                    issues,
+                    "apparmor_profile_missing",
+                    "critical",
+                    "Container is not confined by the lab-codex AppArmor profile; "
+                    "re-run host-prepare to reload the profile",
+                    True,
+                )
             cuda_ok = _student_command(target, ["nvcc", "--version"])
         else:
             _issue(

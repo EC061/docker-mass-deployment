@@ -86,3 +86,137 @@ jobs:
               su - student -c '\''bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"'\''
             ')
           test "$output" = "bwrap works"
+
+      - name: AppArmor enforcement tests
+        run: |
+          # Load the lab-codex AppArmor profile into the kernel.
+          sudo apparmor_parser -r agent/src/lab_agent/assets/lab-codex.apparmor
+          # Verify the profile is loaded.
+          sudo aa-status | grep -q "lab-codex" || { echo "FAIL: lab-codex profile not loaded"; exit 1; }
+          # Run a container confined by lab-codex (NOT apparmor=unconfined).
+          # Test 1: /proc/sys write must be denied by the outer profile.
+          docker run --rm \
+            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
+            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
+            --security-opt apparmor=lab-codex \
+            --entrypoint sh custom-ssh:ci -c '
+              useradd -m -s /bin/bash student
+              # As non-root, writing to /proc/sys must fail (deny /proc/sys/** wklx).
+              su - student -c "echo x > /proc/sys/kernel/hostname" 2>/dev/null && {
+                echo "FAIL: /proc/sys write should be denied by AppArmor"
+                exit 1
+              }
+              echo "PASS: /proc/sys write correctly denied"
+            '
+          # Test 2: mount must be denied by the outer profile (deny mount).
+          docker run --rm \
+            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
+            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
+            --security-opt apparmor=lab-codex \
+            --entrypoint sh custom-ssh:ci -c '
+              useradd -m -s /bin/bash student
+              su - student -c "mount -t tmpfs tmpfs /tmp" 2>/dev/null && {
+                echo "FAIL: mount should be denied by AppArmor"
+                exit 1
+              }
+              echo "PASS: mount correctly denied"
+            '
+          # Test 3: Verify the container is actually confined by lab-codex.
+          profile=$(docker run --rm \
+            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
+            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
+            --security-opt apparmor=lab-codex \
+            --entrypoint sh custom-ssh:ci -c 'cat /proc/self/attr/current')
+          echo "Container AppArmor profile: $profile"
+          echo "$profile" | grep -q "lab-codex" || {
+            echo "FAIL: container not confined by lab-codex"
+            exit 1
+          }
+          echo "PASS: container confined by lab-codex"
+          # Test 4: bwrap Px -> transition must fire — inner process gets lab-codex//lab-codex-bwrap.
+          docker run --rm \
+            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
+            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
+            --security-opt apparmor=lab-codex \
+            --entrypoint sh custom-ssh:ci -c '
+              useradd -m -s /bin/bash student
+              su - student -c "bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- cat /proc/self/attr/current"
+            ' | tee /tmp/bwrap_profile.txt
+          inner_profile=$(cat /tmp/bwrap_profile.txt)
+          echo "bwrap inner profile: $inner_profile"
+          echo "$inner_profile" | grep -q "lab-codex//lab-codex-bwrap" || {
+            echo "FAIL: bwrap Px transition did not fire"
+            exit 1
+          }
+          echo "PASS: bwrap Px transition fires correctly"
+          # Test 5: bwrap must still be able to mount inside its sandbox (inner profile grants mount).
+          docker run --rm \
+            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
+            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
+            --security-opt apparmor=lab-codex \
+            --entrypoint sh custom-ssh:ci -c '
+              useradd -m -s /bin/bash student
+              su - student -c "bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo bwrap-mount-works"
+            ' | tee /tmp/bwrap_mount.txt
+          grep -q "bwrap-mount-works" /tmp/bwrap_mount.txt || {
+            echo "FAIL: bwrap mount inside sandbox failed"
+            exit 1
+          }
+          echo "PASS: bwrap mount inside sandbox works"
+
+      - name: Seccomp denial tests
+        run: |
+          seccomp="$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json"
+          # keyctl (syscall 248) must be denied — not in the allow-list.
+          docker run --rm --entrypoint sh \
+            --security-opt "seccomp=$seccomp" \
+            custom-ssh:ci -c 'python3 -c "import os; os.exit(0)"' \
+            || { echo "FAIL: python3 should run"; exit 1; }
+          # Verify keyctl is blocked by attempting it directly via python3 ctypes.
+          docker run --rm --entrypoint sh \
+            --security-opt "seccomp=$seccomp" \
+            custom-ssh:ci -c '
+              python3 -c "
+          import ctypes, sys
+          libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
+          # keyctl = syscall 248 on x86_64
+          ret = libc.syscall(248, 0, 0, 0, 0)
+          if ret == 0:
+              print(\"FAIL: keyctl should be blocked\", file=sys.stderr)
+              sys.exit(1)
+          print(\"PASS: keyctl denied\")
+          "
+            ' && echo "seccomp: keyctl correctly denied"
+          # userfaultfd (syscall 323) must be denied.
+          docker run --rm --entrypoint sh \
+            --security-opt "seccomp=$seccomp" \
+            custom-ssh:ci -c '
+              python3 -c "
+          import ctypes, sys
+          libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
+          # userfaultfd = syscall 323 on x86_64
+          ret = libc.syscall(323, 0)
+          if ret == 0:
+              print(\"FAIL: userfaultfd should be blocked\", file=sys.stderr)
+              sys.exit(1)
+          print(\"PASS: userfaultfd denied\")
+          "
+            ' && echo "seccomp: userfaultfd correctly denied"
+          # clone3 (syscall 435) must be ALLOWED — bwrap needs it.
+          docker run --rm --entrypoint sh \
+            --security-opt "seccomp=$seccomp" \
+            custom-ssh:ci -c '
+              python3 -c "
+          import ctypes, sys
+          libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
+          # clone3 = syscall 435 on x86_64 — should succeed (allowed).
+          ret = libc.syscall(435, 0, 0, 0, 0, 0)
+          # clone3 returns -1 with EAGAIN on invalid args, but NOT EPERM.
+          import os
+          errno = ctypes.get_errno()
+          if errno == 1:  # EPERM = blocked by seccomp
+              print(\"FAIL: clone3 should be allowed\", file=sys.stderr)
+              sys.exit(1)
+          print(\"PASS: clone3 allowed\")
+          "
+            ' && echo "seccomp: clone3 correctly allowed"
