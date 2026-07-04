@@ -170,7 +170,7 @@ jobs:
           # keyctl (syscall 248) must be denied — not in the allow-list.
           docker run --rm --entrypoint sh \
             --security-opt "seccomp=$seccomp" \
-            custom-ssh:ci -c 'python3 -c "import os; os.exit(0)"' \
+            custom-ssh:ci -c 'python3 -c "import sys; sys.exit(0)"' \
             || { echo "FAIL: python3 should run"; exit 1; }
           # Verify keyctl is blocked by attempting it directly via python3 ctypes.
           docker run --rm --entrypoint sh \
@@ -180,6 +180,7 @@ jobs:
           import ctypes, sys
           libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
           # keyctl = syscall 248 on x86_64
+          ctypes.set_errno(0)
           ret = libc.syscall(248, 0, 0, 0, 0)
           if ret == 0:
               print(\"FAIL: keyctl should be blocked\", file=sys.stderr)
@@ -195,6 +196,7 @@ jobs:
           import ctypes, sys
           libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
           # userfaultfd = syscall 323 on x86_64
+          ctypes.set_errno(0)
           ret = libc.syscall(323, 0)
           if ret == 0:
               print(\"FAIL: userfaultfd should be blocked\", file=sys.stderr)
@@ -210,9 +212,9 @@ jobs:
           import ctypes, sys
           libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
           # clone3 = syscall 435 on x86_64 — should succeed (allowed).
+          ctypes.set_errno(0)
           ret = libc.syscall(435, 0, 0, 0, 0, 0)
           # clone3 returns -1 with EAGAIN on invalid args, but NOT EPERM.
-          import os
           errno = ctypes.get_errno()
           if errno == 1:  # EPERM = blocked by seccomp
               print(\"FAIL: clone3 should be allowed\", file=sys.stderr)
