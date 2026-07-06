@@ -11,10 +11,12 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { SubmitButton } from "@/components/SubmitButton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { EmailReportControl } from "./_components/EmailReportControl";
 import { ScanAutoRefresh } from "./_components/ScanAutoRefresh";
 import {
   createNodeGroupAction,
   deleteNodeGroupAction,
+  emailUsageReportAction,
   refreshAllAction,
   renameNodeGroupAction,
   setNodeGroupMembersAction,
@@ -119,7 +121,10 @@ function LabBlock({ lab }: { lab: LabStats }) {
           <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             Per-student usage · nightly scan
           </div>
-          <ScanControl lab={lab} />
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <EmailReportControl lab={lab} sendAction={emailUsageReportAction} />
+            <ScanControl lab={lab} />
+          </div>
         </div>
         <Table>
           <TableHeader>

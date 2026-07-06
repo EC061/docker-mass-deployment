@@ -4,6 +4,7 @@ import {
   GPU_EMAIL_VARS,
   QUOTA_EMAIL_VARS,
   REMOVAL_EMAIL_VARS,
+  USAGE_REPORT_EMAIL_VARS,
   WELCOME_EMAIL_VARS,
   getSettings,
 } from "@/lib/settings";
@@ -24,6 +25,8 @@ import {
   saveRemovalEmailAction,
   saveTestEmailAction,
   saveUniversalSignatureAction,
+  saveUsageReportPiEmailAction,
+  saveUsageReportStudentEmailAction,
   saveWelcomeEmailAction,
   updateAnnouncementTemplateAction,
 } from "./actions";
@@ -215,6 +218,26 @@ export default async function EmailTemplatesPage({
         body={s.quotaEmailBody}
         vars={QUOTA_EMAIL_VARS}
         bodyRows={12}
+      />
+
+      <EditableTemplate
+        name="Storage usage report — student"
+        trigger="Sent to one student when an admin emails a storage-usage report from the Stats page. Their row in the table is marked “(you)”."
+        action={saveUsageReportStudentEmailAction}
+        subject={s.usageReportStudentSubject}
+        body={s.usageReportStudentBody}
+        vars={USAGE_REPORT_EMAIL_VARS}
+        bodyRows={16}
+      />
+
+      <EditableTemplate
+        name="Storage usage report — PI"
+        trigger="Sent to a lab's PI when an admin emails a whole-roster storage-usage report from the Stats page."
+        action={saveUsageReportPiEmailAction}
+        subject={s.usageReportPiSubject}
+        body={s.usageReportPiBody}
+        vars={USAGE_REPORT_EMAIL_VARS}
+        bodyRows={14}
       />
 
       <EditableTemplate

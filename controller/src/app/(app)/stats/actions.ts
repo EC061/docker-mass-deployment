@@ -2,12 +2,15 @@
 
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
+import { audit } from "@/lib/audit";
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { putFlash } from "@/lib/flash";
+import { sendUsageReportEmail } from "@/lib/mailer";
 import { createNodeGroup, deleteNodeGroup, renameNodeGroup, setNodeGroupMembers } from "@/lib/nodegroups";
 import { listAllPlacements } from "@/lib/placements";
 import { enqueueTask } from "@/lib/queue";
+import { buildUsageReport } from "@/lib/usage-report";
 
 /** Usernames enrolled in a lab, for the usage.scan payload. */
 function labUsernames(labId: number): string[] {
@@ -55,6 +58,73 @@ export async function refreshAllAction() {
     enqueueTask(p.node_name, "usage.scan", { lab: p.lab_name, users: labUsernames(p.lab_id) }, who);
   }
   revalidatePath("/stats");
+}
+
+/**
+ * Result of {@link emailUsageReportAction}, consumed by the (separate) Stats-page UI task.
+ * Exactly one `status` per call:
+ *   - "sent"              — the email was handed to SMTP; `to` is the address it went to.
+ *   - "skipped"           — SMTP is not configured, so nothing was sent; `to` is the intended address.
+ *   - "missing_email"     — the chosen recipient has no email address on file.
+ *   - "unknown_recipient" — the studentId isn't on the lab's roster (or the recipient value was bad).
+ *   - "unknown_placement" — the placement doesn't exist, so no report could be built.
+ *   - "send_failed"       — SMTP was configured but every server failed; `error` carries the reason.
+ */
+export type EmailUsageReportResult =
+  | { status: "sent"; to: string }
+  | { status: "skipped"; to: string }
+  | { status: "missing_email" }
+  | { status: "unknown_recipient" }
+  | { status: "unknown_placement" }
+  | { status: "send_failed"; error: string };
+
+/**
+ * Email a storage-usage report for one placement, asking the recipient to clean up files. The
+ * recipient is either the lab's PI (`recipient="pi"`) or one roster student (`recipient=<studentId>`);
+ * a student gets their own row highlighted "(you)" and is greeted by name (falling back to username),
+ * while the PI is greeted by pi_name (falling back to "Professor").
+ */
+export async function emailUsageReportAction(formData: FormData): Promise<EmailUsageReportResult> {
+  const who = (await requireAdmin()).email;
+  const placementId = Number(formData.get("placementId"));
+  const recipient = String(formData.get("recipient") ?? "");
+  const toPi = recipient === "pi";
+
+  let studentId: number | undefined;
+  if (!toPi) {
+    studentId = Number(recipient);
+    if (!Number.isInteger(studentId) || studentId <= 0) return { status: "unknown_recipient" };
+  }
+
+  const report = buildUsageReport(placementId, { highlightStudentId: studentId });
+  if (!report) return { status: "unknown_placement" };
+
+  let to: string | null;
+  let name: string;
+  if (toPi) {
+    to = report.piEmail;
+    name = report.piName?.trim() || "Professor";
+  } else {
+    const student = report.students.find((s) => s.studentId === studentId);
+    if (!student) return { status: "unknown_recipient" };
+    to = student.email;
+    name = student.name?.trim() || student.username;
+  }
+  if (!to || !to.trim()) return { status: "missing_email" };
+
+  const result = await sendUsageReportEmail(to, toPi ? "pi" : "student", {
+    name,
+    lab: report.labName,
+    node: report.nodeName,
+    report: report.text,
+  });
+  revalidatePath("/stats");
+  if (result.sent) {
+    audit(who, "usage_report.email", `${report.labName}@${report.nodeName}`, `to ${to} (${toPi ? "PI" : "student"})`);
+    return { status: "sent", to };
+  }
+  if (result.skipped) return { status: "skipped", to };
+  return { status: "send_failed", error: result.error ?? "Unknown send error" };
 }
 
 /** Run a node-group mutation, surfacing any error as a flash on the Stats page. */

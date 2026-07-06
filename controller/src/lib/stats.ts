@@ -11,6 +11,7 @@
  */
 
 import { db } from "./db";
+import { getLab } from "./labs";
 import { listAllPlacements } from "./placements";
 import { listMembers } from "./students";
 
@@ -18,6 +19,7 @@ export interface StudentUsage {
   studentId: number;
   username: string;
   name: string | null;
+  email: string | null; // for the per-placement "Email report" recipient picker
   fast: number | null; // persistent home
   cold: number | null; // cold storage
 }
@@ -27,6 +29,8 @@ export interface LabStats {
   placementId: number; // the placement this block represents (scan target)
   labName: string;
   image: string;
+  piName: string | null; // lab PI, for the "Email report" recipient picker
+  piEmail: string | null;
   students: StudentUsage[];
   live: {
     rootfs: number | null; // whole-container writable layer (SizeRw) for the lab container
@@ -50,14 +54,19 @@ export interface NodeStats {
   totalRootfsBytes: number;
 }
 
-interface Cell {
+export interface Cell {
   used: number;
   quota: number | null;
   ts: number;
 }
 
+/** Key into a {@link latestSamples} map: `${placementId}:${studentId | "L"}:${pool}` (L = lab-level). */
+export function sampleKey(placementId: number, student: number | "L", pool: string): string {
+  return `${placementId}:${student}:${pool}`;
+}
+
 /** Latest sample per (placement, student|placement-level, pool), indexed for O(1) lookup. */
-function latestSamples(): Map<string, Cell> {
+export function latestSamples(): Map<string, Cell> {
   const rows = db()
     .prepare(
       `SELECT s.placement_id AS placement_id, s.student_id AS student_id, s.pool AS pool,
@@ -72,7 +81,7 @@ function latestSamples(): Map<string, Cell> {
     .all() as { placement_id: number; student_id: number | null; pool: string; used: number; quota: number | null; ts: number }[];
   const map = new Map<string, Cell>();
   for (const r of rows) {
-    map.set(`${r.placement_id}:${r.student_id ?? "L"}:${r.pool}`, { used: r.used, quota: r.quota, ts: r.ts });
+    map.set(sampleKey(r.placement_id, r.student_id ?? "L", r.pool), { used: r.used, quota: r.quota, ts: r.ts });
   }
   return map;
 }
@@ -117,9 +126,9 @@ function isScanPending(
 export function buildStats(): NodeStats[] {
   const samples = latestSamples();
   const used = (pid: number, sid: number | "L", pool: string): number | null =>
-    samples.get(`${pid}:${sid}:${pool}`)?.used ?? null;
+    samples.get(sampleKey(pid, sid, pool))?.used ?? null;
   const cell = (pid: number, pool: string) => {
-    const c = samples.get(`${pid}:L:${pool}`);
+    const c = samples.get(sampleKey(pid, "L", pool));
     return { used: c?.used ?? null, quota: c?.quota ?? null };
   };
 
@@ -127,12 +136,20 @@ export function buildStats(): NodeStats[] {
   const now = Date.now();
   const byNode = new Map<string, NodeStats>();
 
+  // A lab can have several placements; cache its PI lookup so we hit the labs table once per lab.
+  const labCache = new Map<number, ReturnType<typeof getLab>>();
+  const labOf = (labId: number) => {
+    if (!labCache.has(labId)) labCache.set(labId, getLab(labId));
+    return labCache.get(labId);
+  };
+
   for (const p of listAllPlacements()) {
     const members = listMembers(p.lab_id);
     const students: StudentUsage[] = members.map((m) => ({
       studentId: m.id,
       username: m.username,
       name: m.name ?? null,
+      email: m.email ?? null,
       fast: used(p.id, m.id, "fast"),
       cold: used(p.id, m.id, "cold"),
     }));
@@ -140,15 +157,18 @@ export function buildStats(): NodeStats[] {
 
     const usageScannedAt = p.usage_scanned_at ?? null;
     const liveTs = (["rootfs", "fast", "cold"] as const)
-      .map((pool) => samples.get(`${p.id}:L:${pool}`)?.ts)
+      .map((pool) => samples.get(sampleKey(p.id, "L", pool))?.ts)
       .filter((t): t is number => typeof t === "number");
     const liveUpdatedAt = liveTs.length ? Math.max(...liveTs) : null;
 
+    const lab = labOf(p.lab_id);
     const labStats: LabStats = {
       labId: p.lab_id,
       placementId: p.id,
       labName: p.lab_name,
       image: p.image,
+      piName: lab?.pi_name ?? null,
+      piEmail: lab?.pi_email ?? null,
       students,
       live: {
         rootfs: cell(p.id, "rootfs").used,

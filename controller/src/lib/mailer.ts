@@ -17,6 +17,10 @@ import {
   DEFAULT_REMOVAL_SUBJECT,
   DEFAULT_TEST_BODY,
   DEFAULT_TEST_SUBJECT,
+  DEFAULT_USAGE_REPORT_PI_BODY,
+  DEFAULT_USAGE_REPORT_PI_SUBJECT,
+  DEFAULT_USAGE_REPORT_STUDENT_BODY,
+  DEFAULT_USAGE_REPORT_STUDENT_SUBJECT,
   DEFAULT_WELCOME_BODY,
   DEFAULT_WELCOME_SUBJECT,
   REMOVAL_DATA_DELETED,
@@ -189,6 +193,41 @@ export function renderQuotaEmail(info: Omit<QuotaEmail, "to">): { subject: strin
 export async function sendQuotaEmail(info: QuotaEmail): Promise<SendResult> {
   const { subject, body } = renderQuotaEmail(info);
   return sendMail(info.to, subject, body);
+}
+
+export type UsageReportKind = "student" | "pi";
+
+export interface UsageReportEmailVars {
+  name: string; // recipient's greeting name (student name/username, or PI name)
+  lab: string;
+  node: string;
+  report: string; // the plain-text usage table (see lib/usage-report.ts)
+}
+
+/** Render an admin-triggered storage-usage-report email from the admin-editable template (or its
+ * default), picking the student-facing or PI-facing template by `kind`. */
+export function renderUsageReportEmail(
+  kind: UsageReportKind,
+  vars: UsageReportEmailVars,
+): { subject: string; body: string } {
+  const isPi = kind === "pi";
+  const subject =
+    getSetting(isPi ? "usageReportPiSubject" : "usageReportStudentSubject").trim() ||
+    (isPi ? DEFAULT_USAGE_REPORT_PI_SUBJECT : DEFAULT_USAGE_REPORT_STUDENT_SUBJECT);
+  const body =
+    getSetting(isPi ? "usageReportPiBody" : "usageReportStudentBody").trim() ||
+    (isPi ? DEFAULT_USAGE_REPORT_PI_BODY : DEFAULT_USAGE_REPORT_STUDENT_BODY);
+  const subs: Record<string, string> = { name: vars.name, lab: vars.lab, node: vars.node, report: vars.report };
+  return { subject: renderTemplate(subject, subs), body: renderTemplate(body, subs) };
+}
+
+export async function sendUsageReportEmail(
+  to: string,
+  kind: UsageReportKind,
+  vars: UsageReportEmailVars,
+): Promise<SendResult> {
+  const { subject, body } = renderUsageReportEmail(kind, vars);
+  return sendMail(to, subject, body);
 }
 
 /** Build the {placeholder} substitution map for the welcome email from a credential payload. */

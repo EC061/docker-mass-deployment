@@ -78,6 +78,14 @@ export interface Settings {
   // {placeholder} substitution (see QUOTA_EMAIL_VARS / renderQuotaEmail in lib/mailer.ts).
   quotaEmailSubject: string;
   quotaEmailBody: string;
+  // Admin-triggered "please review your storage usage" emails, sent from the Stats page to a lab's
+  // PI (whole-roster report) or one student (their row highlighted). Both support {placeholder}
+  // substitution (see USAGE_REPORT_EMAIL_VARS / renderUsageReportEmail in lib/mailer.ts). Empty
+  // falls back to the built-in default.
+  usageReportStudentSubject: string;
+  usageReportStudentBody: string;
+  usageReportPiSubject: string;
+  usageReportPiBody: string;
   // The "Send test" email under Settings → Email. No variables. Empty falls back to the default.
   testEmailSubject: string;
   testEmailBody: string;
@@ -213,6 +221,38 @@ Per-student usage on the {pool} pool:
 
 You may want to ask students to clean up unneeded data, or request a larger quota.`;
 
+/** Placeholders the storage-usage-report emails understand, shown to the admin in the Templates UI. */
+export const USAGE_REPORT_EMAIL_VARS: { key: string; desc: string }[] = [
+  { key: "name", desc: "recipient's name (student name/username, or PI name)" },
+  { key: "lab", desc: "lab name" },
+  { key: "node", desc: "node name the lab runs on" },
+  { key: "report", desc: "the plain-text storage-usage table" },
+];
+
+export const DEFAULT_USAGE_REPORT_STUDENT_SUBJECT = "[{lab}] Please review your storage usage on {node}";
+
+export const DEFAULT_USAGE_REPORT_STUDENT_BODY = `Hi {name},
+
+Your lab '{lab}' on node {node} is using a significant amount of storage. Please take a few minutes to review your files and remove anything you no longer need — old datasets, model checkpoints, caches, and build artifacts are the usual suspects.
+
+Current usage (your row is marked "(you)"):
+
+{report}
+
+HOME (fast) is your home directory on the fast pool; COLD (slow) is /cold-storage. You can check live usage anytime by running \`labquota\` inside the lab container.
+
+Thank you for helping keep the lab within its quota.`;
+
+export const DEFAULT_USAGE_REPORT_PI_SUBJECT = "[{lab}] Lab storage usage report — {node}";
+
+export const DEFAULT_USAGE_REPORT_PI_BODY = `Hi {name},
+
+Here is the current storage usage report for your lab '{lab}' on node {node}. Please ask your group to clean up files they no longer need — old datasets, model checkpoints, caches, and build artifacts are the usual suspects.
+
+{report}
+
+Per-student numbers come from the most recent nightly scan; lab totals are live. Students can check their own usage anytime by running \`labquota\` inside the lab container.`;
+
 export const DEFAULT_TEST_SUBJECT = "Lab Manager test email";
 
 export const DEFAULT_TEST_BODY =
@@ -257,6 +297,10 @@ export const DEFAULT_SETTINGS: Settings = {
   removalEmailBody: DEFAULT_REMOVAL_BODY,
   quotaEmailSubject: DEFAULT_QUOTA_SUBJECT,
   quotaEmailBody: DEFAULT_QUOTA_BODY,
+  usageReportStudentSubject: DEFAULT_USAGE_REPORT_STUDENT_SUBJECT,
+  usageReportStudentBody: DEFAULT_USAGE_REPORT_STUDENT_BODY,
+  usageReportPiSubject: DEFAULT_USAGE_REPORT_PI_SUBJECT,
+  usageReportPiBody: DEFAULT_USAGE_REPORT_PI_BODY,
   testEmailSubject: DEFAULT_TEST_SUBJECT,
   testEmailBody: DEFAULT_TEST_BODY,
   alertsEnabled: true,
