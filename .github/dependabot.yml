@@ -60,9 +60,11 @@ updates:
     schedule:
       interval: weekly
     # The lab image base (ubuntu) is deliberately pinned to the 24.04 LTS line;
-    # test_image_contract asserts ubuntu:24.04@sha256:. Do not offer major LTS
-    # bumps (e.g. 26.04) — they break the pinned-base contract. Digest/patch
-    # updates within 24.04 are still allowed.
+    # test_image_contract asserts ubuntu:24.04@sha256:. Ubuntu tags are CalVer
+    # (YY.MM), so a non-LTS release bump like 24.04 -> 24.10 is classified by
+    # Dependabot as semver-minor, not semver-major — ignore both to keep any
+    # LTS or interim release bump from breaking the pinned-base contract.
+    # Digest/patch updates within 24.04 are still allowed.
     ignore:
       - dependency-name: "ubuntu"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
