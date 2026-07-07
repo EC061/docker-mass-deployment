@@ -14,6 +14,36 @@ Change the temporary password immediately after your first login:
 passwd
 ```
 
+### Set up SSH key authentication
+
+Once you've changed your password, set up an SSH key so you don't have to type a password every
+time you connect. Generate a key pair on your own machine first if you don't already have one:
+
+```bash
+ssh-keygen -t ed25519
+```
+
+**macOS or Linux:** copy your public key to the lab with `ssh-copy-id`:
+
+```bash
+ssh-copy-id -p <port> <username>@<host>
+```
+
+**Windows:** `ssh-copy-id` is not available by default, so copy the key manually. Print your public
+key locally:
+
+```powershell
+type $env:USERPROFILE\.ssh\id_ed25519.pub
+```
+
+Then log in to the lab (`ssh <username>@<host> -p <port>`) and append it to your authorized keys:
+
+```bash
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+echo "<paste your public key here>" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
 Your home directory is private to your account. Do not share your password or store credentials in
 world-readable files.
 
