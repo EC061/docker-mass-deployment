@@ -2,7 +2,7 @@
 # image installs NVIDIA's minimal CUDA build package rather than inheriting the much larger devel
 # image. Students retain password-authenticated sudo. Bubblewrap is setuid-root.
 
-FROM ubuntu:24.04@sha256:786a8b558f7be160c6c8c4a54f9a57274f3b4fb1491cf65146521ae77ff1dc54
+FROM ubuntu:24.10@sha256:cdf755952ed117f6126ff4e65810bf93767d4c38f5c7185b50ec1f1078b464cc
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
