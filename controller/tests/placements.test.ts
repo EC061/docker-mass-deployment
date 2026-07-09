@@ -337,6 +337,17 @@ describe("SMB placement rules + shared student removal", () => {
     placements.confirmPlacementDestroyed("smblab4", "smb-1");
     expect(() => placements.destroyPlacement(owner.id, "admin")).not.toThrow();
   });
+
+  it("lets the owner tear down once its clients are already deleting (destroyLab ordering)", async () => {
+    const lab = newLab("smblab5");
+    const owner = await grant(lab.id, ownerId);
+    placements.markPlacementState(owner.id, "active");
+    const client = await grant(lab.id, clientId);
+    // Client marked deleting but not yet confirmed by its node — the owner must not be blocked,
+    // or destroyLab could never queue the owner teardown in the same pass.
+    placements.destroyPlacement(client.id, "admin");
+    expect(() => placements.destroyPlacement(owner.id, "admin")).not.toThrow();
+  });
 });
 
 describe("container config validation", () => {
@@ -370,5 +381,48 @@ describe("destroyPlacement keeps the row until the agent confirms", () => {
     expect(enqueueTask).toHaveBeenCalledWith("node-a", "lab.destroy", { lab: "teardown" }, "admin");
     placements.confirmPlacementDestroyed("teardown", "node-a");
     expect(placements.getPlacement(p.id)).toBeUndefined();
+  });
+});
+
+describe("forceDeletePlacement", () => {
+  const setOnline = (name: string, online: number) =>
+    dbmod.db().prepare("UPDATE nodes SET online = ? WHERE name = ?").run(online, name);
+
+  it("refuses while the node is online", async () => {
+    const lab = newLab("force1");
+    const p = await grant(lab.id, nodeA);
+    expect(() => placements.forceDeletePlacement(p.id, "admin")).toThrow(/online/);
+    expect(placements.getPlacement(p.id)).toBeDefined();
+  });
+
+  it("drops the row immediately for an offline node and queues best-effort cleanup", async () => {
+    const lab = newLab("force2");
+    const p = await grant(lab.id, nodeA);
+    setOnline("node-a", 0);
+    enqueueTask.mockClear();
+    placements.forceDeletePlacement(p.id, "admin");
+    expect(placements.getPlacement(p.id)).toBeUndefined();
+    // Cleanup is still queued so the orphaned container/datasets go away if the node reconnects.
+    expect(enqueueTask).toHaveBeenCalledWith("node-a", "lab.destroy", { lab: "force2" }, "admin");
+    expect(
+      dbmod.db().prepare("SELECT 1 FROM audit_log WHERE action='placement.force_delete' AND target='force2@node-a'").get(),
+    ).toBeTruthy();
+    setOnline("node-a", 1);
+  });
+
+  it("keeps the SMB-owner guard: the offline clients must be force-removed first", async () => {
+    const d = dbmod.db();
+    const ownId = (d.prepare("SELECT id FROM nodes WHERE name='own-1'").get() as any).id;
+    const cliId = (d.prepare("SELECT id FROM nodes WHERE name='smb-1'").get() as any).id;
+    const lab = newLab("force3");
+    const owner = await grant(lab.id, ownId);
+    placements.markPlacementState(owner.id, "active");
+    const client = await grant(lab.id, cliId);
+    d.prepare("UPDATE nodes SET online = 0 WHERE name IN ('own-1','smb-1')").run();
+    expect(() => placements.forceDeletePlacement(owner.id, "admin")).toThrow(/owns the shared cold storage/);
+    placements.forceDeletePlacement(client.id, "admin");
+    expect(() => placements.forceDeletePlacement(owner.id, "admin")).not.toThrow();
+    expect(placements.getPlacement(owner.id)).toBeUndefined();
+    d.prepare("UPDATE nodes SET online = 1 WHERE name IN ('own-1','smb-1')").run();
   });
 });

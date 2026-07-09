@@ -682,24 +682,51 @@ export function retryPlacement(placementId: number, actor?: string): void {
 export function destroyPlacement(placementId: number, actor?: string): void {
   const p = getPlacement(placementId);
   if (!p) return;
-  // An owner (local-ZFS) placement holds the shared cold data for this lab's SMB clients — its
-  // teardown would pull the rug out from under them, so block it until those clients are gone.
-  if (p.node_cold_backend === "local_zfs") {
-    const dependents = db()
-      .prepare(
-        `SELECT n.name FROM lab_placements lp JOIN nodes n ON n.id = lp.node_id
-         WHERE lp.lab_id = ? AND n.cold_owner_node_id = ?`,
-      )
-      .all(p.lab_id, p.node_id) as { name: string }[];
-    if (dependents.length > 0) {
-      throw new Error(
-        `'${p.lab_name}' on '${p.node_name}' owns the shared cold storage for SMB client(s): ${dependents.map((d) => d.name).join(", ")} — remove those placements first`,
-      );
-    }
-  }
+  assertNoSmbDependents(p);
   db().prepare("UPDATE lab_placements SET state = 'deleting', updated_at = ? WHERE id = ?").run(Date.now(), placementId);
   enqueueTask(p.node_name, "lab.destroy", { lab: p.lab_name }, actor);
   audit(actor, "placement.destroy", `${p.lab_name}@${p.node_name}`);
+}
+
+/**
+ * An owner (local-ZFS) placement holds the shared cold data for this lab's SMB clients — its
+ * teardown would pull the rug out from under them, so block it until those clients are gone.
+ * Clients already in `deleting` don't block: they have been told to tear down (destroyLab queues
+ * them before their owner) and their mount is going away either way.
+ */
+function assertNoSmbDependents(p: Placement): void {
+  if (p.node_cold_backend !== "local_zfs") return;
+  const dependents = db()
+    .prepare(
+      `SELECT n.name FROM lab_placements lp JOIN nodes n ON n.id = lp.node_id
+       WHERE lp.lab_id = ? AND n.cold_owner_node_id = ? AND lp.state <> 'deleting'`,
+    )
+    .all(p.lab_id, p.node_id) as { name: string }[];
+  if (dependents.length > 0) {
+    throw new Error(
+      `'${p.lab_name}' on '${p.node_name}' owns the shared cold storage for SMB client(s): ${dependents.map((d) => d.name).join(", ")} — remove those placements first`,
+    );
+  }
+}
+
+/**
+ * Force-remove a placement whose node is offline: delete the row right away (cascading members,
+ * samples, and alerts) instead of waiting for an agent confirmation that can never arrive. A
+ * lab.destroy is still queued as best effort, so if the node ever reconnects the orphaned container
+ * and datasets get cleaned up; if it never does, the queued task is harmless.
+ */
+export function forceDeletePlacement(placementId: number, actor?: string): void {
+  const p = getPlacement(placementId);
+  if (!p) return;
+  if (p.online) {
+    throw new Error(
+      `node '${p.node_name}' is online — use the normal remove so its container and data are torn down cleanly`,
+    );
+  }
+  assertNoSmbDependents(p);
+  enqueueTask(p.node_name, "lab.destroy", { lab: p.lab_name }, actor);
+  db().prepare("DELETE FROM lab_placements WHERE id = ?").run(placementId);
+  audit(actor, "placement.force_delete", `${p.lab_name}@${p.node_name}`);
 }
 
 /** Set a placement's lifecycle state (+ optional error) by id. */

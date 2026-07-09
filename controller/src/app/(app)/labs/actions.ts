@@ -11,6 +11,7 @@ import {
   consumePlacementCredential,
   createPlacement,
   destroyPlacement,
+  forceDeletePlacement,
   getPlacement,
   nextSshPortForNode,
   recreatePlacement,
@@ -105,13 +106,22 @@ export async function updateLabMetaAction(formData: FormData) {
 export async function destroyLabAction(formData: FormData) {
   const who = await actor();
   const labId = Number(formData.get("labId"));
-  const res = destroyLab(labId, who);
+  // "force" purges placements stuck on offline nodes instead of waiting for a confirmation that
+  // can never arrive; placements on online nodes still get a normal teardown.
+  const force = formData.get("force") === "1";
+  let res;
+  try {
+    res = destroyLab(labId, who, force);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not delete lab");
+    redirect(`/labs/${labId}?error=${fid}`);
+  }
   revalidatePath("/labs");
   revalidatePath("/students");
-  if (res.deleted) redirect("/labs");
+  if (res!.deleted) redirect("/labs");
   // Placements are tearing down; the lab is kept until each node confirms. Stay on the detail page.
   const fid = putFlash(
-    `Tearing down ${res.teardownStarted} placement(s). The lab is removed once every node confirms; delete again then.`,
+    `Tearing down ${res!.teardownStarted} placement(s). The lab is removed once every node confirms; delete again then.`,
   );
   redirect(`/labs/${labId}?saved=${fid}`);
 }
@@ -250,12 +260,16 @@ export async function revealPlacementCredentialAction(formData: FormData) {
 export async function removePlacementAction(formData: FormData) {
   const who = await actor();
   const placementId = Number(formData.get("placementId"));
+  // "force" drops the placement record immediately instead of waiting for the (offline) node to
+  // confirm teardown; forceDeletePlacement refuses it while the node is online.
+  const force = formData.get("force") === "1";
   const placement = getPlacement(placementId);
   // Already gone (e.g. the node confirmed teardown while the page was open): land on the labs list
   // instead of re-rendering a placement page that no longer exists.
   if (!placement) redirect("/labs");
   try {
-    destroyPlacement(placementId, who);
+    if (force) forceDeletePlacement(placementId, who);
+    else destroyPlacement(placementId, who);
   } catch (e) {
     const fid = putFlash(e instanceof Error ? e.message : "Could not remove placement");
     redirect(`/labs/${placement!.lab_id}/placements/${placementId}?error=${fid}`);
@@ -264,7 +278,11 @@ export async function removePlacementAction(formData: FormData) {
   revalidatePath(`/labs/${placement.lab_id}/placements/${placement.id}`);
   // Don't send the user back to the placement's own page: the row (and that page) disappears
   // as soon as the node confirms teardown, which can race the redirect.
-  const fid = putFlash("Removal queued. The placement remains visible on the lab page until the node confirms destruction.");
+  const fid = putFlash(
+    force
+      ? "Placement force-removed from the controller. If the node ever reconnects, its leftover container and data are cleaned up then."
+      : "Removal queued. The placement remains visible on the lab page until the node confirms destruction.",
+  );
   redirect(`/labs/${placement.lab_id}?saved=${fid}`);
 }
 

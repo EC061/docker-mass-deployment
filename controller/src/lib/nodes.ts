@@ -133,16 +133,24 @@ export function revokeNode(name: string, actor: string): void {
  * Permanently delete a node from the DB. Refuses while any lab placement still lives on it (its
  * storage is on that machine — remove the placements first). Also clears the node's queued tasks and
  * live GPU snapshot so a later same-named node starts clean; historical logs/events are kept.
+ *
+ * `force` is for a node that is offline and not coming back (dead hardware, decommissioned): it
+ * purges the node's placements from the controller (nothing on the machine can be cleaned up) and
+ * detaches any SMB client that used it as cold-storage owner (they show "no owner" until reassigned).
+ * Refused while the node is online — a live node can tear its placements down normally.
  */
-export function deleteNode(name: string, actor: string): void {
-  const row = db().prepare("SELECT id FROM nodes WHERE name = ?").get(name) as
-    | { id: number }
+export function deleteNode(name: string, actor: string, force = false): void {
+  const row = db().prepare("SELECT id, online FROM nodes WHERE name = ?").get(name) as
+    | { id: number; online: number }
     | undefined;
   if (!row) throw new Error(`unknown node '${name}'`);
+  if (force && row.online === 1) {
+    throw new Error(`node '${name}' is online — remove its placements normally instead of force-deleting`);
+  }
   const { n: placementCount } = db()
     .prepare("SELECT COUNT(*) AS n FROM lab_placements WHERE node_id = ?")
     .get(row.id) as { n: number };
-  if (placementCount > 0) {
+  if (!force && placementCount > 0) {
     throw new Error(
       `node '${name}' still hosts ${placementCount} lab placement(s); remove them before deleting the node`,
     );
@@ -151,17 +159,29 @@ export function deleteNode(name: string, actor: string): void {
   const dependents = db()
     .prepare("SELECT name FROM nodes WHERE cold_owner_node_id = ?")
     .all(row.id) as { name: string }[];
-  if (dependents.length > 0) {
+  if (!force && dependents.length > 0) {
     throw new Error(
       `node '${name}' is the cold-storage owner for: ${dependents.map((d) => d.name).join(", ")}; reassign them first`,
     );
   }
   db().transaction(() => {
+    if (force) {
+      // Cascades placement_members / storage_samples / quota_alerts. Must go before the node row:
+      // lab_placements.node_id has no ON DELETE action.
+      db().prepare("DELETE FROM lab_placements WHERE node_id = ?").run(row.id);
+      db().prepare("UPDATE nodes SET cold_owner_node_id = NULL, cold_ready = 0 WHERE cold_owner_node_id = ?").run(row.id);
+    }
     db().prepare("DELETE FROM task_log WHERE node = ?").run(name);
     db().prepare("DELETE FROM gpu_snapshot WHERE node = ?").run(name);
     db().prepare("DELETE FROM nodes WHERE id = ?").run(row.id);
   })();
-  audit(actor, "node.delete", name);
+  const detail = force
+    ? [
+        placementCount > 0 ? `${placementCount} placement(s) purged` : null,
+        dependents.length > 0 ? `cold owner cleared on: ${dependents.map((d) => d.name).join(", ")}` : null,
+      ].filter(Boolean).join("; ") || undefined
+    : undefined;
+  audit(actor, force ? "node.force_delete" : "node.delete", name, detail);
 }
 
 export interface NodeColdInfo {

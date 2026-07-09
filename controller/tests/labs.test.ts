@@ -155,4 +155,29 @@ describe("destroyLab", () => {
   it("is a no-op for an unknown lab", () => {
     expect(labs.destroyLab(999999)).toEqual({ deleted: false, teardownStarted: 0 });
   });
+
+  it("force: purges placements on offline nodes and deletes the lab in the same call", async () => {
+    const lab = makeLab("ghost");
+    const placement = await makePlacement(lab.id);
+    dbmod.db().prepare("UPDATE nodes SET online = 0 WHERE name='gpu-1'").run();
+
+    // Without force the lab waits forever on the offline node's confirmation.
+    expect(labs.destroyLab(lab.id, "admin")).toEqual({ deleted: false, teardownStarted: 1 });
+
+    const res = labs.destroyLab(lab.id, "admin", true);
+    expect(res).toEqual({ deleted: true, teardownStarted: 0 });
+    expect(labs.getLab(lab.id)).toBeUndefined();
+    expect(placements.getPlacement(placement.id)).toBeUndefined();
+    dbmod.db().prepare("UPDATE nodes SET online = 1 WHERE name='gpu-1'").run();
+  });
+
+  it("force: placements on online nodes still get a normal, confirmed teardown", async () => {
+    const lab = makeLab("mixed");
+    const placement = await makePlacement(lab.id);
+
+    const res = labs.destroyLab(lab.id, "admin", true);
+    expect(res).toEqual({ deleted: false, teardownStarted: 1 });
+    expect(labs.getLab(lab.id)).toBeTruthy();
+    expect(placements.getPlacement(placement.id)!.state).toBe("deleting");
+  });
 });

@@ -362,6 +362,21 @@ export default async function NodesPage({
                               Delete
                             </ConfirmButton>
                           </form>
+                          {!n.online && (
+                            <form action={deleteNodeAction}>
+                              <input type="hidden" name="name" value={n.name} />
+                              <input type="hidden" name="force" value="1" />
+                              <ConfirmButton
+                                variant="destructive"
+                                size="sm"
+                                title={`Force delete ${n.name}?`}
+                                confirm={`"${n.name}" is offline, so nothing on the machine can be cleaned up. Force-deleting immediately removes the node${n.placements > 0 ? ` and its ${n.placements} lab placement(s)` : ""} from the controller; containers and lab data on the machine are left behind${n.client_nodes ? `, and its SMB clients (${n.client_nodes}) lose their cold-storage owner` : ""}. Only use this when the node is not coming back.`}
+                                confirmLabel="Force delete node"
+                              >
+                                Force delete
+                              </ConfirmButton>
+                            </form>
+                          )}
                         </div>
                       </TableCell>
                     </TableRow>

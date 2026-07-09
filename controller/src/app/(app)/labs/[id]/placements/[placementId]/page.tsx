@@ -318,6 +318,20 @@ export default async function PlacementPage({
               {placement.state === "deleting" ? "Removal queued" : "Remove access"}
             </ConfirmButton>
           </form>
+          {!placement.online && (
+            <form action={removePlacementAction}>
+              <input type="hidden" name="placementId" value={placement.id} />
+              <input type="hidden" name="force" value="1" />
+              <ConfirmButton
+                variant="destructive"
+                title={`Force remove ${placement.lab_name} from ${placement.node_name}?`}
+                confirmLabel="Force remove"
+                confirm={`"${placement.node_name}" is offline, so it cannot confirm teardown. Force-removing deletes this placement from the controller immediately — the container and lab data on the machine are left behind and only cleaned up if the node ever reconnects. Use this when the node is not coming back.`}
+              >
+                Force remove
+              </ConfirmButton>
+            </form>
+          )}
         </CardContent>
       </Card>
     </div>

@@ -82,6 +82,7 @@ export default async function LabDetail({
 
   const members = listMembers(labId);
   const placements = listPlacements(labId);
+  const offlinePlacements = placements.filter((p) => !p.online);
   const placedNodeIds = new Set(placements.map((p) => p.node_id));
   // Candidate nodes for "grant access", with cold-storage readiness: an SMB client is only ready when
   // its owner already hosts this lab (active) and its mount is live.
@@ -292,8 +293,24 @@ export default async function LabDetail({
               Delete lab
             </ConfirmButton>
           </form>
+          {offlinePlacements.length > 0 && (
+            <form action={destroyLabAction}>
+              <input type="hidden" name="labId" value={lab.id} />
+              <input type="hidden" name="force" value="1" />
+              <ConfirmButton
+                variant="destructive"
+                title={`Force delete ${lab.name}?`}
+                confirmLabel="Force delete lab"
+                confirm={`Node(s) ${offlinePlacements.map((p) => p.node_name).join(", ")} are offline and cannot confirm teardown. Force-deleting removes those placement(s) from the controller immediately — containers and lab data on the offline machine(s) are only cleaned up if they ever reconnect. Placements on online nodes are torn down normally, and the lab is removed once they confirm.`}
+              >
+                Force delete lab
+              </ConfirmButton>
+            </form>
+          )}
           <p className="text-xs text-muted-foreground">
             Deleting tears down every placement first; storage on each node is destroyed with it.
+            {offlinePlacements.length > 0 &&
+              " Force delete skips waiting on the offline node(s) — use it when they are not coming back."}
           </p>
         </CardContent>
       </Card>

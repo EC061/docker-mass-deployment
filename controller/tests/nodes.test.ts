@@ -171,3 +171,38 @@ describe("cold storage (Phase 3)", () => {
     expect(() => nodes.deleteNode("cold-owner", "a@x.edu")).toThrow(/cold-storage owner/);
   });
 });
+
+describe("deleteNode force", () => {
+  it("refuses to force-delete a node that is online", () => {
+    nodes.provisionNode("force-online", "a@x.edu");
+    dbmod.db().prepare("UPDATE nodes SET online = 1 WHERE name='force-online'").run();
+    expect(() => nodes.deleteNode("force-online", "a@x.edu", true)).toThrow(/online/);
+    expect(dbmod.db().prepare("SELECT 1 FROM nodes WHERE name='force-online'").get()).toBeTruthy();
+  });
+
+  it("purges an offline node's placements and detaches its SMB clients", () => {
+    const d = dbmod.db();
+    nodes.provisionNode("force-dead", "a@x.edu"); // provisioned nodes start offline
+    const nid = (d.prepare("SELECT id FROM nodes WHERE name='force-dead'").get() as any).id;
+    d.prepare("INSERT INTO labs (name, created_at, updated_at) VALUES ('force-lab', 0, 0)").run();
+    const lid = (d.prepare("SELECT id FROM labs WHERE name='force-lab'").get() as any).id;
+    d.prepare(
+      "INSERT INTO lab_placements (lab_id, node_id, fast_quota_bytes, cold_quota_bytes, ssh_port, image, state, created_at, updated_at) VALUES (?, ?, 1, 1, 42000, 'i', 'active', 0, 0)",
+    ).run(lid, nid);
+    const pid = (d.prepare("SELECT id FROM lab_placements WHERE node_id = ?").get(nid) as any).id;
+    nodes.provisionNode("force-smb", "a@x.edu");
+    d.prepare("UPDATE nodes SET cold_backend='smb', cold_owner_node_id=?, cold_ready=1 WHERE name='force-smb'").run(nid);
+
+    // The normal delete still refuses; force removes node + placements and orphans the SMB client.
+    expect(() => nodes.deleteNode("force-dead", "a@x.edu")).toThrow(/still hosts/);
+    nodes.deleteNode("force-dead", "a@x.edu", true);
+    expect(d.prepare("SELECT 1 FROM nodes WHERE name='force-dead'").get()).toBeUndefined();
+    expect(d.prepare("SELECT 1 FROM lab_placements WHERE id = ?").get(pid)).toBeUndefined();
+    const client = d.prepare("SELECT cold_owner_node_id, cold_ready FROM nodes WHERE name='force-smb'").get() as any;
+    expect(client.cold_owner_node_id).toBeNull();
+    expect(client.cold_ready).toBe(0);
+    // The logical lab survives — it can be deleted (or re-placed) separately.
+    expect(d.prepare("SELECT 1 FROM labs WHERE id = ?").get(lid)).toBeTruthy();
+    expect(d.prepare("SELECT 1 FROM audit_log WHERE action='node.force_delete' AND target='force-dead'").get()).toBeTruthy();
+  });
+});

@@ -80,11 +80,14 @@ export async function setNodeColdStorageAction(formData: FormData) {
 export async function deleteNodeAction(formData: FormData) {
   const admin = await requireAdmin();
   const name = String(formData.get("name") ?? "").trim().toLowerCase();
+  // "force" purges an OFFLINE node's placements from the controller instead of refusing; the UI only
+  // offers it when the node is offline, and deleteNode re-checks that server-side.
+  const force = formData.get("force") === "1";
   // deleteNode throws if labs are still pinned to the node; surface that as an error banner.
   // (redirect() throws NEXT_REDIRECT internally, so it must be called OUTSIDE the try/catch.)
   let error: string | null = null;
   try {
-    deleteNode(name, admin.email);
+    deleteNode(name, admin.email, force);
   } catch (e) {
     error = e instanceof Error ? e.message : "could not delete node";
   }

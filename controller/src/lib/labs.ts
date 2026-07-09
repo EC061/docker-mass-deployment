@@ -5,7 +5,7 @@
 
 import { audit } from "./audit";
 import { db } from "./db";
-import { destroyPlacement, listPlacements } from "./placements";
+import { destroyPlacement, forceDeletePlacement, listPlacements } from "./placements";
 
 export { audit } from "./audit"; // re-exported for back-compat with existing importers
 
@@ -122,8 +122,12 @@ export interface DestroyLabResult {
  * kept in `deleting` until their node confirms — see confirmPlacementDestroyed) and the lab row is
  * preserved; call again once teardown completes. With no placements left, the lab and its roster are
  * removed and any now-membership-less student is dropped.
+ *
+ * `force` unblocks a lab stuck behind offline nodes: placements on offline nodes are purged from the
+ * controller immediately (see forceDeletePlacement) while online nodes still get a normal teardown.
+ * If every placement was purged, the lab row is removed in the same call.
  */
-export function destroyLab(labId: number, actor?: string): DestroyLabResult {
+export function destroyLab(labId: number, actor?: string, force = false): DestroyLabResult {
   const lab = getLab(labId);
   if (!lab) return { deleted: false, teardownStarted: 0 };
 
@@ -132,10 +136,18 @@ export function destroyLab(labId: number, actor?: string): DestroyLabResult {
   const placements = listPlacements(labId).sort(
     (a, b) => (a.node_cold_backend === "smb" ? 0 : 1) - (b.node_cold_backend === "smb" ? 0 : 1),
   );
-  for (const p of placements) destroyPlacement(p.id, actor);
-  if (placements.length > 0) {
+  let teardownStarted = 0;
+  for (const p of placements) {
+    if (force && !p.online) {
+      forceDeletePlacement(p.id, actor);
+    } else {
+      destroyPlacement(p.id, actor);
+      teardownStarted++;
+    }
+  }
+  if (teardownStarted > 0) {
     // Wait for the nodes to confirm destruction before removing the logical lab.
-    return { deleted: false, teardownStarted: placements.length };
+    return { deleted: false, teardownStarted };
   }
 
   const memberIds = (db()
