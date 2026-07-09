@@ -64,8 +64,18 @@ example, `~` in your shell is exactly `/home/<username>`, and `~/cold-storage` i
 `/cold-storage/<username>`.
 
 `~/cold-storage` is a shortcut to your private cold-storage directory. Both locations survive lab
-container recreation, but persistence is not a backup guarantee. Keep another copy of irreplaceable
-data in an approved backup location.
+container recreation.
+
+> **⚠️ Warning: lab storage is NOT reliable, backed-up storage.**
+>
+> Do not treat fast or cold storage as a safe place to keep the only copy of your data. Neither
+> tier is backed up, and data loss can occur at any time — for example from hardware failure, a
+> node being decommissioned or rebuilt, or administrative cleanup when a lab is removed. "Cold"
+> means infrequently accessed, not safer.
+>
+> Always keep a copy of anything you cannot regenerate — source data, code, results, theses, and
+> important checkpoints — on another system, such as the Sapelo2 cluster or your local computer.
+> Data lost from lab storage cannot be recovered.
 
 ## Lab storage quota
 
