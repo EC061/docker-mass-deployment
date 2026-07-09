@@ -2,7 +2,7 @@ import { db } from "@/lib/db";
 import { ago, fmtBytes, fmtDuration } from "@/lib/format";
 import { groupGpuEvents, recentGpuEvents, type StudentKillStats } from "@/lib/gpu";
 import { ConfirmButton } from "../_components/ConfirmButton";
-import { clearGpuEventsAction } from "./actions";
+import { clearGpuEventsAction, deleteGpuEventAction } from "./actions";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -48,6 +48,7 @@ function StudentDetails({ student }: { student: StudentKillStats }) {
               <TableHead>Idle for</TableHead>
               <TableHead>VRAM</TableHead>
               <TableHead>State</TableHead>
+              <TableHead />
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -61,6 +62,20 @@ function StudentDetails({ student }: { student: StudentKillStats }) {
                 <TableCell>{fmtBytes(e.vram_bytes)}</TableCell>
                 <TableCell className={e.state === "killed" ? "text-err" : "text-warn"}>
                   {e.state}
+                </TableCell>
+                <TableCell className="text-right">
+                  <form action={deleteGpuEventAction}>
+                    <input type="hidden" name="id" value={e.id} />
+                    <ConfirmButton
+                      size="sm"
+                      variant="ghost"
+                      title="Delete event?"
+                      confirmLabel="Delete"
+                      confirm="Delete this idle-kill event record? This cannot be undone."
+                    >
+                      Delete
+                    </ConfirmButton>
+                  </form>
                 </TableCell>
               </TableRow>
             ))}

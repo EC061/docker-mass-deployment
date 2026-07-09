@@ -11,7 +11,7 @@ import { audit } from "./labs";
 import { db } from "./db";
 import { sendMail } from "./mailer";
 import { isSmtpConfigured } from "./settings";
-import { renderTemplate } from "./template";
+import { extractBracketTokens, fillBracketTokens, renderTemplate } from "./template";
 
 export type Audience = "students" | "pis";
 
@@ -30,8 +30,8 @@ export const ANNOUNCEMENT_VARS: { key: string; desc: string }[] = [
 /**
  * A prebuilt starting point for the compose form, editable on the Templates page (stored in the
  * `announcement_templates` table; seeded with the built-in defaults in migration 0017). {tokens}
- * render per recipient and ALL-CAPS bracketed spans are placeholders for the admin to fill in by
- * hand.
+ * render per recipient and ALL-CAPS bracketed spans become input fields on the compose form for
+ * the admin to fill in before sending.
  */
 export interface AnnouncementTemplate {
   id: number;
@@ -100,6 +100,26 @@ function audienceRecipients(audience: Audience): Recipient[] {
   return [...byEmail.values()];
 }
 
+/** An addressable person for the individual-recipient picker. */
+export interface Person {
+  email: string;
+  name: string;
+  kind: "user" | "pi";
+}
+
+/**
+ * Everyone the compose form can address individually: all students and all PIs, deduped by email
+ * (a PI who is also a student appears once, as a user), sorted by display name.
+ */
+export function listAnnouncementPeople(): Person[] {
+  const byEmail = new Map<string, Person>();
+  for (const r of audienceRecipients("students")) byEmail.set(r.email, { ...r, kind: "user" });
+  for (const r of audienceRecipients("pis")) {
+    if (!byEmail.has(r.email)) byEmail.set(r.email, { ...r, kind: "pi" });
+  }
+  return [...byEmail.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
 /** How many addressable recipients each audience currently has (for the compose UI). */
 export function audienceCounts(): { students: number; pis: number } {
   return {
@@ -133,25 +153,56 @@ export interface AnnouncementResult {
 }
 
 /**
- * Send an announcement to the union of the selected audiences. Returns recipient/sent counts.
- * Always records a row (even when skipped or zero recipients) so the history reflects every attempt.
+ * Send an announcement to the union of the selected audiences and individually picked recipients.
+ * [BRACKET] placeholders are filled from `placeholders` before anything goes out (all of them are
+ * required); {name}/{email} still render per recipient. Returns recipient/sent counts. Always
+ * records a row (even when skipped or zero recipients) so the history reflects every attempt.
  */
 export async function sendAnnouncement(input: {
   subject: string;
   body: string;
   audiences: Audience[];
+  /** Emails picked individually; must belong to a known student or PI. */
+  individuals?: string[];
+  /** [BRACKET] placeholder values, keyed by token without brackets. */
+  placeholders?: Record<string, string>;
   actor?: string;
 }): Promise<AnnouncementResult> {
-  const subject = input.subject.trim();
-  const body = input.body.trim();
+  let subject = input.subject.trim();
+  let body = input.body.trim();
   if (!subject) throw new Error("subject is required");
   if (!body) throw new Error("message is required");
-  if (input.audiences.length === 0) throw new Error("pick at least one audience");
 
-  // Union of the selected audiences, deduped by email (a PI who is also a student is mailed once).
+  // Fill [BRACKET] placeholders up front so the mailed and recorded text are the final text.
+  // Validate against the original token list, never a re-scan of the filled output.
+  const values = input.placeholders ?? {};
+  const tokens = extractBracketTokens(subject + "\n" + body);
+  const missing = tokens.filter((t) => !values[t]?.trim());
+  if (missing.length > 0) {
+    throw new Error(`fill in the ${missing.map((t) => `[${t}]`).join(", ")} placeholder(s)`);
+  }
+  subject = fillBracketTokens(subject, values);
+  body = fillBracketTokens(body, values);
+
+  const individuals = [...new Set(input.individuals ?? [])];
+  if (input.audiences.length === 0 && individuals.length === 0) {
+    throw new Error("pick at least one audience or recipient");
+  }
+
+  // Union of the selected audiences plus picked individuals, deduped by email (a PI who is also a
+  // student, or someone picked and covered by an audience, is mailed once).
   const byEmail = new Map<string, Recipient>();
   for (const a of input.audiences) {
     for (const r of audienceRecipients(a)) if (!byEmail.has(r.email)) byEmail.set(r.email, r);
+  }
+  if (individuals.length > 0) {
+    // Resolve against known people so the form can't be used to mail arbitrary addresses.
+    const known = new Map(listAnnouncementPeople().map((p) => [p.email, p]));
+    for (const email of individuals) {
+      const person = known.get(email);
+      if (!person) throw new Error(`unknown recipient: ${email}`);
+      if (!byEmail.has(email)) byEmail.set(email, { email, name: person.name });
+    }
   }
   const recipients = [...byEmail.values()];
   const skipped = !isSmtpConfigured();
@@ -168,6 +219,10 @@ export async function sendAnnouncement(input: {
     sent = results.filter((r) => r.sent).length;
   }
 
+  const audienceLabel = [
+    ...input.audiences,
+    ...(individuals.length > 0 ? [`${individuals.length} picked`] : []),
+  ].join(",");
   db()
     .prepare(
       `INSERT INTO announcements (ts, actor, audiences, subject, body, recipients, sent, skipped)
@@ -176,14 +231,30 @@ export async function sendAnnouncement(input: {
     .run(
       Date.now(),
       input.actor ?? null,
-      input.audiences.join(","),
+      audienceLabel,
       subject,
       body,
       recipients.length,
       sent,
       skipped ? 1 : 0,
     );
-  audit(input.actor, "announcement.send", input.audiences.join(","), `${sent}/${recipients.length} sent`);
+  audit(input.actor, "announcement.send", audienceLabel, `${sent}/${recipients.length} sent`);
 
   return { recipients: recipients.length, sent, skipped };
+}
+
+/** Remove one announcement from the recorded history. */
+export function deleteAnnouncement(id: number, actor: string): void {
+  const res = db().prepare("DELETE FROM announcements WHERE id = ?").run(id);
+  if (res.changes === 0) throw new Error("announcement not found");
+  audit(actor, "announcement.delete", String(id));
+}
+
+/** Wipe the recorded announcement history. Returns how many rows were removed. */
+export function clearAnnouncements(actor: string): number {
+  return db().transaction(() => {
+    const cleared = db().prepare("DELETE FROM announcements").run().changes;
+    audit(actor, "announcements.clear", undefined, `${cleared} announcement(s)`);
+    return cleared;
+  })();
 }

@@ -29,8 +29,10 @@ describe("Server Actions reject unauthenticated callers", () => {
   let backups: typeof import("../src/app/(app)/backups/actions.js");
   let stats: typeof import("../src/app/(app)/stats/actions.js");
   let gpu: typeof import("../src/app/(app)/gpu/actions.js");
+  let announcements: typeof import("../src/app/(app)/announcements/actions.js");
 
   beforeAll(async () => {
+    announcements = await import("../src/app/(app)/announcements/actions.js");
     labs = await import("../src/app/(app)/labs/actions.js");
     students = await import("../src/app/(app)/students/actions.js");
     settings = await import("../src/app/(app)/settings/actions.js");
@@ -58,6 +60,10 @@ describe("Server Actions reject unauthenticated callers", () => {
       stats.usageScanAction(fd()),
       stats.emailUsageReportAction(fd()),
       gpu.clearGpuEventsAction(),
+      gpu.deleteGpuEventAction(fd()),
+      announcements.sendAnnouncementAction(fd()),
+      announcements.deleteAnnouncementAction(fd()),
+      announcements.clearAnnouncementsAction(),
       students.importStudentsAction({ labId: 1, rows: [] }),
       settings.saveStorageSettingsAction(fd()),
       settings.saveUsageScanSettingsAction(fd()),

@@ -15,6 +15,32 @@ export function renderTemplate(template: string, vars: Record<string, string | n
   );
 }
 
+/**
+ * ALL-CAPS [BRACKET] spans in announcement templates, e.g. [DATE] or [START TIME]. Distinct from
+ * {tokens}: brackets are filled once by the admin on the compose form, {tokens} render per recipient.
+ */
+const BRACKET_TOKEN_RE = /\[([A-Z][A-Z0-9 _/-]*)\]/g;
+
+/** The [BRACKET] placeholder tokens in a template (without brackets), deduped, in first-appearance order. */
+export function extractBracketTokens(text: string): string[] {
+  const tokens: string[] = [];
+  for (const m of text.matchAll(BRACKET_TOKEN_RE)) {
+    if (!tokens.includes(m[1])) tokens.push(m[1]);
+  }
+  return tokens;
+}
+
+/**
+ * Substitute [TOKEN] spans with values[TOKEN]. A single replace pass, so a value that itself
+ * contains a [BRACKET] span is never re-substituted. Tokens without a value are left as-is
+ * (mirroring renderTemplate) so an unfilled placeholder stays visible.
+ */
+export function fillBracketTokens(text: string, values: Record<string, string>): string {
+  return text.replace(BRACKET_TOKEN_RE, (whole, token: string) =>
+    Object.prototype.hasOwnProperty.call(values, token) ? values[token] : whole,
+  );
+}
+
 /** Remove the signature used by older built-in templates before the universal signature existed. */
 export function stripLegacyEmailSignature(text: string): string {
   return text.replace(/\n*\s*—\s*Lab Manager\s*$/i, "").trimEnd();

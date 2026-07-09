@@ -1,8 +1,15 @@
-import { ANNOUNCEMENT_VARS, audienceCounts, listAnnouncementTemplates, recentAnnouncements } from "@/lib/announcements";
+import {
+  ANNOUNCEMENT_VARS,
+  audienceCounts,
+  listAnnouncementPeople,
+  listAnnouncementTemplates,
+  recentAnnouncements,
+} from "@/lib/announcements";
 import { isSmtpConfigured } from "@/lib/settings";
 import { ago } from "@/lib/format";
-import { sendAnnouncementAction } from "./actions";
+import { clearAnnouncementsAction, deleteAnnouncementAction, sendAnnouncementAction } from "./actions";
 import { AnnouncementComposer } from "./_components/AnnouncementComposer";
+import { ConfirmButton } from "../_components/ConfirmButton";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
@@ -16,6 +23,7 @@ export default async function AnnouncementsPage({
   const sp = await searchParams;
   const msg = typeof sp.msg === "string" ? sp.msg : undefined;
   const counts = audienceCounts();
+  const people = listAnnouncementPeople();
   const history = recentAnnouncements();
   const templates = listAnnouncementTemplates();
   const smtpOk = isSmtpConfigured();
@@ -53,20 +61,36 @@ export default async function AnnouncementsPage({
             templates={templates}
             vars={ANNOUNCEMENT_VARS}
             counts={counts}
+            people={people}
             action={sendAnnouncementAction}
           />
           <p className="text-xs text-muted-foreground">
-            Sent by email to the distinct addresses in the selected audiences (a PI who is also a user
-            is mailed once). <code>{"{name}"}</code> and <code>{"{email}"}</code> are filled in per
-            recipient. Manage the prebuilt templates and see every email variable under{" "}
-            <a href="/email-templates" className="underline">Email templates</a>.
+            Sent by email to the distinct addresses in the selected audiences and picked recipients
+            (each address is mailed once). ALL-CAPS <code>[BRACKET]</code> spans in the subject or
+            message become input fields above. <code>{"{name}"}</code> and <code>{"{email}"}</code>{" "}
+            are filled in per recipient. Manage the prebuilt templates and see every email variable
+            under <a href="/email-templates" className="underline">Email templates</a>.
           </p>
         </CardContent>
       </Card>
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Recent announcements</h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-base font-semibold">Recent announcements</h3>
+            {history.length > 0 && (
+              <form action={clearAnnouncementsAction}>
+                <ConfirmButton
+                  size="sm"
+                  title="Clear announcement history?"
+                  confirmLabel="Clear all"
+                  confirm="Delete all recorded announcements? This cannot be undone."
+                >
+                  Clear all
+                </ConfirmButton>
+              </form>
+            )}
+          </div>
           {history.length === 0 ? (
             <p className="text-sm text-muted-foreground">Nothing sent yet.</p>
           ) : (
@@ -78,6 +102,7 @@ export default async function AnnouncementsPage({
                   <TableHead>To</TableHead>
                   <TableHead>Subject</TableHead>
                   <TableHead>Delivered</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -93,6 +118,20 @@ export default async function AnnouncementsPage({
                       ) : (
                         `${a.sent}/${a.recipients}`
                       )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <form action={deleteAnnouncementAction}>
+                        <input type="hidden" name="id" value={a.id} />
+                        <ConfirmButton
+                          size="sm"
+                          variant="ghost"
+                          title="Delete announcement?"
+                          confirmLabel="Delete"
+                          confirm={`Delete the recorded announcement "${a.subject}"? This cannot be undone.`}
+                        >
+                          Delete
+                        </ConfirmButton>
+                      </form>
                     </TableCell>
                   </TableRow>
                 ))}

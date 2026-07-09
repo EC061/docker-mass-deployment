@@ -10,6 +10,13 @@ export function clearGpuEvents(actor: string): number {
   })();
 }
 
+/** Delete a single recorded idle-kill event. */
+export function deleteGpuEvent(id: number, actor: string): void {
+  const res = db().prepare("DELETE FROM gpu_events WHERE id = ?").run(id);
+  if (res.changes === 0) throw new Error("event not found");
+  audit(actor, "gpu.event.delete", String(id));
+}
+
 export interface GpuEventRow {
   id: number;
   node: string;

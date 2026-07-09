@@ -92,4 +92,29 @@ describe("GPU event history", () => {
       detail: "2 event(s)",
     });
   });
+
+  it("deletes a single event, leaves the rest, and records an audit entry", () => {
+    const d = dbmod.db();
+    d.prepare("INSERT INTO gpu_events (node, pid, state, ts) VALUES ('gpu-1', 1, 'warned', 1)").run();
+    d.prepare("INSERT INTO gpu_events (node, pid, state, ts) VALUES ('gpu-1', 2, 'killed', 2)").run();
+    const victim = d.prepare("SELECT id FROM gpu_events WHERE pid = 1").get() as { id: number };
+
+    gpu.deleteGpuEvent(victim.id, "admin@example.com");
+
+    const remaining = gpu.recentGpuEvents();
+    expect(remaining).toHaveLength(1);
+    expect(remaining[0].pid).toBe(2);
+    expect(
+      d.prepare("SELECT actor, action, target FROM audit_log ORDER BY id DESC LIMIT 1").get(),
+    ).toMatchObject({
+      actor: "admin@example.com",
+      action: "gpu.event.delete",
+      target: String(victim.id),
+    });
+    d.prepare("DELETE FROM gpu_events").run();
+  });
+
+  it("throws when the event does not exist", () => {
+    expect(() => gpu.deleteGpuEvent(999999, "admin@example.com")).toThrow(/not found/);
+  });
 });

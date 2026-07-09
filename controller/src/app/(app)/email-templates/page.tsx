@@ -268,8 +268,8 @@ export default async function EmailTemplatesPage({
               </div>
               <VarList vars={ANNOUNCEMENT_VARS} />
               <p className="text-xs text-muted-foreground">
-                ALL-CAPS spans in <code>[BRACKETS]</code> are placeholders for the admin to fill in by
-                hand before sending.
+                ALL-CAPS spans in <code>[BRACKETS]</code> become input fields on the compose form for
+                the admin to fill in before sending.
               </p>
             </div>
           </div>
