@@ -96,6 +96,32 @@ describe("sendAnnouncement", () => {
     expect(aliceCall![2]).toBe("Your address is alice@uga.edu.");
   });
 
+  it("substitutes {sender}/{sender_email} when a sender is given, leaves them visible otherwise", async () => {
+    settings.setSetting("smtpHost", "smtp.test");
+    settings.setSetting("smtpFrom", "no-reply@uga.edu");
+    sendMail.mockClear();
+
+    await ann.sendAnnouncement({
+      subject: "A note from {sender}",
+      body: "Reply to {sender_email} with questions, {name}.",
+      audiences: ["students"],
+      sender: { name: "Dr. Admin", email: "admin@uga.edu" },
+    });
+    let aliceCall = (sendMail.mock.calls as unknown as [string, string, string][]).find(
+      (c) => c[0] === "alice@uga.edu",
+    )!;
+    expect(aliceCall[1]).toBe("A note from Dr. Admin");
+    expect(aliceCall[2]).toBe("Reply to admin@uga.edu with questions, alice.");
+
+    // Without a sender the tokens stay visible, mirroring how unknown tokens surface typos.
+    sendMail.mockClear();
+    await ann.sendAnnouncement({ subject: "From {sender}", body: "b", audiences: ["students"] });
+    aliceCall = (sendMail.mock.calls as unknown as [string, string, string][]).find(
+      (c) => c[0] === "alice@uga.edu",
+    )!;
+    expect(aliceCall[1]).toBe("From {sender}");
+  });
+
   it("skips sending when SMTP is not configured but still records", async () => {
     settings.setSetting("smtpHost", "");
     settings.setSetting("smtpFrom", "");
@@ -298,6 +324,7 @@ describe("announcement templates", () => {
     const names = ann.listAnnouncementTemplates().map((t) => t.name);
     expect(names).toContain("Scheduled maintenance");
     expect(names).toContain("Storage cleanup request");
+    expect(names).toContain("System introduction");
     expect(names).not.toContain("Access expiring");
     expect(names).not.toContain("New capacity available");
   });

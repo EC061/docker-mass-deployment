@@ -25,6 +25,8 @@ export interface Recipient {
 export const ANNOUNCEMENT_VARS: { key: string; desc: string }[] = [
   { key: "name", desc: "recipient's name (falls back to username, then email)" },
   { key: "email", desc: "recipient's email address" },
+  { key: "sender", desc: "sending admin's name" },
+  { key: "sender_email", desc: "sending admin's email address" },
 ];
 
 /**
@@ -155,8 +157,10 @@ export interface AnnouncementResult {
 /**
  * Send an announcement to the union of the selected audiences and individually picked recipients.
  * [BRACKET] placeholders are filled from `placeholders` before anything goes out (all of them are
- * required); {name}/{email} still render per recipient. Returns recipient/sent counts. Always
- * records a row (even when skipped or zero recipients) so the history reflects every attempt.
+ * required); {name}/{email} still render per recipient, and {sender}/{sender_email} render from
+ * `sender` when given (left visible otherwise, like any unknown token). Returns recipient/sent
+ * counts. Always records a row (even when skipped or zero recipients) so the history reflects
+ * every attempt.
  */
 export async function sendAnnouncement(input: {
   subject: string;
@@ -166,6 +170,8 @@ export async function sendAnnouncement(input: {
   individuals?: string[];
   /** [BRACKET] placeholder values, keyed by token without brackets. */
   placeholders?: Record<string, string>;
+  /** The sending admin, for the {sender}/{sender_email} template variables. */
+  sender?: { name: string; email: string };
   actor?: string;
 }): Promise<AnnouncementResult> {
   let subject = input.subject.trim();
@@ -207,12 +213,14 @@ export async function sendAnnouncement(input: {
   const recipients = [...byEmail.values()];
   const skipped = !isSmtpConfigured();
 
-  // {name}/{email} are substituted per recipient. sendMail appends the universal signature.
+  // {name}/{email} are substituted per recipient, {sender}/{sender_email} once per send. sendMail
+  // appends the universal signature.
+  const senderVars = input.sender ? { sender: input.sender.name, sender_email: input.sender.email } : {};
   let sent = 0;
   if (!skipped) {
     const results = await Promise.all(
       recipients.map((r) => {
-        const vars = { name: r.name, email: r.email };
+        const vars = { ...senderVars, name: r.name, email: r.email };
         return sendMail(r.email, renderTemplate(subject, vars), renderTemplate(body, vars));
       }),
     );

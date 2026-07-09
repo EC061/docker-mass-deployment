@@ -607,6 +607,33 @@ Thanks for helping keep the cluster healthy.`,
     ALTER TABLE gpu_events ADD COLUMN idle_s INTEGER;
     `,
   },
+  {
+    // New default announcement template introducing the system to students and PIs. Existing
+    // deployments already ran the 0017 seed, so later built-in templates ship as their own
+    // migration, appended after whatever templates the admin has.
+    id: "0022_system_intro_template",
+    fn: (conn) => {
+      const maxSort = (
+        conn.prepare("SELECT COALESCE(MAX(sort), -1) AS m FROM announcement_templates").get() as { m: number }
+      ).m;
+      conn
+        .prepare("INSERT INTO announcement_templates (name, subject, body, sort) VALUES (?, ?, ?, ?)")
+        .run(
+          "System introduction",
+          "Welcome to the lab cluster",
+          `Hello {name},
+
+A quick introduction to the lab cluster you have access to. It gives every research lab its own isolated Ubuntu environment on shared GPU nodes: you connect over SSH, keep full sudo inside your lab, and get CUDA build tooling plus two storage areas — a fast home directory (~) for working data and ~/cold-storage for data you rarely touch.
+
+Full details, including the student guide covering connections, SSH keys, and day-to-day usage, are on GitHub:
+
+    https://github.com/EC061/docker-mass-deployment
+
+If you have questions, reply to this email and {sender} ({sender_email}) will get back to you.`,
+          maxSort + 1,
+        );
+    },
+  },
 ];
 
 function migrate(conn: Database.Database): void {

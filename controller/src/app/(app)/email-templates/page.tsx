@@ -264,7 +264,7 @@ export default async function EmailTemplatesPage({
             </p>
             <div className="space-y-1.5 pt-1">
               <div className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-                Variables (rendered per recipient)
+                Variables (substituted on send)
               </div>
               <VarList vars={ANNOUNCEMENT_VARS} />
               <p className="text-xs text-muted-foreground">

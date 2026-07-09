@@ -27,6 +27,7 @@ export async function sendAnnouncementAction(formData: FormData) {
       audiences,
       individuals,
       placeholders,
+      sender: { name: admin.name, email: admin.email },
       actor: admin.email,
     });
     msg = res.skipped
