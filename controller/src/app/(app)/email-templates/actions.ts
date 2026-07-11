@@ -56,6 +56,20 @@ export async function saveQuotaEmailAction(formData: FormData) {
   revalidatePath("/email-templates");
 }
 
+export async function saveStudentQuotaEmailAction(formData: FormData) {
+  await requireAdmin();
+  setSetting("studentQuotaEmailSubject", String(formData.get("subject") ?? "").trim());
+  setSetting("studentQuotaEmailBody", String(formData.get("body") ?? ""));
+  revalidatePath("/email-templates");
+}
+
+export async function savePlacementCompleteEmailAction(formData: FormData) {
+  await requireAdmin();
+  setSetting("placementCompleteEmailSubject", String(formData.get("subject") ?? "").trim());
+  setSetting("placementCompleteEmailBody", String(formData.get("body") ?? ""));
+  revalidatePath("/email-templates");
+}
+
 export async function saveUsageReportStudentEmailAction(formData: FormData) {
   await requireAdmin();
   setSetting("usageReportStudentSubject", String(formData.get("subject") ?? "").trim());

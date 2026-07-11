@@ -20,7 +20,7 @@ import {
 } from "@/lib/placements";
 import { QUOTA_UNIT_BYTES, type QuotaUnit } from "@/lib/format";
 import { TIB } from "@/lib/settings";
-import { addStudentToLab, copyMembers, removeStudentFromLab } from "@/lib/students";
+import { addStudentToLab, copyMembers, ensurePiAccess, removeStudentFromLab } from "@/lib/students";
 
 // Enforcing auth gate: throws/redirects when the caller is not a live admin, and returns the
 // verified email used as the audit actor. Call as the first line of every action.
@@ -70,9 +70,13 @@ export async function createLabAction(formData: FormData) {
   const name = String(formData.get("name") ?? "").trim();
   const piName = String(formData.get("piName") ?? "").trim() || undefined;
   const piEmail = String(formData.get("piEmail") ?? "").trim() || undefined;
+  const piUsername = String(formData.get("piUsername") ?? "").trim().toLowerCase();
   if (!name) throw new Error("Lab name is required");
 
   const lab = createLab({ name, piName, piEmail, actor: who });
+  if (piUsername) {
+    await ensurePiAccess(lab.id, { username: piUsername, name: piName, email: piEmail }, who);
+  }
 
   // Optionally seed the roster from an existing lab (membership only; each placement later created
   // for this lab provisions these students).
@@ -97,7 +101,9 @@ export async function updateLabMetaAction(formData: FormData) {
   const labId = Number(formData.get("labId"));
   const piName = String(formData.get("piName") ?? "").trim();
   const piEmail = String(formData.get("piEmail") ?? "").trim();
-  updateLabMeta(labId, { piName, piEmail }, who);
+  const piUsername = String(formData.get("piUsername") ?? "").trim().toLowerCase();
+  if (piUsername) await ensurePiAccess(labId, { username: piUsername, name: piName, email: piEmail }, who);
+  else updateLabMeta(labId, { piName, piEmail }, who);
   revalidatePath(`/labs/${labId}`);
   const fid = putFlash("Lab metadata saved.");
   redirect(`/labs/${labId}?saved=${fid}`);

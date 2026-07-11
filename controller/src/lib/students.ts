@@ -33,6 +33,7 @@ export interface Student {
 /** A roster member of a logical lab (no per-student quotas in the redesign — they share lab quota). */
 export interface Member extends Student {
   member_id: number;
+  is_pi: number;
 }
 
 export function listStudents(): Student[] {
@@ -43,11 +44,53 @@ export function listMembers(labId: number): Member[] {
   return db()
     .prepare(
       `SELECT students.id, students.student_id, students.username, students.email, students.name,
-              lab_members.id AS member_id
+              students.linux_uid, lab_members.id AS member_id,
+              CASE WHEN labs.pi_student_id = students.id THEN 1 ELSE 0 END AS is_pi
        FROM lab_members JOIN students ON students.id = lab_members.student_id
+       JOIN labs ON labs.id = lab_members.lab_id
        WHERE lab_members.lab_id = ? ORDER BY students.username`,
     )
     .all(labId) as Member[];
+}
+
+/** Designate and provision a PI account. The PI uses the ordinary student account path on every
+ * placement, but removeStudentFromLab protects the designated account from roster deletion. */
+export async function ensurePiAccess(
+  labId: number,
+  input: StudentInput,
+  actor?: string,
+): Promise<AddMemberResult> {
+  const lab = getLab(labId);
+  if (!lab) throw new Error("Unknown lab");
+  if (!input.username.trim()) throw new Error("PI username is required to grant placement access");
+  const record = findOrCreateStudent(input);
+  const current = db().prepare("SELECT pi_student_id FROM labs WHERE id = ?").get(labId) as
+    { pi_student_id: number | null };
+  if (current.pi_student_id && current.pi_student_id !== record.id) {
+    throw new Error("The PI login username cannot be changed after it has been provisioned");
+  }
+
+  // Keep the global account's contact details aligned with the lab's PI metadata. A PI may be used
+  // by more than one lab; these values are the same real person in that case.
+  db().prepare("UPDATE students SET email = ?, name = ?, updated_at = ? WHERE id = ?")
+    .run(normalizeEmail(input.email), input.name?.trim() || null, Date.now(), record.id);
+  db().prepare("UPDATE labs SET pi_student_id = ?, pi_name = ?, pi_email = ?, updated_at = ? WHERE id = ?")
+    .run(record.id, input.name?.trim() || null, normalizeEmail(input.email), Date.now(), labId);
+
+  const member = db().prepare("SELECT 1 FROM lab_members WHERE lab_id = ? AND student_id = ?")
+    .get(labId, record.id);
+  if (!member) {
+    db().prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?, ?, ?)")
+      .run(labId, record.id, Date.now());
+  }
+  audit(actor, "pi.access.ensure", `${lab.name}/${record.username}`);
+
+  const provisioned: MemberProvision[] = [];
+  for (const p of listPlacements(labId)) {
+    const res = await provisionMemberOnPlacement(p, record, actor);
+    if (res) provisioned.push(res);
+  }
+  return { student: record, provisioned };
 }
 
 export interface StudentInput {
@@ -171,6 +214,9 @@ export function removeStudentFromLab(
 ): void {
   const lab = getLab(labId);
   if (!lab) throw new Error("Unknown lab");
+  const protectedPi = db().prepare("SELECT 1 FROM labs WHERE id = ? AND pi_student_id = ?")
+    .get(labId, studentId);
+  if (protectedPi) throw new Error("The PI account is protected and cannot be removed from the lab");
   const member = db()
     .prepare(
       `SELECT students.username AS username, students.email AS email

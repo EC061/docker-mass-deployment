@@ -3,9 +3,11 @@ import { ANNOUNCEMENT_VARS, listAnnouncementTemplates, type AnnouncementTemplate
 import {
   GPU_EMAIL_VARS,
   QUOTA_EMAIL_VARS,
+  PLACEMENT_COMPLETE_EMAIL_VARS,
   REMOVAL_EMAIL_VARS,
   USAGE_REPORT_EMAIL_VARS,
   WELCOME_EMAIL_VARS,
+  STUDENT_QUOTA_EMAIL_VARS,
   getSettings,
 } from "@/lib/settings";
 import { takeFlash } from "@/lib/flash";
@@ -22,6 +24,8 @@ import {
   saveGpuKillEmailAction,
   saveGpuWarnEmailAction,
   saveQuotaEmailAction,
+  saveStudentQuotaEmailAction,
+  savePlacementCompleteEmailAction,
   saveRemovalEmailAction,
   saveTestEmailAction,
   saveUniversalSignatureAction,
@@ -172,12 +176,22 @@ export default async function EmailTemplatesPage({
 
       <EditableTemplate
         name="Welcome / credentials"
-        trigger="Sent to a student once they are provisioned on a node — carries their login and SSH connection details."
+        trigger="Sent to a student or PI only after the node agent proves the initial credential with a real SSH login."
         action={saveWelcomeEmailAction}
         subject={s.welcomeEmailSubject}
         body={s.welcomeEmailBody}
         vars={WELCOME_EMAIL_VARS}
         bodyRows={16}
+      />
+
+      <EditableTemplate
+        name="Node setup complete — PI"
+        trigger="Sent once to the PI after a placement container and every student/PI login have passed SSH verification."
+        action={savePlacementCompleteEmailAction}
+        subject={s.placementCompleteEmailSubject}
+        body={s.placementCompleteEmailBody}
+        vars={PLACEMENT_COMPLETE_EMAIL_VARS}
+        bodyRows={15}
       />
 
       <EditableTemplate
@@ -218,6 +232,16 @@ export default async function EmailTemplatesPage({
         body={s.quotaEmailBody}
         vars={QUOTA_EMAIL_VARS}
         bodyRows={12}
+      />
+
+      <EditableTemplate
+        name="Per-user quota warning"
+        trigger="Sent automatically when a user crosses the configured percentage of their assigned per-user quota; Settings can also copy admins."
+        action={saveStudentQuotaEmailAction}
+        subject={s.studentQuotaEmailSubject}
+        body={s.studentQuotaEmailBody}
+        vars={STUDENT_QUOTA_EMAIL_VARS}
+        bodyRows={10}
       />
 
       <EditableTemplate

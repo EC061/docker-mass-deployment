@@ -269,6 +269,14 @@ export default async function SettingsPage({
               <input type="checkbox" name="alertsEnabled" defaultChecked={s.alertsEnabled} className="accent-primary" />
               Email admins on alerts
             </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="studentQuotaAlertsEnabled" defaultChecked={s.studentQuotaAlertsEnabled} className="accent-primary" />
+              Email users above their quota threshold
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" name="studentQuotaNotifyAdmins" defaultChecked={s.studentQuotaNotifyAdmins} className="accent-primary" />
+              Also email admins about high user usage
+            </label>
             <div>
               <Label>Alert at log level</Label>
               <Select name="alertLevel" defaultValue={s.alertLevel}>
@@ -283,6 +291,10 @@ export default async function SettingsPage({
             <div>
               <Label>Quota alert at (%)</Label>
               <Input name="quotaAlertPct" type="number" defaultValue={s.quotaAlertPct} />
+            </div>
+            <div>
+              <Label>Per-user quota email at (%)</Label>
+              <Input name="studentQuotaAlertPct" type="number" min={1} max={100} defaultValue={s.studentQuotaAlertPct} />
             </div>
             <div>
               <Label>Node offline grace (seconds)</Label>

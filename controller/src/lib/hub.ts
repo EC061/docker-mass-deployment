@@ -19,6 +19,7 @@ import {
   completeStudentRemoval,
   confirmPlacementDestroyed,
   deliverPlacementCredential,
+  maybeDeliverPlacementCompletion,
   getPlacementByLabNode,
   markPlacementMemberState,
   markPlacementStateByLabNode,
@@ -325,6 +326,12 @@ function handleResult(node: string, frame: any): void {
               params.username,
               error instanceof Error ? error.message : String(error),
             );
+        });
+        void maybeDeliverPlacementCompletion(labName, node).catch((error: unknown) => {
+          db().prepare(
+            `INSERT INTO logs (ts, node, level, source, lab, msg, detail)
+             VALUES (?, ?, 'ERROR', 'placement-completion', ?, 'PI completion email failed', ?)`,
+          ).run(Date.now(), node, labName, error instanceof Error ? error.message : String(error));
         });
       }
     } else if (labName && params.username && t.action === "student.remove" && frame.ok) {

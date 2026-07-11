@@ -22,6 +22,7 @@ export interface Lab {
   name: string;
   pi_name: string | null;
   pi_email: string | null;
+  pi_student_id: number | null;
   created_at: number;
   updated_at: number;
 }

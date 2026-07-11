@@ -11,7 +11,7 @@
 import { audit } from "./audit";
 import { db } from "./db";
 import { fmtBytes } from "./format";
-import { sendCredentialEmail } from "./mailer";
+import { sendCredentialEmail, sendPlacementCompleteEmail } from "./mailer";
 import { generatePassword } from "./passwords";
 import { enqueueTask } from "./queue";
 import { decryptSecret, encryptSecret } from "./secrets";
@@ -440,6 +440,56 @@ export async function deliverPlacementCredential(
   return true;
 }
 
+/** Send the PI one node-specific completion message after the container and every account (PI
+ * included) are active. A member only becomes active after the agent has proved its initial
+ * credential through a real SSH login. The timestamp claim prevents concurrent final results from
+ * producing duplicate completion mail. */
+export async function maybeDeliverPlacementCompletion(labName: string, nodeName: string): Promise<boolean> {
+  const row = db().prepare(
+    `SELECT p.id, p.state, p.fast_quota_bytes, p.cold_quota_bytes,
+            p.student_fast_quota_bytes, p.student_cold_quota_bytes,
+            p.completion_email_sent_at, labs.pi_name, labs.pi_email,
+            pi.username AS pi_username, nodes.alias AS node_alias
+     FROM lab_placements p
+     JOIN labs ON labs.id = p.lab_id
+     JOIN nodes ON nodes.id = p.node_id
+     LEFT JOIN students pi ON pi.id = labs.pi_student_id
+     WHERE labs.name = ? AND nodes.name = ?`,
+  ).get(labName, nodeName) as {
+    id: number; state: PlacementState; fast_quota_bytes: number; cold_quota_bytes: number | null;
+    student_fast_quota_bytes: number | null; student_cold_quota_bytes: number | null;
+    completion_email_sent_at: number | null; pi_name: string | null; pi_email: string | null;
+    pi_username: string | null; node_alias: string | null;
+  } | undefined;
+  if (!row || row.state !== "active" || row.completion_email_sent_at != null ||
+      !row.pi_email || !row.pi_username) return false;
+  const members = db().prepare(
+    `SELECT students.username, pm.state
+     FROM placement_members pm JOIN students ON students.id = pm.student_id
+     WHERE pm.placement_id = ? ORDER BY students.username`,
+  ).all(row.id) as { username: string; state: MemberState }[];
+  if (members.length === 0 || members.some((member) => member.state !== "active")) return false;
+
+  const claimed = db().prepare(
+    "UPDATE lab_placements SET completion_email_sent_at = -1 WHERE id = ? AND completion_email_sent_at IS NULL",
+  ).run(row.id);
+  if (claimed.changes === 0) return false;
+  const result = await sendPlacementCompleteEmail({
+    to: row.pi_email,
+    name: row.pi_name || row.pi_username,
+    lab: labName,
+    node: row.node_alias?.trim() || nodeName,
+    usernames: members.map((member) => member.username),
+    fastQuota: fmtBytes(row.fast_quota_bytes),
+    coldQuota: row.cold_quota_bytes == null ? "managed by the cold-storage owner" : fmtBytes(row.cold_quota_bytes),
+    studentFastQuota: row.student_fast_quota_bytes == null ? "shared placement quota" : fmtBytes(row.student_fast_quota_bytes),
+    studentColdQuota: row.student_cold_quota_bytes == null ? "shared or owner-managed" : fmtBytes(row.student_cold_quota_bytes),
+  });
+  db().prepare("UPDATE lab_placements SET completion_email_sent_at = ? WHERE id = ?")
+    .run(result.sent ? Date.now() : null, row.id);
+  return result.sent;
+}
+
 /** Burn and return a successfully-provisioned member's password for a one-time admin reveal. */
 export function consumePlacementCredential(
   placementId: number,
@@ -692,6 +742,7 @@ export function recreatePlacement(
       .run(input.studentColdQuotaBytes, placementId);
   }
   touch(placementId);
+  db().prepare("UPDATE lab_placements SET completion_email_sent_at = NULL WHERE id = ?").run(placementId);
   const fresh = getPlacement(placementId)!;
   enqueueTask(
     fresh.node_name,

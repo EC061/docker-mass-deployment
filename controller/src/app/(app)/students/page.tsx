@@ -65,6 +65,9 @@ export default async function StudentsPage() {
                           <TableCell>{m.name ?? "—"}</TableCell>
                           <TableCell>{m.student_id ?? "—"}</TableCell>
                           <TableCell className="text-right">
+                            {m.is_pi ? (
+                              <span className="text-sm text-muted-foreground">PI · protected</span>
+                            ) : (
                             <form action={removeStudentAction} className="flex items-center justify-end gap-2">
                               <input type="hidden" name="labId" value={lab.id} />
                               <input type="hidden" name="studentId" value={m.id} />
@@ -79,6 +82,7 @@ export default async function StudentsPage() {
                                 Remove
                               </ConfirmButton>
                             </form>
+                            )}
                           </TableCell>
                         </TableRow>
                       ))}

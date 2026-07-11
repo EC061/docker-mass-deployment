@@ -177,6 +177,24 @@ describe("templated emails", () => {
     expect(sent[0].text).toContain("(no per-student usage reported yet)");
   });
 
+  it("renders placement completion and per-user quota templates", async () => {
+    await mailer.sendPlacementCompleteEmail({
+      to: "pi@uga.edu", name: "Dr. Smith", lab: "bio", node: "GPU One",
+      usernames: ["alice", "prof"], fastQuota: "2 TiB", coldQuota: "3 TiB",
+      studentFastQuota: "500 GiB", studentColdQuota: "shared placement quota",
+    });
+    expect(sent[0].subject).toContain("Node setup complete");
+    expect(sent[0].text).toContain("alice\n  prof");
+    expect(sent[0].text).toContain("Per-user fast: 500 GiB");
+
+    await mailer.sendStudentQuotaEmail({
+      to: "alice@uga.edu", name: "Alice", username: "alice", lab: "bio", node: "gpu-1",
+      pool: "fast", pct: 51, usedHuman: "255 GiB", quotaHuman: "500 GiB",
+    });
+    expect(sent[1].subject).toContain("51% full");
+    expect(sent[1].text).toContain("255 GiB of its 500 GiB");
+  });
+
   it("gpu warning and kill emails mention the pid", async () => {
     await mailer.sendGpuWarningEmail("a@uga.edu", { username: "alice", lab: "bio", pid: 42, node: "gpu-01", graceMinutes: 10 });
     expect(sent[0].text).toContain("PID 42");

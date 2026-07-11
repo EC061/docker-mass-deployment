@@ -25,6 +25,9 @@ def patch_storage(monkeypatch):
     monkeypatch.setattr(studentops.users, "add_user",
                         lambda container, user, password, uid, gid:
                         users.append(("add", container, user, uid, gid)))
+    monkeypatch.setattr(studentops.users, "verify_ssh_login",
+                        lambda container, user, password:
+                        users.append(("ssh", container, user)))
     monkeypatch.setattr(studentops.users, "remove_user",
                         lambda container, user: users.append(("remove", container, user)))
     return dirs, removed, users
@@ -38,7 +41,8 @@ def test_add_student_uses_native_host_ownership(monkeypatch):
     assert result["uid"] == 10042
     assert dirs == [("/fast/bio/alice", 10042, 10042),
                     ("/cold/bio/alice", 10042, 10042)]
-    assert calls == [("add", "bio-n1", "alice", 10042, 10042)]
+    assert calls == [("add", "bio-n1", "alice", 10042, 10042),
+                     ("ssh", "bio-n1", "alice")]
 
 
 def test_fast_quota_alone_creates_only_fast_student_dataset(monkeypatch):

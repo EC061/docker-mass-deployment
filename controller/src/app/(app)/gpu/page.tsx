@@ -16,6 +16,8 @@ interface SnapRow {
   vram_bytes: number | null;
   util: number | null;
   ts: number;
+  cmd: string | null;
+  started_at: number | null;
 }
 
 function countBadges(s: { killed: number; warned: number }) {
@@ -115,6 +117,8 @@ export default async function GpuPage({
                   <TableHead>PID</TableHead>
                   <TableHead>User</TableHead>
                   <TableHead>Lab</TableHead>
+                  <TableHead>Started</TableHead>
+                  <TableHead>Process / path</TableHead>
                   <TableHead>VRAM</TableHead>
                   <TableHead>Util %</TableHead>
                 </TableRow>
@@ -126,6 +130,12 @@ export default async function GpuPage({
                     <TableCell>{r.pid}</TableCell>
                     <TableCell>{r.user ?? "—"}</TableCell>
                     <TableCell>{r.lab ?? "—"}</TableCell>
+                    <TableCell className="whitespace-nowrap">
+                      {r.started_at == null ? "—" : new Date(r.started_at).toLocaleString("en-US", {
+                        dateStyle: "medium", timeStyle: "medium",
+                      })}
+                    </TableCell>
+                    <TableCell className="max-w-md break-all font-mono text-xs">{r.cmd ?? "—"}</TableCell>
                     <TableCell>{fmtBytes(r.vram_bytes)}</TableCell>
                     <TableCell className={(r.util ?? 0) <= 5 ? "text-warn" : undefined}>
                       {r.util ?? "—"}

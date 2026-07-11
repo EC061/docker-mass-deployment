@@ -131,6 +131,11 @@ export async function saveAlertSettingsAction(formData: FormData) {
   const maxSizeMb = Number(formData.get("logMaxSizeMb"));
   setSetting("logMaxSizeMb", Number.isFinite(maxSizeMb) && maxSizeMb > 0 ? maxSizeMb : 0);
   setSetting("quotaAlertPct", Number(formData.get("quotaAlertPct")) || 90);
+  setSetting("studentQuotaAlertsEnabled", formData.get("studentQuotaAlertsEnabled") === "on");
+  const studentPct = Number(formData.get("studentQuotaAlertPct"));
+  setSetting("studentQuotaAlertPct",
+    Number.isFinite(studentPct) && studentPct > 0 && studentPct <= 100 ? studentPct : 50);
+  setSetting("studentQuotaNotifyAdmins", formData.get("studentQuotaNotifyAdmins") === "on");
   pruneLogs();
   revalidatePath("/settings");
 }

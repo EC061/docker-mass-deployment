@@ -9,22 +9,28 @@
 import { alertAdmins } from "./alerts";
 import { db } from "./db";
 import { fmtBytes } from "./format";
-import { sendQuotaEmail } from "./mailer";
+import { sendQuotaEmail, sendStudentQuotaEmail } from "./mailer";
 import { getSetting } from "./settings";
 
 const STORAGE_SAMPLE_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const QUOTA_ALERT_DEDUP_MS = 6 * 60 * 60 * 1000; // re-alert a PI about the same pool at most every 6h
+const STUDENT_QUOTA_ALERT_DEDUP_MS = 24 * 60 * 60 * 1000;
 
 interface PlacementRef {
   placement_id: number;
   lab_id: number;
+  fast_quota_bytes: number;
+  cold_quota_bytes: number | null;
+  student_fast_quota_bytes: number | null;
+  student_cold_quota_bytes: number | null;
 }
 
 /** Resolve a (lab name, node name) to its placement, or null when this node doesn't host that lab. */
 function placementByLabNode(labName: string, node: string): PlacementRef | null {
   const row = db()
     .prepare(
-      `SELECT p.id AS placement_id, p.lab_id AS lab_id
+      `SELECT p.id AS placement_id, p.lab_id AS lab_id, p.fast_quota_bytes, p.cold_quota_bytes,
+              p.student_fast_quota_bytes, p.student_cold_quota_bytes
        FROM lab_placements p
        JOIN labs ON labs.id = p.lab_id
        JOIN nodes ON nodes.id = p.node_id
@@ -111,6 +117,15 @@ export function ingestTelemetry(node: string, payload: any): void {
     if (!shouldSample(ref.placement_id, studentId, ds.tier, ds.used_bytes, now, scanDerived)) continue;
     insertSample.run(ref.placement_id, ref.lab_id, studentId, ds.tier, ds.used_bytes,
       ds.quota_bytes ?? null, now);
+    const assignedUserQuota = ds.tier === "fast"
+      ? (ds.quota_bytes ?? ref.student_fast_quota_bytes ?? ref.fast_quota_bytes)
+      : ds.tier === "cold"
+        ? (ds.quota_bytes ?? ref.student_cold_quota_bytes ?? ref.cold_quota_bytes)
+        : null;
+    if (studentId !== null && assignedUserQuota) {
+      maybeStudentQuotaAlert(ref.placement_id, ref.lab_id, studentId, node, ds.tier,
+        ds.used_bytes, assignedUserQuota, now);
+    }
     // The rootfs tier is the container writable layer (installed software), tracked for the
     // labquota breakdown but not a managed quota — never raise a PI quota alert on it.
     if (!ds.user && ds.quota_bytes && ds.tier !== "rootfs") {
@@ -136,16 +151,69 @@ export function ingestTelemetry(node: string, payload: any): void {
   const tx = db().transaction(() => {
     db().prepare("DELETE FROM gpu_snapshot WHERE node = ?").run(node);
     const ins = db().prepare(
-      `INSERT OR REPLACE INTO gpu_snapshot (node, pid, user, lab, placement_id, vram_bytes, util, ts)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT OR REPLACE INTO gpu_snapshot
+         (node, pid, user, lab, placement_id, vram_bytes, util, ts, cmd, started_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const p of gpu) {
       const labName = typeof p.lab === "string" ? p.lab : null;
       const placementId = labName ? (placementByLabNode(labName, node)?.placement_id ?? null) : null;
-      ins.run(node, p.pid, p.user ?? null, labName, placementId, p.vram_bytes ?? null, p.util ?? null, now);
+      ins.run(node, p.pid, p.user ?? null, labName, placementId, p.vram_bytes ?? null,
+        p.util ?? null, now, typeof p.cmd === "string" ? p.cmd.slice(0, 200) : null,
+        Number.isFinite(p.started_at) ? p.started_at : null);
     }
   });
   tx();
+}
+
+function maybeStudentQuotaAlert(
+  placementId: number,
+  labId: number,
+  studentId: number,
+  node: string,
+  pool: string,
+  used: number,
+  quota: number,
+  now: number,
+): void {
+  if (!getSetting("studentQuotaAlertsEnabled")) return;
+  const pct = Math.round((used / quota) * 100);
+  if (pct <= getSetting("studentQuotaAlertPct")) return;
+  const recent = db().prepare(
+    `SELECT ts FROM student_quota_alerts
+     WHERE placement_id = ? AND student_id = ? AND pool = ? ORDER BY ts DESC LIMIT 1`,
+  ).get(placementId, studentId, pool) as { ts: number } | undefined;
+  if (recent && now - recent.ts < STUDENT_QUOTA_ALERT_DEDUP_MS) return;
+
+  const recipient = db().prepare(
+    `SELECT students.username, students.email, students.name, labs.name AS lab_name,
+            nodes.alias AS node_alias
+     FROM students JOIN labs ON labs.id = ? JOIN nodes ON nodes.name = ?
+     WHERE students.id = ?`,
+  ).get(labId, node, studentId) as {
+    username: string; email: string | null; name: string | null;
+    lab_name: string; node_alias: string | null;
+  } | undefined;
+  if (!recipient?.email) return;
+  db().prepare(
+    `INSERT INTO student_quota_alerts (placement_id, student_id, pool, pct, ts)
+     VALUES (?, ?, ?, ?, ?)`,
+  ).run(placementId, studentId, pool, pct, now);
+  const info = {
+    name: recipient.name || recipient.username,
+    username: recipient.username,
+    lab: recipient.lab_name,
+    node: recipient.node_alias?.trim() || node,
+    pool,
+    pct,
+    usedHuman: fmtBytes(used),
+    quotaHuman: fmtBytes(quota),
+  };
+  void sendStudentQuotaEmail({ to: recipient.email, ...info });
+  if (getSetting("studentQuotaNotifyAdmins")) {
+    const admins = db().prepare("SELECT email FROM admins WHERE is_active = 1").all() as { email: string }[];
+    for (const admin of admins) void sendStudentQuotaEmail({ to: admin.email, ...info });
+  }
 }
 
 /** Persist the agent-reported cold mount path + readiness. backend is admin-set, so we don't store it. */

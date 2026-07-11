@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 const SAMPLE = `role,username,email,name,student_id
-pi,,jane.smith@example.edu,Dr. Jane Smith,
+pi,jsmith,jane.smith@example.edu,Dr. Jane Smith,
 student,jdoe,jdoe@example.edu,John Doe,100001
 student,asmith,asmith@example.edu,Alice Smith,100002`;
 
@@ -114,8 +114,8 @@ export function RosterImportForm({ labId, preview, apply }: Props) {
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
         Columns: <code>role,username,email,name,student_id</code>. <code>role</code> is{" "}
-        <code>student</code> (the default) or <code>pi</code>; a single <code>pi</code> row sets this
-        lab&apos;s PI (no need to repeat it on every student row). The whole file is validated before
+        <code>student</code> (the default) or <code>pi</code>; a single <code>pi</code> row creates the
+        lab&apos;s protected PI login (no need to repeat it on every student row). The whole file is validated before
         anything is written, and re-importing is idempotent.
       </p>
       <Textarea

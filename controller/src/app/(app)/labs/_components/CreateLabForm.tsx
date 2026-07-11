@@ -27,12 +27,16 @@ export function CreateLabForm({ labs, action }: Props) {
         <Input name="name" required placeholder="bio-x" />
       </div>
       <div>
+        <Label>PI login username</Label>
+        <Input name="piUsername" required placeholder="jsmith" />
+      </div>
+      <div>
         <Label>PI name</Label>
-        <Input name="piName" placeholder="Dr. Jane Smith" />
+        <Input name="piName" required placeholder="Dr. Jane Smith" />
       </div>
       <div>
         <Label>PI email</Label>
-        <Input name="piEmail" type="email" placeholder="pi@uga.edu" />
+        <Input name="piEmail" type="email" required placeholder="pi@uga.edu" />
       </div>
       {labs.length > 0 && (
         <div>

@@ -86,6 +86,10 @@ export interface Settings {
   usageReportStudentBody: string;
   usageReportPiSubject: string;
   usageReportPiBody: string;
+  // Sent once to the PI when one node placement and all of its accounts have passed provisioning
+  // (including a real password-authenticated SSH login performed by the node agent).
+  placementCompleteEmailSubject: string;
+  placementCompleteEmailBody: string;
   // The "Send test" email under Settings → Email. No variables. Empty falls back to the default.
   testEmailSubject: string;
   testEmailBody: string;
@@ -100,6 +104,11 @@ export interface Settings {
   logMaxEntries: number; // keep at most this many rows
   logMaxSizeMb: number; // keep the table's textual content under ~this many MB
   quotaAlertPct: number; // email the PI when a lab pool crosses this percent
+  studentQuotaAlertsEnabled: boolean; // warn a user when their own quota crosses the threshold
+  studentQuotaAlertPct: number;
+  studentQuotaNotifyAdmins: boolean; // copy registered admins on automatic user quota warnings
+  studentQuotaEmailSubject: string;
+  studentQuotaEmailBody: string;
   // WebDAV backup target. Backups are written under <webdavUrl>/<webdavBaseDir>/<env> where env is
   // "prod" or "dev" (derived from NODE_ENV) so a shared store keeps the two deployments separate.
   webdavUrl: string; // connection root, e.g. https://dav.example.com/dav
@@ -221,6 +230,24 @@ Per-student usage on the {pool} pool:
 
 You may want to ask students to clean up unneeded data, or request a larger quota.`;
 
+export const STUDENT_QUOTA_EMAIL_VARS: { key: string; desc: string }[] = [
+  { key: "name", desc: "user's full name (falls back to username)" },
+  { key: "username", desc: "login username" },
+  { key: "lab", desc: "lab name" },
+  { key: "node", desc: "node name or alias" },
+  { key: "pool", desc: "fast or cold storage" },
+  { key: "pct", desc: "percentage of the user's quota consumed" },
+  { key: "used", desc: "human-readable storage used" },
+  { key: "quota", desc: "human-readable user quota" },
+];
+
+export const DEFAULT_STUDENT_QUOTA_SUBJECT = "[{lab}] Your {pool} storage is {pct}% full";
+export const DEFAULT_STUDENT_QUOTA_BODY = `Hi {name},
+
+Your account {username} on {node} is using {used} of its {quota} {pool}-storage quota ({pct}%).
+
+Please remove files you no longer need or contact the lab administrator if the assignment needs to be reviewed. You can check current usage by running \`labquota\` after signing in.`;
+
 /** Placeholders the storage-usage-report emails understand, shown to the admin in the Templates UI. */
 export const USAGE_REPORT_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "name", desc: "recipient's name (student name/username, or PI name)" },
@@ -252,6 +279,32 @@ Here is the current storage usage report for your lab '{lab}' on node {node}. Pl
 {report}
 
 Per-student numbers come from the most recent nightly scan; lab totals are live. Students can check their own usage anytime by running \`labquota\` inside the lab container.`;
+
+export const PLACEMENT_COMPLETE_EMAIL_VARS: { key: string; desc: string }[] = [
+  { key: "name", desc: "PI's name (falls back to username)" },
+  { key: "lab", desc: "lab name" },
+  { key: "node", desc: "node name or alias" },
+  { key: "usernames", desc: "all verified login usernames, one per line" },
+  { key: "fast_quota", desc: "placement fast-storage quota" },
+  { key: "cold_quota", desc: "placement cold-storage quota or owner-managed status" },
+  { key: "student_fast_quota", desc: "per-user fast quota or shared status" },
+  { key: "student_cold_quota", desc: "per-user cold quota or shared/owner-managed status" },
+];
+
+export const DEFAULT_PLACEMENT_COMPLETE_SUBJECT = "[{lab}] Node setup complete — {node}";
+
+export const DEFAULT_PLACEMENT_COMPLETE_BODY = `Hi {name},
+
+Setup for lab "{lab}" on node {node} is complete. The node agent successfully signed in over SSH with every initial credential before this message was sent.
+
+Verified usernames:
+{usernames}
+
+Current quota assignment:
+  Fast storage: {fast_quota}
+  Cold storage: {cold_quota}
+  Per-user fast: {student_fast_quota}
+  Per-user cold: {student_cold_quota}`;
 
 export const DEFAULT_TEST_SUBJECT = "Lab Manager test email";
 
@@ -297,10 +350,17 @@ export const DEFAULT_SETTINGS: Settings = {
   removalEmailBody: DEFAULT_REMOVAL_BODY,
   quotaEmailSubject: DEFAULT_QUOTA_SUBJECT,
   quotaEmailBody: DEFAULT_QUOTA_BODY,
+  studentQuotaAlertsEnabled: true,
+  studentQuotaAlertPct: 50,
+  studentQuotaNotifyAdmins: false,
+  studentQuotaEmailSubject: DEFAULT_STUDENT_QUOTA_SUBJECT,
+  studentQuotaEmailBody: DEFAULT_STUDENT_QUOTA_BODY,
   usageReportStudentSubject: DEFAULT_USAGE_REPORT_STUDENT_SUBJECT,
   usageReportStudentBody: DEFAULT_USAGE_REPORT_STUDENT_BODY,
   usageReportPiSubject: DEFAULT_USAGE_REPORT_PI_SUBJECT,
   usageReportPiBody: DEFAULT_USAGE_REPORT_PI_BODY,
+  placementCompleteEmailSubject: DEFAULT_PLACEMENT_COMPLETE_SUBJECT,
+  placementCompleteEmailBody: DEFAULT_PLACEMENT_COMPLETE_BODY,
   testEmailSubject: DEFAULT_TEST_SUBJECT,
   testEmailBody: DEFAULT_TEST_BODY,
   alertsEnabled: true,

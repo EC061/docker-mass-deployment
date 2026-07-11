@@ -11,6 +11,7 @@ process to the right lab/student and email them.
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import asdict, dataclass
 
@@ -32,6 +33,7 @@ class GpuProcess:
     managed: bool = False
     lab: str | None = None  # from the lab-agent.lab label (not the container name)
     cmd: str | None = None  # process command line (path + args), for kill-event forensics
+    started_at: int | None = None  # wall-clock epoch milliseconds, for the controller's live table
 
 
 def _query_compute_apps() -> dict[int, int]:
@@ -196,6 +198,18 @@ def pid_start_time(pid: int) -> int | None:
         return None
 
 
+def pid_started_at(pid: int) -> int | None:
+    """Convert the kernel start tick to an epoch-millisecond wall-clock timestamp."""
+    ticks = pid_start_time(pid)
+    if ticks is None:
+        return None
+    try:
+        with open("/proc/stat", encoding="utf-8") as fh:
+            boot = next(int(line.split()[1]) for line in fh if line.startswith("btime "))
+        hz = os.sysconf("SC_CLK_TCK")
+        return int((boot + ticks / hz) * 1000)
+    except (OSError, StopIteration, ValueError):
+        return None
 def kill_pid(pid: int, expected_start_time: int | None = None) -> bool:
     """Kill a host process (the agent runs as root). Returns True if the signal was sent.
 
@@ -235,6 +249,7 @@ def list_gpu_processes() -> list[dict]:
                     managed=managed,
                     lab=lab,
                     cmd=proc_cmd(pid),
+                    started_at=pid_started_at(pid),
                 )
             )
         )

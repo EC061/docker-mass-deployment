@@ -145,8 +145,18 @@ export default async function LabDetail({
       <Card>
         <CardContent className="space-y-3">
           <h3 className="text-base font-semibold">PI / metadata</h3>
-          <form action={updateLabMetaAction} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+          <form action={updateLabMetaAction} className="grid grid-cols-1 gap-3 sm:grid-cols-4">
             <input type="hidden" name="labId" value={lab.id} />
+            <div>
+              <Label>PI login username</Label>
+              <Input
+                name="piUsername"
+                defaultValue={members.find((member) => member.is_pi)?.username ?? ""}
+                readOnly={lab.pi_student_id != null}
+                required
+                placeholder="jsmith"
+              />
+            </div>
             <div>
               <Label>PI name</Label>
               <Input name="piName" defaultValue={lab.pi_name ?? ""} placeholder="Dr. Jane Smith" />
@@ -242,6 +252,9 @@ export default async function LabDetail({
                     <TableCell>{m.name ?? "—"}</TableCell>
                     <TableCell>{m.student_id ?? "—"}</TableCell>
                     <TableCell className="text-right">
+                      {m.is_pi ? (
+                        <Badge variant="default">PI · protected</Badge>
+                      ) : (
                       <form action={removeMemberAction} className="flex items-center justify-end gap-2">
                         <input type="hidden" name="labId" value={lab.id} />
                         <input type="hidden" name="studentId" value={m.id} />
@@ -256,6 +269,7 @@ export default async function LabDetail({
                           Remove
                         </ConfirmButton>
                       </form>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -11,6 +11,7 @@ process.env.SESSION_SECRET = "test-session-secret-test-session";
 
 vi.mock("../src/lib/mailer", () => ({
   sendCredentialEmail: vi.fn(async () => ({ sent: true })),
+  sendPlacementCompleteEmail: vi.fn(async () => ({ sent: true })),
   sendRemovalEmail: vi.fn(async () => ({ sent: true })),
 }));
 
@@ -30,7 +31,7 @@ let labId = 0;
 
 beforeEach(() => {
   const d = dbmod.db();
-  for (const t of ["placement_members", "lab_members", "lab_placements", "storage_samples", "quota_alerts", "students", "labs"]) {
+  for (const t of ["placement_members", "lab_members", "lab_placements", "storage_samples", "quota_alerts", "labs", "students"]) {
     d.prepare(`DELETE FROM ${t}`).run();
   }
   labId = labsmod.createLab({ name: "smith-lab" }).id;
@@ -64,25 +65,29 @@ describe("planRosterImport / applyRosterImport", () => {
     expect(plan.membershipsToAdd).toEqual(["alice"]);
   });
 
-  it("applies a 'pi' row to the lab's PI metadata without creating a member", async () => {
+  it("applies a 'pi' row as protected PI metadata and membership", async () => {
     const csv = [
       HEADER,
-      "pi,,jane@x.edu,Dr. Jane Smith,",
+      "pi,profjane,jane@x.edu,Dr. Jane Smith,",
       "student,jdoe,jdoe@x.edu,John Doe,100001",
     ].join("\n");
     const plan = imp.planRosterImport(labId, csv);
-    expect(plan.piUpdate).toMatchObject({ piName: "Dr. Jane Smith", piEmail: "jane@x.edu" });
-    expect(plan.membershipsToAdd).toEqual(["jdoe"]);
+    expect(plan.piUpdate).toMatchObject({ piUsername: "profjane", piName: "Dr. Jane Smith", piEmail: "jane@x.edu" });
+    expect(plan.membershipsToAdd).toEqual(["profjane", "jdoe"]);
 
     const res = await imp.applyRosterImport(labId, csv);
     expect(res.piUpdated).toBe(true);
     const lab = dbmod.db().prepare("SELECT pi_name, pi_email FROM labs WHERE id=?").get(labId) as { pi_name: string; pi_email: string };
     expect(lab).toMatchObject({ pi_name: "Dr. Jane Smith", pi_email: "jane@x.edu" });
-    expect(count(`SELECT COUNT(*) AS n FROM lab_members WHERE lab_id=${labId}`)).toBe(1);
+    expect((dbmod.db().prepare(
+      `SELECT COUNT(*) AS n FROM lab_members lm JOIN labs ON labs.id=lm.lab_id
+       WHERE lm.lab_id=? AND lm.student_id=labs.pi_student_id`,
+    ).get(labId) as any).n).toBe(1);
+    expect(count(`SELECT COUNT(*) AS n FROM lab_members WHERE lab_id=${labId}`)).toBe(2);
   });
 
   it("is idempotent on reimport", async () => {
-    const csv = [HEADER, "pi,,pi@x.edu,PI,", "student,alice,alice@x.edu,Alice,1"].join("\n");
+    const csv = [HEADER, "pi,profpi,pi@x.edu,PI,", "student,alice,alice@x.edu,Alice,1"].join("\n");
     await imp.applyRosterImport(labId, csv);
     const plan2 = imp.planRosterImport(labId, csv);
     expect(plan2.ok).toBe(true);
@@ -117,8 +122,8 @@ describe("planRosterImport / applyRosterImport", () => {
   it("flags conflicting PI rows", () => {
     const plan = imp.planRosterImport(labId, [
       HEADER,
-      "pi,,a@x.edu,Dr. A,",
-      "pi,,b@x.edu,Dr. B,",
+      "pi,profa,a@x.edu,Dr. A,",
+      "pi,profb,b@x.edu,Dr. B,",
     ].join("\n"));
     expect(plan.ok).toBe(false);
     expect(plan.conflicts.some((c) => /conflicting PI/.test(c.message))).toBe(true);

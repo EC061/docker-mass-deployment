@@ -53,3 +53,17 @@ def test_remove_user_only_removes_account(monkeypatch):
     assert "userdel alice" in script
     assert "userdel -r" not in script
     assert "/fast" not in script and "/cold" not in script
+
+
+def test_verify_ssh_login_uses_password_auth_without_secret_in_argv(monkeypatch):
+    cap = Capture()
+    monkeypatch.setattr(users, "exec_in", cap)
+    users.verify_ssh_login("lab-bio", "alice", "initial-secret")
+    container, argv, script = cap.calls[0]
+    assert container == "lab-bio"
+    assert argv == ["sh", "-s"]
+    assert "initial-secret" not in " ".join(argv)
+    assert "SSH_ASKPASS_REQUIRE=force" in script
+    assert "PreferredAuthentications=password" in script
+    assert "alice@127.0.0.1" in script
+    assert "initial-secret" in script

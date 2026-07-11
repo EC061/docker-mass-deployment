@@ -14,7 +14,8 @@ vi.mock("../src/lib/queue", () => ({ enqueueTask }));
 
 const sendCredentialEmail = vi.fn(async (..._args: unknown[]) => ({ sent: true }));
 const sendRemovalEmail = vi.fn(async () => ({ sent: true }));
-vi.mock("../src/lib/mailer", () => ({ sendCredentialEmail, sendRemovalEmail }));
+const sendPlacementCompleteEmail = vi.fn(async () => ({ sent: true }));
+vi.mock("../src/lib/mailer", () => ({ sendCredentialEmail, sendRemovalEmail, sendPlacementCompleteEmail }));
 
 let dbmod: typeof import("../src/lib/db");
 let students: typeof import("../src/lib/students");
@@ -82,6 +83,19 @@ describe("findOrCreateStudent", () => {
 });
 
 describe("addStudentToLab (provisions on every placement)", () => {
+  it("provisions the PI through the student flow and protects the account from removal", async () => {
+    const res = await students.ensurePiAccess(
+      rosterOnlyLabId,
+      { username: "prof", email: "prof@uga.edu", name: "Dr. Prof" },
+      "admin",
+    );
+    expect(res.provisioned).toHaveLength(0);
+    const pi = students.listMembers(rosterOnlyLabId).find((member) => member.username === "prof")!;
+    expect(pi.is_pi).toBe(1);
+    expect(() => students.removeStudentFromLab(rosterOnlyLabId, pi.id, true, "admin"))
+      .toThrow(/PI account is protected/);
+  });
+
   it("queues student.add but withholds credentials until the agent confirms success", async () => {
     const res = await students.addStudentToLab(labId, { username: "alice", email: "a@uga.edu" }, "admin");
     expect(res.student.username).toBe("alice");

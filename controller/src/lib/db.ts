@@ -643,6 +643,42 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
     ALTER TABLE lab_placements ADD COLUMN student_cold_quota_bytes INTEGER;
     `,
   },
+  {
+    // A PI is a protected member of the logical lab: they are provisioned through the exact same
+    // placement_members/student.add/credential flow as students, but roster removal refuses the
+    // account while it is designated as the lab PI. Placement completion mail is sent once after
+    // the container and every protected/ordinary member have passed their agent-side SSH check.
+    id: "0024_pi_access_and_completion",
+    sql: `
+    ALTER TABLE labs ADD COLUMN pi_student_id INTEGER REFERENCES students(id) ON DELETE RESTRICT;
+    ALTER TABLE lab_placements ADD COLUMN completion_email_sent_at INTEGER;
+    `,
+  },
+  {
+    // The live GPU snapshot already receives command and kernel start identity from the agent.
+    // Persist the useful display forms too: command/path and an epoch-millisecond start time.
+    id: "0025_gpu_snapshot_process_details",
+    sql: `
+    ALTER TABLE gpu_snapshot ADD COLUMN cmd TEXT;
+    ALTER TABLE gpu_snapshot ADD COLUMN started_at INTEGER;
+    `,
+  },
+  {
+    // Deduplicate automatic per-user quota warnings independently per placement, user, and pool.
+    id: "0026_student_quota_alerts",
+    sql: `
+    CREATE TABLE student_quota_alerts (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      placement_id INTEGER NOT NULL REFERENCES lab_placements(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      pool TEXT NOT NULL,
+      pct REAL NOT NULL,
+      ts INTEGER NOT NULL
+    );
+    CREATE INDEX idx_student_quota_alert_lookup
+      ON student_quota_alerts(placement_id, student_id, pool, ts);
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

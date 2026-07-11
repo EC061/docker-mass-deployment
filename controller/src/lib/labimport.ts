@@ -4,10 +4,9 @@
  *
  *   role,username,email,name,student_id
  *
- * `role` is `student` (the default when the column is blank or absent) or `pi`. A `pi` row carries the
- * lab's PI metadata only — its `name`/`email` become the lab's PI name/email and any username/student_id
- * on it is ignored (the PI is not a roster member). `student` rows create/update the global student
- * record and add a membership to THIS lab.
+ * `role` is `student` (the default when the column is blank or absent) or `pi`. A `pi` row carries
+ * the PI's login username/name/email and enters the same membership + per-placement provisioning
+ * flow as a student; the resulting membership is protected from removal while designated as PI.
  *
  * The whole file is parsed and validated against the current DB BEFORE any write, producing a plan
  * (PI change, students to create/update, memberships to add, plus conflicts / invalid rows). The plan is
@@ -48,6 +47,7 @@ export interface StudentUpdate {
 }
 /** The PI fields that would change on this lab (only changed, non-blank fields are present). */
 export interface PiUpdate {
+  piUsername?: string;
   piName?: string;
   piEmail?: string;
 }
@@ -129,9 +129,12 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
     const semail = lower(r.email) || null;
 
     if (role === "pi") {
-      if (!sname && !semail) return void bad("a 'pi' row needs a name or email");
+      if (!user) return void bad("username required on a pi row");
+      if (!USERNAME_RE.test(user)) return void bad(`invalid username '${user}'`);
+      if (!semail) return void bad("email required on a pi row");
       if (semail && !EMAIL_RE.test(semail)) return void bad("invalid pi email");
-      valid.push({ line, role, user: null, sid: null, sname, semail });
+      if (sid && !STUDENT_ID_RE.test(sid)) return void bad(`invalid student_id '${sid}'`);
+      valid.push({ line, role, user, sid, sname, semail });
       return;
     }
     // student row
@@ -145,8 +148,13 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
   // Phase B — PI metadata: at most one effective PI (repeated 'pi' rows must agree).
   let piName: string | null = null;
   let piEmail: string | null = null;
+  let piUsername: string | null = null;
   for (const r of valid) {
     if (r.role !== "pi") continue;
+    if (r.user) {
+      if (piUsername && piUsername !== r.user) conflicts.push({ line: r.line, message: "conflicting PI username in 'pi' rows" });
+      else piUsername = r.user;
+    }
     if (r.sname) {
       if (piName && piName !== r.sname) conflicts.push({ line: r.line, message: "conflicting PI name in 'pi' rows" });
       else piName = r.sname;
@@ -173,7 +181,7 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
   interface BatchStudent { sid: string | null; name: string | null; email: string | null; line: number }
   const batch = new Map<string, BatchStudent>();
   for (const r of valid) {
-    if (r.role !== "student" || !r.user) continue;
+    if (!r.user) continue;
     const prev = batch.get(r.user);
     if (!prev) {
       batch.set(r.user, { sid: r.sid, name: r.sname, email: r.semail, line: r.line });
@@ -222,9 +230,13 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
   // PI update — only changed, non-blank fields relative to the lab's current PI.
   let piUpdate: PiUpdate | null = null;
   const pi: PiUpdate = {};
+  const currentPi = lab.pi_student_id == null
+    ? null
+    : [...dbByName.values()].find((student) => student.id === lab.pi_student_id);
+  if (piUsername !== null && piUsername !== currentPi?.username) pi.piUsername = piUsername;
   if (piName !== null && piName !== lab.pi_name) pi.piName = piName;
   if (piEmail !== null && piEmail !== lab.pi_email) pi.piEmail = piEmail;
-  if (pi.piName !== undefined || pi.piEmail !== undefined) piUpdate = pi;
+  if (pi.piUsername !== undefined || pi.piName !== undefined || pi.piEmail !== undefined) piUpdate = pi;
 
   // Memberships to add (dedup; skip students already in this lab's roster).
   const membershipsToAdd: string[] = [];
@@ -306,6 +318,11 @@ export async function applyRosterImport(labId: number, text: string, actor?: str
       if (s.name !== undefined) stmt("UPDATE students SET name = ? WHERE username = ?").run(s.name, s.username);
       if (s.email !== undefined) stmt("UPDATE students SET email = ? WHERE username = ?").run(s.email, s.username);
       stmt("UPDATE students SET updated_at = ? WHERE username = ?").run(now, s.username);
+    }
+    if (plan.piUpdate?.piUsername) {
+      const piId = studentId.get(plan.piUpdate.piUsername);
+      if (!piId) throw new Error("PI account was not created during roster import");
+      stmt("UPDATE labs SET pi_student_id = ? WHERE id = ?").run(piId, labId);
     }
     for (const user of plan.membershipsToAdd) {
       const sid = studentId.get(user)!;

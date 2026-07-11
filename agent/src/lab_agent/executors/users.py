@@ -87,6 +87,31 @@ def set_password(container: str, username: str, password: str) -> CommandResult:
     return _run_script(container, script)
 
 
+def verify_ssh_login(container: str, username: str, password: str) -> CommandResult:
+    """Prove the initial credential through sshd, not merely through passwd/account inspection.
+
+    SSH_ASKPASS supplies the password without putting it in argv or requiring sshpass. The helper
+    file lives only inside the container's /run tmpfs and is removed by the trap on every exit.
+    """
+    validate_username(username)
+    script = f"""set -eu
+askpass=$(mktemp /run/lab-agent-askpass.XXXXXX)
+trap 'rm -f "$askpass"' EXIT
+cat >"$askpass" <<'ASKPASS'
+#!/bin/sh
+printf '%s\\n' {_shell_quote(password)}
+ASKPASS
+chmod 0700 "$askpass"
+DISPLAY=lab-agent SSH_ASKPASS="$askpass" SSH_ASKPASS_REQUIRE=force \\
+  setsid ssh -F none -o BatchMode=no -o PreferredAuthentications=password \\
+  -o PubkeyAuthentication=no -o NumberOfPasswordPrompts=1 \\
+  -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \\
+  -o ConnectTimeout=10 {username}@127.0.0.1 \\
+  'test "$(id -un)" = {_shell_quote(username)}'
+"""
+    return _run_script(container, script)
+
+
 def remove_user(
     container: str,
     username: str,

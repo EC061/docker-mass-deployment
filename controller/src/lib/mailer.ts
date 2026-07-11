@@ -17,10 +17,14 @@ import {
   DEFAULT_REMOVAL_SUBJECT,
   DEFAULT_TEST_BODY,
   DEFAULT_TEST_SUBJECT,
+  DEFAULT_STUDENT_QUOTA_BODY,
+  DEFAULT_STUDENT_QUOTA_SUBJECT,
   DEFAULT_USAGE_REPORT_PI_BODY,
   DEFAULT_USAGE_REPORT_PI_SUBJECT,
   DEFAULT_USAGE_REPORT_STUDENT_BODY,
   DEFAULT_USAGE_REPORT_STUDENT_SUBJECT,
+  DEFAULT_PLACEMENT_COMPLETE_BODY,
+  DEFAULT_PLACEMENT_COMPLETE_SUBJECT,
   DEFAULT_WELCOME_BODY,
   DEFAULT_WELCOME_SUBJECT,
   REMOVAL_DATA_DELETED,
@@ -195,6 +199,39 @@ export async function sendQuotaEmail(info: QuotaEmail): Promise<SendResult> {
   return sendMail(info.to, subject, body);
 }
 
+export interface StudentQuotaEmail {
+  to: string;
+  name: string;
+  username: string;
+  lab: string;
+  node: string;
+  pool: string;
+  pct: number;
+  usedHuman: string;
+  quotaHuman: string;
+}
+
+export function renderStudentQuotaEmail(info: Omit<StudentQuotaEmail, "to">): { subject: string; body: string } {
+  const vars = {
+    name: info.name,
+    username: info.username,
+    lab: info.lab,
+    node: info.node,
+    pool: info.pool,
+    pct: info.pct,
+    used: info.usedHuman,
+    quota: info.quotaHuman,
+  };
+  const subject = getSetting("studentQuotaEmailSubject").trim() || DEFAULT_STUDENT_QUOTA_SUBJECT;
+  const body = getSetting("studentQuotaEmailBody").trim() || DEFAULT_STUDENT_QUOTA_BODY;
+  return { subject: renderTemplate(subject, vars), body: renderTemplate(body, vars) };
+}
+
+export async function sendStudentQuotaEmail(info: StudentQuotaEmail): Promise<SendResult> {
+  const { subject, body } = renderStudentQuotaEmail(info);
+  return sendMail(info.to, subject, body);
+}
+
 export type UsageReportKind = "student" | "pi";
 
 export interface UsageReportEmailVars {
@@ -228,6 +265,41 @@ export async function sendUsageReportEmail(
 ): Promise<SendResult> {
   const { subject, body } = renderUsageReportEmail(kind, vars);
   return sendMail(to, subject, body);
+}
+
+export interface PlacementCompleteEmail {
+  to: string;
+  name: string;
+  lab: string;
+  node: string;
+  usernames: string[];
+  fastQuota: string;
+  coldQuota: string;
+  studentFastQuota: string;
+  studentColdQuota: string;
+}
+
+export function renderPlacementCompleteEmail(
+  info: Omit<PlacementCompleteEmail, "to">,
+): { subject: string; body: string } {
+  const vars = {
+    name: info.name,
+    lab: info.lab,
+    node: info.node,
+    usernames: info.usernames.map((username) => `  ${username}`).join("\n"),
+    fast_quota: info.fastQuota,
+    cold_quota: info.coldQuota,
+    student_fast_quota: info.studentFastQuota,
+    student_cold_quota: info.studentColdQuota,
+  };
+  const subject = getSetting("placementCompleteEmailSubject").trim() || DEFAULT_PLACEMENT_COMPLETE_SUBJECT;
+  const body = getSetting("placementCompleteEmailBody").trim() || DEFAULT_PLACEMENT_COMPLETE_BODY;
+  return { subject: renderTemplate(subject, vars), body: renderTemplate(body, vars) };
+}
+
+export async function sendPlacementCompleteEmail(info: PlacementCompleteEmail): Promise<SendResult> {
+  const { subject, body } = renderPlacementCompleteEmail(info);
+  return sendMail(info.to, subject, body);
 }
 
 /** Build the {placeholder} substitution map for the welcome email from a credential payload. */

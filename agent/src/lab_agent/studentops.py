@@ -95,8 +95,9 @@ def add_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     # The directories already have the student's stable IDs; account creation populates the home
     # and creates its cold-storage symlink.
     users.add_user(docker.container_name(lab, cfg.node_name), username, password, uid, gid)
-    return {"lab": lab, "username": username, "uid": uid}, (
-        f"added student '{username}' (uid={uid}) to lab '{lab}'"
+    users.verify_ssh_login(docker.container_name(lab, cfg.node_name), username, password)
+    return {"lab": lab, "username": username, "uid": uid, "ssh_verified": True}, (
+        f"added student '{username}' (uid={uid}) to lab '{lab}'; initial SSH login verified"
     )
 
 
