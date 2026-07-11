@@ -76,7 +76,7 @@ function EditableTemplate({ name, trigger, action, subject, body, vars, bodyRows
     <Card>
       <CardContent className="space-y-3">
         <div className="space-y-1">
-          <h3 className="text-base font-semibold">{name}</h3>
+          <h2 className="text-base font-semibold">{name}</h2>
           <p className="text-sm text-muted-foreground">{trigger}</p>
         </div>
         <form action={action} className="grid gap-3">
@@ -163,8 +163,8 @@ export default async function EmailTemplatesPage({
         <p className="text-sm text-muted-foreground">
           Every email the controller sends is edited here. Use the <code>{"{variables}"}</code> listed
           under each one; an unknown <code>{"{token}"}</code> is left in the text as-is so typos are
-          visible, and a blank subject falls back to the built-in default. All email requires SMTP
-          configured under{" "}
+          visible, and a blank subject falls back to the built-in default. All email delivery requires
+          SMTP to be configured under{" "}
           <Link href="/settings" className="text-primary hover:underline">
             Settings → Email
           </Link>
@@ -186,7 +186,7 @@ export default async function EmailTemplatesPage({
 
       <EditableTemplate
         name="Node setup complete — PI"
-        trigger="Sent once to the PI after a placement container and every student/PI login have passed SSH verification."
+        trigger="Sent once to the PI after the placement container is running and every student and PI login has passed SSH verification."
         action={savePlacementCompleteEmailAction}
         subject={s.placementCompleteEmailSubject}
         body={s.placementCompleteEmailBody}
@@ -277,7 +277,7 @@ export default async function EmailTemplatesPage({
       <Card>
         <CardContent className="space-y-4">
           <div className="space-y-1">
-            <h3 className="text-base font-semibold">Announcement templates</h3>
+            <h2 className="text-base font-semibold">Announcement templates</h2>
             <p className="text-sm text-muted-foreground">
               Prebuilt starting points offered in the{" "}
               <Link href="/announcements" className="text-primary hover:underline">

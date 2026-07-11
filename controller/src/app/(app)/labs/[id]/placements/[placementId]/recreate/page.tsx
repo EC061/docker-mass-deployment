@@ -63,7 +63,7 @@ export default async function RecreatePage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Proposed settings</h3>
+          <h2 className="text-base font-semibold">Proposed settings</h2>
           <form action={recreatePlacementSettingsAction} className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             <input type="hidden" name="placementId" value={placement.id} />
             {field("Base image", "image", placement.image)}

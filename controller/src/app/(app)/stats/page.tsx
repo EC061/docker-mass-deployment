@@ -100,7 +100,7 @@ function LabBlock({ lab }: { lab: LabStats }) {
       {/* Container-level + lab totals — recomputed by the agent on a ~5-min cadence, not per heartbeat. */}
       <div className="rounded-md border border-border/60 bg-muted/20 p-3">
         <div className="mb-2 flex flex-wrap items-center gap-x-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          <span>Lab storage · checked every 5 min</span>
+          <span>Lab storage · checked every 5 minutes</span>
           <span className={lab.liveStale ? "text-amber-500" : "text-muted-foreground/70"}>
             · {lab.liveUpdatedAt ? `updated ${ago(lab.liveUpdatedAt)}` : "no data yet"}
           </span>
@@ -300,7 +300,7 @@ function PerNodeUsageSection({
     <Card>
       <CardContent className="space-y-4">
         <div className="space-y-1">
-          <h3 className="text-base font-semibold">Per-node usage</h3>
+          <h2 className="text-base font-semibold">Per-node usage</h2>
           <p className="text-sm text-muted-foreground">
             Storage used on each node&apos;s ZFS pools — fast and cold — reported by the agent every
             heartbeat (used vs. total capacity), so it reflects real on-disk usage even before any lab
@@ -321,10 +321,10 @@ function PerNodeUsageSection({
             ))}
 
             <div className="space-y-3 rounded-md border border-border/60 p-3">
-              <h4 className="text-sm font-semibold">
+              <h3 className="text-sm font-semibold">
                 {groups.length === 0 ? "All nodes" : "Ungrouped"}{" "}
                 <span className="font-normal text-muted-foreground">· {ungrouped.length} node{ungrouped.length === 1 ? "" : "s"}</span>
-              </h4>
+              </h3>
               <NodeUsageTable nodes={ungrouped} />
             </div>
           </>
@@ -364,7 +364,7 @@ export default async function StatsPage({
             <strong className="text-foreground">Lab storage</strong> row (container image writable
             layer, plus Fast/Cold usage against the lab quota) is recomputed on the node about every 5
             minutes. The <strong className="text-foreground">Per-student</strong> table (each
-            student&apos;s persistent home and cold-storage) comes from a once-a-day scan
+            student&apos;s persistent home and cold-storage) comes from a daily scan
             (by default at midnight). Both carry an &ldquo;updated&rdquo; time, and{" "}
             <strong className="text-foreground">Scan now</strong> refreshes both on demand.
           </p>

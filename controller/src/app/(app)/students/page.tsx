@@ -21,7 +21,7 @@ export default async function StudentsPage() {
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Import from CSV</h3>
+          <h2 className="text-base font-semibold">Import from CSV</h2>
           <ImportStudentsForm
             labs={labs.map((l) => ({ id: l.id, name: l.name }))}
             importAction={importStudentsAction}
@@ -31,7 +31,7 @@ export default async function StudentsPage() {
 
       <Card>
         <CardContent className="space-y-4">
-          <h3 className="text-base font-semibold">Students by lab</h3>
+          <h2 className="text-base font-semibold">Students by lab</h2>
           {totalMemberships === 0 ? (
             <p className="text-sm text-muted-foreground">No students yet.</p>
           ) : (
@@ -39,14 +39,14 @@ export default async function StudentsPage() {
               .filter((l) => l.members.length > 0)
               .map(({ lab, members }) => (
                 <div key={lab.id} className="space-y-2">
-                  <h4 className="text-sm font-semibold">
+                  <h3 className="text-sm font-semibold">
                     <a href={`/labs/${lab.id}`} className="text-primary hover:underline">
                       {lab.name}
                     </a>{" "}
                     <span className="font-normal text-muted-foreground">
                       · {members.length} student{members.length === 1 ? "" : "s"}
                     </span>
-                  </h4>
+                  </h3>
                   <Table>
                     <TableHeader>
                       <TableRow>

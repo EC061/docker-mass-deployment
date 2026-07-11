@@ -106,7 +106,7 @@ export default async function GpuPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Live processes</h3>
+          <h2 className="text-base font-semibold">Live processes</h2>
           {snapshot.length === 0 ? (
             <p className="text-sm text-muted-foreground">No GPU processes reported.</p>
           ) : (
@@ -151,7 +151,7 @@ export default async function GpuPage({
       <Card>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-base font-semibold">Idle-kill events by lab</h3>
+            <h2 className="text-base font-semibold">Idle-kill events by lab</h2>
             {cleared && <p className="text-sm text-primary">{cleared}</p>}
             {events.length > 0 ? (
               <form action={clearGpuEventsAction}>

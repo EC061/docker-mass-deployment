@@ -158,7 +158,7 @@ export default async function NodesPage({
       {provisioned && token && (
         <Card className="border-primary/50">
           <CardContent className="space-y-2">
-            <h3 className="text-base font-semibold">Token for node “{provisioned}”</h3>
+            <h2 className="text-base font-semibold">Token for node “{provisioned}”</h2>
             <p className="text-sm text-muted-foreground">
               Shown once. Run this on the node, then the agent reconnects automatically:
             </p>
@@ -175,7 +175,7 @@ export default async function NodesPage({
 
       <Card>
         <CardContent className="space-y-2">
-          <h3 className="text-base font-semibold">Register a node</h3>
+          <h2 className="text-base font-semibold">Register a node</h2>
           <form action={provisionNodeAction} className="flex flex-wrap items-center gap-2">
             <Input
               name="name"

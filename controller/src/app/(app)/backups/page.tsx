@@ -158,9 +158,9 @@ export default async function BackupsPage({
       {/* Status */}
       <Card>
         <CardContent className="space-y-2">
-          <h3 className="flex items-center gap-2 text-base font-semibold">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
             <Clock className="h-4 w-4" /> Status
-          </h3>
+          </h2>
           <p className="text-sm">
             <span className="font-medium">Connection: </span>
             {configured ? (
@@ -198,9 +198,9 @@ export default async function BackupsPage({
       {/* WebDAV connection */}
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="flex items-center gap-2 text-base font-semibold">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
             <Server className="h-4 w-4" /> WebDAV connection
-          </h3>
+          </h2>
           <form action={saveWebdavSettingsAction} className="grid max-w-2xl grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <Label>WebDAV URL</Label>
@@ -248,9 +248,9 @@ export default async function BackupsPage({
       {/* Schedule & retention */}
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="flex items-center gap-2 text-base font-semibold">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
             <Clock className="h-4 w-4" /> Schedule &amp; retention
-          </h3>
+          </h2>
           <form action={saveScheduleAction} className="space-y-4">
             <label className="flex items-center gap-2 text-sm font-medium">
               <input
@@ -318,9 +318,9 @@ export default async function BackupsPage({
       {/* Available backups */}
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="flex items-center gap-2 text-base font-semibold">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
             <Database className="h-4 w-4" /> Available backups ({env})
-          </h3>
+          </h2>
           <form action={refreshAction}>
             <SubmitButton variant="outline" size="sm" icon={<RefreshCw />} pendingText="Refreshing…">
               Refresh

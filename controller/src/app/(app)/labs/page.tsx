@@ -40,7 +40,7 @@ export default async function LabsPage({
       <Card>
         <CardContent className="space-y-3">
           <div className="space-y-1">
-            <h3 className="text-base font-semibold">Create lab</h3>
+            <h2 className="text-base font-semibold">Create lab</h2>
             <p className="text-xs text-muted-foreground">
               A lab is node-independent: create it here, manage its roster, then grant it access to
               one or more nodes from the lab page.

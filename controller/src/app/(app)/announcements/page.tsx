@@ -56,7 +56,7 @@ export default async function AnnouncementsPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Send a service announcement</h3>
+          <h2 className="text-base font-semibold">Send a service announcement</h2>
           <AnnouncementComposer
             templates={templates}
             vars={ANNOUNCEMENT_VARS}
@@ -65,7 +65,7 @@ export default async function AnnouncementsPage({
             action={sendAnnouncementAction}
           />
           <p className="text-xs text-muted-foreground">
-            Sent by email to the distinct addresses in the selected audiences and picked recipients
+            Sent by email to the distinct addresses in the selected audiences and individually selected recipients
             (each address is mailed once). ALL-CAPS <code>[BRACKET]</code> spans in the subject or
             message become input fields above. <code>{"{name}"}</code> and <code>{"{email}"}</code>{" "}
             are filled in per recipient. Manage the prebuilt templates and see every email variable
@@ -77,7 +77,7 @@ export default async function AnnouncementsPage({
       <Card>
         <CardContent className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="text-base font-semibold">Recent announcements</h3>
+            <h2 className="text-base font-semibold">Recent announcements</h2>
             {history.length > 0 && (
               <form action={clearAnnouncementsAction}>
                 <ConfirmButton

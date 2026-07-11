@@ -40,7 +40,7 @@ function PlacementCard({ p, clients }: { p: Placement; clients: string[] }) {
     <Card>
       <CardContent className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h4 className="text-base font-semibold">{p.node_name}</h4>
+          <h3 className="text-base font-semibold">{p.node_name}</h3>
           <Badge variant={p.online ? "ok" : "err"}>{p.online ? "online" : "offline"}</Badge>
           <Badge variant={STATE_VARIANT[p.state] ?? "warn"}>{p.state}</Badge>
         </div>
@@ -144,7 +144,7 @@ export default async function LabDetail({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">PI / metadata</h3>
+          <h2 className="text-base font-semibold">PI / metadata</h2>
           <form action={updateLabMetaAction} className="grid grid-cols-1 gap-3 sm:grid-cols-4">
             <input type="hidden" name="labId" value={lab.id} />
             <div>
@@ -174,7 +174,7 @@ export default async function LabDetail({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Nodes ({placements.length})</h3>
+          <h2 className="text-base font-semibold">Nodes ({placements.length})</h2>
           {placements.length === 0 ? (
             <p className="text-sm text-muted-foreground">
               This lab has no node access yet — grant it below to provision its container and roster.
@@ -197,7 +197,7 @@ export default async function LabDetail({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Grant node access</h3>
+          <h2 className="text-base font-semibold">Grant node access</h2>
           <PlacementForm
             labId={lab.id}
             nodes={availableNodes}
@@ -210,7 +210,7 @@ export default async function LabDetail({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Roster ({members.length})</h3>
+          <h2 className="text-base font-semibold">Roster ({members.length})</h2>
           <form action={addMemberAction} className="flex flex-wrap items-end gap-3">
             <input type="hidden" name="labId" value={lab.id} />
             <div>
@@ -281,7 +281,7 @@ export default async function LabDetail({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Import roster from CSV</h3>
+          <h2 className="text-base font-semibold">Import roster from CSV</h2>
           <RosterImportForm
             labId={lab.id}
             preview={previewRosterImportAction}

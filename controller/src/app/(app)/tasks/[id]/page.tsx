@@ -112,7 +112,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Overview</h3>
+          <h2 className="text-base font-semibold">Overview</h2>
           <table className="text-sm">
             <tbody>
               {meta.map(([k, v]) => (
@@ -129,7 +129,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       {task.error && (
         <Card>
           <CardContent className="space-y-3">
-            <h3 className="text-base font-semibold text-err">Error</h3>
+            <h2 className="text-base font-semibold text-err">Error</h2>
             <pre className={`${PRE_CLASS} text-err`}>{task.error}</pre>
           </CardContent>
         </Card>
@@ -137,14 +137,14 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Parameters</h3>
+          <h2 className="text-base font-semibold">Parameters</h2>
           {params2 ? <pre className={PRE_CLASS}>{params2}</pre> : <p className="text-sm text-muted-foreground">No parameters.</p>}
         </CardContent>
       </Card>
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Result</h3>
+          <h2 className="text-base font-semibold">Result</h2>
           {result ? (
             <pre className={PRE_CLASS}>{result}</pre>
           ) : (
@@ -157,7 +157,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Log entries ({logs.length})</h3>
+          <h2 className="text-base font-semibold">Log entries ({logs.length})</h2>
           {logs.length === 0 ? (
             <p className="text-sm text-muted-foreground">No log entries reference this task.</p>
           ) : (

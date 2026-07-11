@@ -13,6 +13,9 @@ const allowedOrigins = looksValid ? [raw] : [];
 
 const nextConfig = {
   reactStrictMode: true,
+  // Keep Turbopack scoped to this app. Without an explicit root, a stray lockfile in a parent
+  // directory can make Next choose the wrong workspace and emit warnings.
+  turbopack: { root: import.meta.dirname },
   // better-sqlite3 and honker-node are native modules — keep them external to the server bundle.
   serverExternalPackages: ["better-sqlite3", "@russellthehippo/honker-node"],
   ...(allowedOrigins.length > 0 && {

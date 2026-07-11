@@ -56,14 +56,14 @@ export default async function SettingsPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Storage &amp; ports</h3>
+          <h2 className="text-base font-semibold">Storage &amp; ports</h2>
           <form action={saveStorageSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
             <div>
               <Label>Default fast quota (TB)</Label>
               <Input name="fastTb" type="number" step="0.5" defaultValue={s.fastQuotaDefaultBytes / TIB} />
             </div>
             <div>
-              <Label>Default slow quota (TB)</Label>
+              <Label>Default cold quota (TB)</Label>
               <Input name="slowTb" type="number" step="0.5" defaultValue={s.slowQuotaDefaultBytes / TIB} />
             </div>
             <div>
@@ -83,7 +83,7 @@ export default async function SettingsPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Per-student usage scan</h3>
+          <h2 className="text-base font-semibold">Per-student usage scan</h2>
           <p className="text-xs text-muted-foreground">
             Once a night (by default at midnight) the controller measures each student&apos;s persistent
             fast home and cold usage (a <em>du</em> scan) on every online lab&apos;s node, shown on the
@@ -117,7 +117,7 @@ export default async function SettingsPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Email (external SMTP)</h3>
+          <h2 className="text-base font-semibold">Email (external SMTP)</h2>
           {smtp && <p className="text-sm text-primary">{smtp}</p>}
           <p className="text-xs text-muted-foreground">
             Servers are attempted from the lowest rank to the highest. A failed delivery automatically
@@ -223,7 +223,7 @@ export default async function SettingsPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">GPU idle policy</h3>
+          <h2 className="text-base font-semibold">GPU idle policy</h2>
           <form action={saveGpuPolicyAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="gpuEnabled" defaultChecked={s.gpuEnabled} className="accent-primary" />
@@ -247,11 +247,11 @@ export default async function SettingsPage({
             </div>
             <div />
             <div>
-              <Label>Whitelist users (comma-sep)</Label>
+              <Label>Whitelisted users (comma-separated)</Label>
               <Input name="gpuWhitelistUsers" defaultValue={s.gpuWhitelistUsers} placeholder="alice,bob" />
             </div>
             <div>
-              <Label>Whitelist labs (comma-sep)</Label>
+              <Label>Whitelisted labs (comma-separated)</Label>
               <Input name="gpuWhitelistLabs" defaultValue={s.gpuWhitelistLabs} placeholder="bio,chem" />
             </div>
             <div className="sm:col-span-2">
@@ -263,7 +263,7 @@ export default async function SettingsPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">Alerts &amp; logs</h3>
+          <h2 className="text-base font-semibold">Alerts &amp; logs</h2>
           <form action={saveAlertSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
             <label className="flex items-center gap-2 text-sm">
               <input type="checkbox" name="alertsEnabled" defaultChecked={s.alertsEnabled} className="accent-primary" />
@@ -338,7 +338,7 @@ export default async function SettingsPage({
 
       <Card>
         <CardContent className="space-y-3">
-          <h3 className="text-base font-semibold">ZFS scrub</h3>
+          <h2 className="text-base font-semibold">ZFS scrub</h2>
           {scrub && <p className="text-sm text-primary">{scrub}</p>}
           <p className="text-xs text-muted-foreground">
             Scrubs run on ZFS-capable nodes. Cold storage on an SMB mount is the share owner&apos;s

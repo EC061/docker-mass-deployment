@@ -175,7 +175,7 @@ Please change your password after first login (run: passwd).`;
 /** Placeholders the GPU notification templates understand, shown to the admin in the settings UI. */
 export const GPU_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "username", desc: "owner's login username" },
-  { key: "pid", desc: "process id (may be blank)" },
+  { key: "pid", desc: "process ID (may be blank)" },
   { key: "lab", desc: "lab name (may be blank)" },
   { key: "node", desc: "node the process runs on" },
   { key: "grace_minutes", desc: "minutes before termination (warning email only)" },
