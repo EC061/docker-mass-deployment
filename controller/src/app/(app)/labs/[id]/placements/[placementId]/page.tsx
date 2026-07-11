@@ -258,6 +258,11 @@ export default async function PlacementPage({
             <div><dt className="text-muted-foreground">Rootfs quota</dt><dd className="font-medium">{opts.rootfs_quota}</dd></div>
             <div><dt className="text-muted-foreground">Restart</dt><dd className="font-medium">{opts.restart}</dd></div>
           </dl>
+          <p className="text-sm text-muted-foreground">
+            Per-student quota: fast <b>{placement.student_fast_quota_bytes == null ? "not enabled" : fmtBytes(placement.student_fast_quota_bytes)}</b>
+            {" · "}cold <b>{placement.student_cold_quota_bytes == null ? "not enabled" : fmtBytes(placement.student_cold_quota_bytes)}</b>.
+            Changes require container recreation.
+          </p>
           <Button asChild variant="secondary">
             <Link
               aria-disabled={!canEdit}

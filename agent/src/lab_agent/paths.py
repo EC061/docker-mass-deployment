@@ -1,10 +1,11 @@
 """Flattened ZFS dataset and filesystem paths.
 
-Each lab has exactly one quota-bearing dataset per storage tier. Student storage is a directory
-directly below that lab root; there are no ``shared`` or ``users`` child datasets.
+Each lab has one quota-bearing dataset per storage tier. Student storage remains a directory below
+that root unless an optional placement-wide student quota is enabled; only then is that student's
+path a direct child dataset. There are no ``shared`` or ``users`` intermediate datasets.
 
-    fast/labs/<lab> -> host /fast/<lab>         -> container /home
-    slow/labs/<lab> -> host /cold-storage/<lab> -> container /cold-storage
+    fast/labs/<lab>[/<user>] -> /fast/<lab>[/<user>] -> /home[/<user>]
+    slow/labs/<lab>[/<user>] -> /cold-storage/<lab>[/<user>]
     /home/<user> is the student's persistent fast directory
     /home/<user>/cold-storage -> /cold-storage/<user>
 """
@@ -37,6 +38,14 @@ def lab_slow(cfg: AgentConfig, lab: str) -> str:
 
 def fast_mount(cfg: AgentConfig, lab: str) -> str:
     return f"{cfg.fast_mount_root.rstrip('/')}/{validate_lab_name(lab)}"
+
+
+def user_fast(cfg: AgentConfig, lab: str, user: str) -> str:
+    return f"{lab_fast(cfg, lab)}/{user}"
+
+
+def user_slow(cfg: AgentConfig, lab: str, user: str) -> str:
+    return f"{lab_slow(cfg, lab)}/{user}"
 
 
 # --- Cold storage as a filesystem path (SMB backend) -----------------------------------------

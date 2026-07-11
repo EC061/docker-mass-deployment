@@ -139,7 +139,7 @@ class UsageState:
 
 @dataclass
 class LabUsage:
-    """Live ZFS usage for one lab. Per-student values come from directory scans."""
+    """Live ZFS usage for one lab and any quota-enabled student child datasets."""
 
     fast: zfs.Usage | None = None
     slow: zfs.Usage | None = None
@@ -147,7 +147,7 @@ class LabUsage:
 
 
 def _parse_dataset(dataset: str, root: str) -> tuple[str, str | None] | None:
-    """Map exactly ``<root>/<lab>`` to a lab-level row; descendants are ignored."""
+    """Map a lab root and optional direct per-student child dataset."""
     prefix = root.rstrip("/") + "/"
     if not dataset.startswith(prefix):
         return None
@@ -157,6 +157,8 @@ def _parse_dataset(dataset: str, root: str) -> tuple[str, str | None] | None:
         return None
     if len(rest) == 1:
         return lab, None
+    if len(rest) == 2 and rest[1] not in {"shared", "users"} and users.USERNAME_RE.match(rest[1]):
+        return lab, rest[1]
     return None
 
 
@@ -165,9 +167,12 @@ def _ingest_rows(out: dict[str, LabUsage], rows: list[zfs.Usage], root: str, tie
         parsed = _parse_dataset(u.dataset, root)
         if parsed is None:
             continue
-        lab, _user = parsed
+        lab, user = parsed
         entry = out.setdefault(lab, LabUsage())
-        setattr(entry, tier, u)
+        if user is None:
+            setattr(entry, tier, u)
+        else:
+            entry.users.setdefault(user, {})[tier] = u
 
 
 def collect_zfs_usage(cfg: AgentConfig) -> dict[str, LabUsage]:
@@ -312,6 +317,13 @@ def lab_level_for(
         rows.append(_zfs_row(lab, "fast", lab_usage.fast))
     if lab_usage.slow is not None:
         rows.append(_zfs_row(lab, "cold", lab_usage.slow))
+    for user, tiers in lab_usage.users.items():
+        for tier, usage in tiers.items():
+            rows.append({
+                "lab": lab, "user": user, "tier": "cold" if tier == "slow" else tier,
+                "used_bytes": usage.used_bytes, "quota_bytes": usage.quota_bytes,
+                "available_bytes": usage.available_bytes,
+            })
     image = live_container_storage(cfg, lab)
     if image is not None:
         rows.append(image)

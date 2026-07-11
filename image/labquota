@@ -8,7 +8,8 @@ Reads the usage snapshot the lab agent publishes into the container. The numbers
   * rootfs     — the lab container's shared writable layer, covered by the container quota
 
 Everything renders as one table: you first, your labmates ranked by username, and the lab TOTAL
-(used / quota) last. Per-student percentages are shares of the lab's total quota for that tier;
+(used / quota) last. A configured per-student quota is shown for that student; otherwise the
+percentage is their share of the lab's total quota for that tier;
 rootfs is shared by the whole lab, so only the TOTAL row carries it.
 
 Lab totals are refreshed frequently; per-student home/cold sizes come from a periodic scan. Ask for
@@ -76,6 +77,8 @@ def fmt_share(pair, total_quota) -> str:
     """Format a student's usage with their share of the lab's total quota for that tier."""
     if not pair or pair.get("used") is None:
         return "—"
+    if pair.get("quota"):
+        return fmt_pair(pair)
     used = pair["used"]
     return fmt_bytes(used) + fmt_pct(used, total_quota)
 

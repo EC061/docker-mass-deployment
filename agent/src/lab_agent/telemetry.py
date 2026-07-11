@@ -53,11 +53,13 @@ def _storage_usage(cfg: AgentConfig, usage_state: Any = None) -> list[dict[str, 
     # on-demand), so the heartbeat re-reports the last computed snapshot — it does not re-measure.
     for level in usage_state.all_lab_level().values():
         out.extend(level.storage)
+    live_students = {(r.get("lab"), r.get("user"), r.get("tier")) for r in out if r.get("user")}
     # Per-student breakdown from the scan cache: each student's fast home and cold ``du``. Updated
     # only by the nightly / on-demand scan, so the
     # heartbeat just re-reports the cached numbers — they change on disk only when a scan reruns.
     for lab, usage in usage_state.all_container().items():
-        out.extend(usagereport.tier_storage(lab, usage))
+        out.extend(r for r in usagereport.tier_storage(lab, usage)
+                   if (r.get("lab"), r.get("user"), r.get("tier")) not in live_students)
     return out
 
 

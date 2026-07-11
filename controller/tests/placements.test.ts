@@ -61,6 +61,26 @@ const grant = (labId: number, nodeId: number, extra: Record<string, unknown> = {
   });
 
 describe("createPlacement", () => {
+  it("keeps student quota mode disabled unless explicitly supplied", async () => {
+    const lab = newLab("no-student-quota");
+    const p = await grant(lab.id, nodeA);
+    expect(p.student_fast_quota_bytes).toBeNull();
+    expect(p.student_cold_quota_bytes).toBeNull();
+  });
+
+  it("supports fast-only per-student quota and includes it in student provisioning", async () => {
+    const lab = newLab("student-fast-only");
+    await students.addStudentToLab(lab.id, { username: "fastonly" }, "admin");
+    enqueueTask.mockClear();
+    const p = await grant(lab.id, nodeA, { studentFastQuotaBytes: 500, studentColdQuotaBytes: null });
+    expect(p.student_fast_quota_bytes).toBe(500);
+    expect(p.student_cold_quota_bytes).toBeNull();
+    const add = enqueueTask.mock.calls.find((c) => c[1] === "student.add")!;
+    expect(add[2]).toEqual(expect.objectContaining({
+      username: "fastonly", student_fast_quota_bytes: 500, student_cold_quota_bytes: null,
+    }));
+  });
+
   it("inserts a provisioning placement and enqueues lab.create with the node-specific config", async () => {
     const lab = newLab("bio");
     const p = await grant(lab.id, nodeA);
@@ -193,6 +213,24 @@ describe("retryPlacement", () => {
 });
 
 describe("recreatePlacement", () => {
+  it("changes student quota mode only through recreate and supports fast alone", async () => {
+    const lab = newLab("recreate-student-quota");
+    const p = await grant(lab.id, nodeA);
+    enqueueTask.mockClear();
+    placements.recreatePlacement(p.id, {
+      studentFastQuotaBytes: 400,
+      studentColdQuotaBytes: null,
+    }, "admin");
+    const fresh = placements.getPlacement(p.id)!;
+    expect(fresh.student_fast_quota_bytes).toBe(400);
+    expect(fresh.student_cold_quota_bytes).toBeNull();
+    expect(enqueueTask).toHaveBeenCalledWith(
+      "node-a", "container.recreate",
+      expect.objectContaining({ student_fast_quota_bytes: 400, student_cold_quota_bytes: null }),
+      "admin",
+    );
+  });
+
   it("enqueues container.recreate with the placement's config", async () => {
     const lab = newLab("recreate");
     const p = await grant(lab.id, nodeA);

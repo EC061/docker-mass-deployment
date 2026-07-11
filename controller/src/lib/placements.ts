@@ -79,6 +79,8 @@ export interface Placement {
   online: number;
   fast_quota_bytes: number;
   cold_quota_bytes: number | null; // NULL on SMB-client placements (owner manages cold)
+  student_fast_quota_bytes: number | null;
+  student_cold_quota_bytes: number | null;
   ssh_port: number;
   image: string;
   container_options: string | null;
@@ -164,6 +166,8 @@ function enqueuePlacementCreate(p: Placement, actor?: string): void {
       lab: p.lab_name,
       fast_quota_bytes: p.fast_quota_bytes,
       slow_quota_bytes: p.cold_quota_bytes ?? 0,
+      student_fast_quota_bytes: p.student_fast_quota_bytes,
+      student_cold_quota_bytes: p.student_cold_quota_bytes,
       image: p.image,
       ssh_port: p.ssh_port,
       container_options: taskContainerOptions(p),
@@ -177,6 +181,8 @@ export interface CreatePlacementInput {
   nodeId: number;
   fastQuotaBytes: number;
   coldQuotaBytes: number | null; // null for SMB-client placements
+  studentFastQuotaBytes?: number | null;
+  studentColdQuotaBytes?: number | null;
   sshPort: number;
   image: string;
   containerOptions: ContainerOptions;
@@ -238,20 +244,33 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
   } else if (coldQuota === null) {
     throw new Error("a local-ZFS placement requires a cold quota");
   }
+  if (input.studentFastQuotaBytes != null &&
+      (input.studentFastQuotaBytes <= 0 || input.studentFastQuotaBytes > input.fastQuotaBytes)) {
+    throw new Error("Per-student fast quota must be positive and cannot exceed the placement fast quota");
+  }
+  let studentColdQuota = input.studentColdQuotaBytes ?? null;
+  if (node.cold_backend === "smb") studentColdQuota = null;
+  if (studentColdQuota != null && coldQuota != null &&
+      (studentColdQuota <= 0 || studentColdQuota > coldQuota)) {
+    throw new Error("Per-student cold quota must be positive and cannot exceed the placement cold quota");
+  }
 
   const now = Date.now();
   const info = db()
     .prepare(
       `INSERT INTO lab_placements
-         (lab_id, node_id, fast_quota_bytes, cold_quota_bytes, ssh_port, image, container_options,
+         (lab_id, node_id, fast_quota_bytes, cold_quota_bytes, student_fast_quota_bytes,
+          student_cold_quota_bytes, ssh_port, image, container_options,
           state, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'provisioning', ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'provisioning', ?, ?)`,
     )
     .run(
       input.labId,
       input.nodeId,
       input.fastQuotaBytes,
       coldQuota,
+      input.studentFastQuotaBytes ?? null,
+      studentColdQuota,
       input.sshPort,
       input.image,
       JSON.stringify(input.containerOptions),
@@ -350,6 +369,8 @@ export async function provisionMemberOnPlacement(
       password,
       uid: student.linux_uid,
       gid: student.linux_uid,
+      student_fast_quota_bytes: placement.student_fast_quota_bytes,
+      student_cold_quota_bytes: placement.student_cold_quota_bytes,
     },
     actor,
   );
@@ -617,6 +638,8 @@ function reprovisionPlacementMembers(placement: Placement, actor?: string): void
         password,
         uid: m.linux_uid,
         gid: m.linux_uid,
+        student_fast_quota_bytes: placement.student_fast_quota_bytes,
+        student_cold_quota_bytes: placement.student_cold_quota_bytes,
       },
       actor,
     );
@@ -626,7 +649,12 @@ function reprovisionPlacementMembers(placement: Placement, actor?: string): void
 /** Recreate the container with a (possibly changed) image / container options. Preserves data. */
 export function recreatePlacement(
   placementId: number,
-  input: { image?: string; containerOptions?: ContainerOptions },
+  input: {
+    image?: string;
+    containerOptions?: ContainerOptions;
+    studentFastQuotaBytes?: number | null;
+    studentColdQuotaBytes?: number | null;
+  },
   actor?: string,
 ): void {
   const p = getPlacement(placementId);
@@ -636,6 +664,17 @@ export function recreatePlacement(
     input.image ?? p.image,
     input.containerOptions ?? containerOptionsOf(p),
   );
+  if (input.studentFastQuotaBytes != null &&
+      (input.studentFastQuotaBytes <= 0 || input.studentFastQuotaBytes > p.fast_quota_bytes)) {
+    throw new Error("Per-student fast quota must be positive and cannot exceed the placement fast quota");
+  }
+  if (p.node_cold_backend === "smb" && input.studentColdQuotaBytes != null) {
+    throw new Error("Per-student cold quota is managed by the SMB owner placement");
+  }
+  if (input.studentColdQuotaBytes != null && p.cold_quota_bytes != null &&
+      (input.studentColdQuotaBytes <= 0 || input.studentColdQuotaBytes > p.cold_quota_bytes)) {
+    throw new Error("Per-student cold quota must be positive and cannot exceed the placement cold quota");
+  }
   if (input.image !== undefined) {
     db().prepare("UPDATE lab_placements SET image = ? WHERE id = ?").run(input.image, placementId);
   }
@@ -643,6 +682,14 @@ export function recreatePlacement(
     db()
       .prepare("UPDATE lab_placements SET container_options = ? WHERE id = ?")
       .run(JSON.stringify(input.containerOptions), placementId);
+  }
+  if (input.studentFastQuotaBytes !== undefined) {
+    db().prepare("UPDATE lab_placements SET student_fast_quota_bytes = ? WHERE id = ?")
+      .run(input.studentFastQuotaBytes, placementId);
+  }
+  if (input.studentColdQuotaBytes !== undefined) {
+    db().prepare("UPDATE lab_placements SET student_cold_quota_bytes = ? WHERE id = ?")
+      .run(input.studentColdQuotaBytes, placementId);
   }
   touch(placementId);
   const fresh = getPlacement(placementId)!;
@@ -654,6 +701,8 @@ export function recreatePlacement(
       image: fresh.image,
       ssh_port: fresh.ssh_port,
       container_options: taskContainerOptions(fresh),
+      student_fast_quota_bytes: fresh.student_fast_quota_bytes,
+      student_cold_quota_bytes: fresh.student_cold_quota_bytes,
     },
     actor,
   );

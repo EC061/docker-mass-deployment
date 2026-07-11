@@ -634,6 +634,15 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
         );
     },
   },
+  {
+    // Optional placement-wide student limits. NULL deliberately preserves the existing flat
+    // per-lab storage layout and behavior.
+    id: "0023_placement_student_quotas",
+    sql: `
+    ALTER TABLE lab_placements ADD COLUMN student_fast_quota_bytes INTEGER;
+    ALTER TABLE lab_placements ADD COLUMN student_cold_quota_bytes INTEGER;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

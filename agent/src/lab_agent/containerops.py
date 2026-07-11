@@ -6,6 +6,7 @@ container's writable layer, so removing + recreating the container keeps everyth
 
 from __future__ import annotations
 
+import os
 from typing import Any
 
 from . import coldstore, maintenance_state, usagereport
@@ -111,6 +112,27 @@ def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, s
         docker.stop_container(name)
         docker.remove_container(old)
         docker.rename_container(name, old)
+
+    # Changing per-student quota mode is only allowed as part of recreation. The old container is
+    # stopped here, so existing directories can be promoted to child datasets without concurrent
+    # student writes. Quota-disabled placements retain the original flat directory layout.
+    from . import studentops
+    fast_quota = params.get("student_fast_quota_bytes")
+    cold_quota = params.get("student_cold_quota_bytes")
+    root = zfs.get_mountpoint(lab_fast(cfg, lab))
+    for username in usagereport.list_lab_students(cfg, lab):
+        try:
+            stat = os.stat(f"{root}/{username}")
+            studentops.prepare_student_storage(
+                cfg, lab, username, stat.st_uid, stat.st_gid, fast_quota, cold_quota,
+            )
+        except Exception as exc:
+            if had_old and docker.container_exists(old):
+                docker.rename_container(old, name)
+                docker.start_container(name)
+            raise docker.DockerError(
+                f"student quota preparation failed for '{username}': {exc}"
+            ) from exc
 
     try:
         # 3. Bring up the candidate under the real name and verify it actually started.

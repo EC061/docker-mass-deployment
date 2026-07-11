@@ -14,6 +14,9 @@ def patch_storage(monkeypatch):
     removed = []
     users = []
     monkeypatch.setattr(studentops.zfs, "get_mountpoint", lambda ds: "/fast/bio")
+    monkeypatch.setattr(studentops.zfs, "dataset_exists", lambda ds: False)
+    monkeypatch.setattr(studentops.zfs, "create_dataset",
+                        lambda *a, **k: pytest.fail("flat storage unexpectedly created a dataset"))
     monkeypatch.setattr(studentops.coldstore, "lab_mount", lambda c, lab: "/cold/bio")
     monkeypatch.setattr(studentops.coldfs, "ensure_owned_dir",
                         lambda path, uid, gid: dirs.append((path, uid, gid)))
@@ -36,6 +39,40 @@ def test_add_student_uses_native_host_ownership(monkeypatch):
     assert dirs == [("/fast/bio/alice", 10042, 10042),
                     ("/cold/bio/alice", 10042, 10042)]
     assert calls == [("add", "bio-n1", "alice", 10042, 10042)]
+
+
+def test_fast_quota_alone_creates_only_fast_student_dataset(monkeypatch):
+    dirs, _, _ = patch_storage(monkeypatch)
+    created = []
+    monkeypatch.setattr(studentops.zfs, "create_dataset",
+                        lambda name, **kw: created.append((name, kw)))
+    studentops.add_student(cfg(), {
+        "lab": "bio", "username": "alice", "password": "pw", "uid": 10042, "gid": 10042,
+        "student_fast_quota_bytes": 500,
+    })
+    assert created == [("fast/labs/bio/alice", {
+        "quota_bytes": 500, "mountpoint": "/fast/bio/alice",
+    })]
+    assert ("/cold/bio/alice", 10042, 10042) in dirs
+
+
+def test_existing_fast_directory_is_promoted_with_data(tmp_path, monkeypatch):
+    home = tmp_path / "alice"
+    home.mkdir()
+    (home / "work.txt").write_text("preserved")
+    datasets = set()
+    monkeypatch.setattr(studentops.zfs, "dataset_exists", lambda ds: ds in datasets)
+    monkeypatch.setattr(studentops.zfs, "create_dataset",
+                        lambda name, **kw: (datasets.add(name), home.mkdir()))
+    monkeypatch.setattr(studentops.zfs, "set_quota", lambda *a: None)
+    monkeypatch.setattr(studentops.zfs, "destroy_dataset", lambda ds, recursive: datasets.discard(ds))
+    monkeypatch.setattr(studentops.coldfs, "ensure_owned_dir", lambda *a, **k: None)
+
+    studentops._ensure_user_dataset("fast/labs/bio/alice", str(home), 500, 10042, 10042)
+
+    assert (home / "work.txt").read_text() == "preserved"
+    assert "fast/labs/bio/alice" in datasets
+    assert not (tmp_path / "alice.student-quota-migration").exists()
 
 
 def test_remove_data_is_host_side_and_cold_is_independent(monkeypatch):

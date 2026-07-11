@@ -140,6 +140,10 @@ export async function grantNodeAccessAction(formData: FormData) {
       nodeId,
       fastQuotaBytes: tbToBytes(formData.get("fastTb"), "Fast"),
       coldQuotaBytes: coldTb === null || coldTb === "" ? null : tbToBytes(coldTb, "Cold"),
+      studentFastQuotaBytes: formData.get("enableStudentFastQuota") === "on"
+        ? tbToBytes(formData.get("studentFastTb"), "Per-student fast") : null,
+      studentColdQuotaBytes: formData.get("enableStudentColdQuota") === "on"
+        ? tbToBytes(formData.get("studentColdTb"), "Per-student cold") : null,
       sshPort: nextSshPortForNode(nodeId),
       image,
       containerOptions: containerOptionsFromForm(formData),
@@ -210,7 +214,14 @@ export async function recreatePlacementSettingsAction(formData: FormData) {
   const image = String(formData.get("image") ?? "").trim() || "ghcr.io/ec061/custom-ssh:latest";
   const containerOptions = containerOptionsFromForm(formData);
   try {
-    recreatePlacement(placementId, { image, containerOptions }, who);
+    recreatePlacement(placementId, {
+      image,
+      containerOptions,
+      studentFastQuotaBytes: formData.get("enableStudentFastQuota") === "on"
+        ? tbToBytes(formData.get("studentFastTb"), "Per-student fast") : null,
+      studentColdQuotaBytes: placement!.node_cold_backend !== "smb" && formData.get("enableStudentColdQuota") === "on"
+        ? tbToBytes(formData.get("studentColdTb"), "Per-student cold") : null,
+    }, who);
   } catch (e) {
     const fid = putFlash(e instanceof Error ? e.message : "recreate failed");
     redirect(`/labs/${placement!.lab_id}/placements/${placementId}/recreate?error=${fid}`);

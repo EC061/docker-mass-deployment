@@ -9,8 +9,9 @@ def cfg(**kw):
     return AgentConfig(controller_url="wss://c", token="t", node_name="node1", **kw)
 
 
-def test_flat_dataset_parser_ignores_all_descendants():
+def test_dataset_parser_accepts_only_direct_student_children():
     assert usagereport._parse_dataset("fast/labs/bio", "fast/labs") == ("bio", None)
+    assert usagereport._parse_dataset("fast/labs/bio/alice", "fast/labs") == ("bio", "alice")
     assert usagereport._parse_dataset("fast/labs/bio/users/alice", "fast/labs") is None
     assert usagereport._parse_dataset("fast/labs/bio/shared", "fast/labs") is None
 

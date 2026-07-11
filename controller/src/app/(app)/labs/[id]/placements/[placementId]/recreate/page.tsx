@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { StudentQuotaFields } from "../../../../_components/StudentQuotaFields";
+import { TIB } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -70,6 +72,11 @@ export default async function RecreatePage({
             {field("Shared memory", "shmSize", opts.shm_size)}
             {field("Root filesystem quota", "rootfsQuota", opts.rootfs_quota)}
             {field("Restart policy", "restart", opts.restart)}
+            <StudentQuotaFields
+              allowCold={placement.node_cold_backend !== "smb"}
+              fastDefault={placement.student_fast_quota_bytes == null ? null : placement.student_fast_quota_bytes / TIB}
+              coldDefault={placement.student_cold_quota_bytes == null ? null : placement.student_cold_quota_bytes / TIB}
+            />
             <div className="flex items-end gap-2 sm:col-span-2 lg:col-span-3">
               <Button type="submit">Recreate container</Button>
               <a href={`/labs/${id}`} className="text-sm text-muted-foreground hover:underline">
