@@ -1,6 +1,16 @@
+import pytest
+
 from lab_agent import system
 from lab_agent.config import AgentConfig
 from lab_agent.executors.base import CommandResult
+
+
+@pytest.fixture(autouse=True)
+def _no_host_pci_gpus(monkeypatch):
+    # _nvidia_hardware_count reads the real /sys/bus/pci/devices; pin it to zero so gpu_count is
+    # driven entirely by the mocked nvidia-smi output whatever hardware the test host has. Tests
+    # simulating dead-driver-but-hardware-present override it with their own setattr.
+    monkeypatch.setattr(system, "_nvidia_hardware_count", lambda: 0)
 
 
 def cfg(**kw):
