@@ -30,3 +30,13 @@ def test_lab_image_has_cuda_bubblewrap_and_no_nested_engine():
     assert "exec /usr/sbin/sshd -D -e" in entrypoint
     for package in ("docker-ce", "docker.io", "containerd.io", "nvidia-container-toolkit"):
         assert package not in dockerfile
+
+
+def test_lab_image_seeds_vscode_watcher_excludes():
+    # Machine-level watcher excludes ship via /etc/skel so add_user copies them into every new
+    # student home; paired with the host-prepare fs.inotify sysctls to prevent editor ENOSPC.
+    dockerfile = (Path(__file__).parents[2] / "image" / "Dockerfile").read_text()
+    assert "/etc/skel/.vscode-server/data/Machine/settings.json" in dockerfile
+    assert "files.watcherExclude" in dockerfile
+    assert "**/node_modules/**" in dockerfile
+    assert "**/.venv/**" in dockerfile

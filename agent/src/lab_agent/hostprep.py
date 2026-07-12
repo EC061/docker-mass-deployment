@@ -399,6 +399,12 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
     sysctls = (
         "kernel.unprivileged_userns_clone = 1\n"
         "user.max_user_namespaces = 16384\n"
+        # Labs run --userns=host, so IDE file watchers inside containers (VS Code Remote-SSH et
+        # al.) draw from the host kernel's per-UID inotify budget. Distro defaults exhaust on large
+        # workspaces and surface as ENOSPC in the student's editor. Each student owns a unique host
+        # UID, so these caps are per student, not shared across the node.
+        "fs.inotify.max_user_watches = 524288\n"
+        "fs.inotify.max_user_instances = 1024\n"
     )
     if Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").exists():
         sysctls += "kernel.apparmor_restrict_unprivileged_userns = 1\n"

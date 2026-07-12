@@ -67,6 +67,25 @@ RUN sed -i 's/^#\?PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh
     && mkdir -p /home /cold-storage \
     && rm -f /etc/ssh/ssh_host_*
 
+# The host raises fs.inotify limits, but VS Code Remote-SSH still watches every workspace file by
+# default. Machine-level settings in /etc/skel reach each student home when the agent creates the
+# account, keeping virtualenvs and node_modules out of the watcher so large workspaces don't burn
+# through the per-UID inotify budget (ENOSPC in the editor).
+RUN install -d -m 0755 /etc/skel/.vscode-server/data/Machine \
+    && printf '%s\n' \
+        '{' \
+        '    "files.watcherExclude": {' \
+        '        "**/.git/objects/**": true,' \
+        '        "**/.git/subtree-cache/**": true,' \
+        '        "**/node_modules/**": true,' \
+        '        "**/.venv/**": true,' \
+        '        "**/venv/**": true,' \
+        '        "**/__pycache__/**": true' \
+        '    }' \
+        '}' \
+        > /etc/skel/.vscode-server/data/Machine/settings.json \
+    && chmod 0644 /etc/skel/.vscode-server/data/Machine/settings.json
+
 COPY labquota /usr/local/bin/labquota
 COPY entrypoint /usr/local/sbin/lab-entrypoint
 

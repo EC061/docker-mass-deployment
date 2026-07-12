@@ -54,8 +54,12 @@ It also:
 
 - reserves the `labdockremap` account and its exact subuid/subgid range
 - enforces `kernel.unprivileged_userns_clone=1`,
-  `user.max_user_namespaces=16384`, and
-  `kernel.apparmor_restrict_unprivileged_userns=1`
+  `user.max_user_namespaces=16384`,
+  `kernel.apparmor_restrict_unprivileged_userns=1`,
+  `fs.inotify.max_user_watches=524288`, and
+  `fs.inotify.max_user_instances=1024` (labs share the host kernel's
+  per-UID inotify budget; the raised caps stop VS Code Remote-SSH
+  hitting ENOSPC "unable to watch for file changes" on large workspaces)
 - installs the seccomp profile and AppArmor profile
 - writes `/etc/docker/daemon.json`
 
@@ -247,7 +251,8 @@ docker info --format '{{json .SecurityOptions}}'
 sudo cat /etc/docker/daemon.json
 sudo aa-status | grep lab-codex
 sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
-  kernel.apparmor_restrict_unprivileged_userns
+  kernel.apparmor_restrict_unprivileged_userns \
+  fs.inotify.max_user_watches fs.inotify.max_user_instances
 ```
 
 ## Persistent layout reference
