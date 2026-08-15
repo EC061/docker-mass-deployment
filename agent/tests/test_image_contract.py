@@ -17,9 +17,12 @@ def test_lab_image_has_cuda_bubblewrap_and_no_nested_engine():
     assert "/etc/environment" in dockerfile
     assert "/etc/profile.d/cuda.sh" in dockerfile
     assert "ln -s /usr/local/cuda/bin/nvcc /usr/local/bin/nvcc" in dockerfile
+    # bwrap takes the unprivileged user-namespace path; a setuid bit here breaks it under the
+    # lab-codex confinement the container runs with, and adds an escape surface for students.
     assert "chown root:root /usr/bin/bwrap" in dockerfile
-    assert "chmod 4755 /usr/bin/bwrap" in dockerfile
-    assert "test -u /usr/bin/bwrap" in dockerfile
+    assert "chmod 0755 /usr/bin/bwrap" in dockerfile
+    assert "test ! -u /usr/bin/bwrap" in dockerfile
+    assert "chmod 4755" not in dockerfile
     for forbidden in ("nvidia/cuda:", "cuda-toolkit-13-3", "cuda-libraries-dev-13-3",
                       "nodejs", "npm install", "@openai/codex", "CODEX_VERSION"):
         assert forbidden not in dockerfile

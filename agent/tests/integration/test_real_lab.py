@@ -35,13 +35,14 @@ def test_outer_boundary_and_mounts():
     config = json.loads(docker("inspect", CONTAINER).stdout)[0]
     host = config["HostConfig"]
     assert host["Privileged"] is False
-    cap_add = set(host.get("CapAdd") or [])
-    assert {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"}.issubset(cap_add)
+    # Unprivileged bwrap needs no capabilities at all.
+    assert not (host.get("CapAdd") or [])
     security = host.get("SecurityOpt") or []
     assert "systempaths=unconfined" in security
     assert host["UsernsMode"] == "host"
     assert "seccomp=unconfined" not in security
-    assert "apparmor=unconfined" in security
+    assert "apparmor=unconfined" not in security
+    assert "apparmor=lab-codex" in security
     destinations = {mount["Destination"] for mount in config["Mounts"]}
     assert destinations == {"/home", "/cold-storage", "/run/labquota"}
     assert docker("exec", CONTAINER, "cat", "/proc/1/comm").stdout.strip() == "sshd"
@@ -52,11 +53,11 @@ def test_outer_boundary_and_mounts():
     assert "ssh-ed25519" in keys.stdout
 
 
-def test_setuid_bubblewrap_and_cuda_toolkit():
+def test_unprivileged_bubblewrap_and_cuda_toolkit():
     bwrap_mode = docker(
         "exec", CONTAINER, "stat", "-c", "%U:%G %a", "/usr/bin/bwrap"
     ).stdout.strip()
-    assert bwrap_mode == "root:root 4755"
+    assert bwrap_mode == "root:root 755"
     bwrap = ("bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
              "--unshare-pid", "--", "echo", "bwrap works")
     student_exec(*bwrap)

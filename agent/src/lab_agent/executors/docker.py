@@ -137,18 +137,19 @@ def build_run_args(
     args += [
         "--runtime=runc", "--userns=host", "--cgroupns=private", "--stop-signal", "SIGTERM"
     ]
-    # A setuid bubblewrap drops to the caller while retaining this minimal setup set. Docker's
-    # default bounding set omits all three, which makes bwrap's capset(2) fail with EPERM before it
-    # can create the sandbox. These capabilities remain confined to the outer lab container.
-    for capability in ("SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"):
-        args += ["--cap-add", capability]
+    # No added capabilities. Bubblewrap is NOT setuid in the image; it takes the unprivileged path,
+    # creating a user namespace first and gaining its setup capabilities inside that namespace,
+    # where they carry no authority over the host.
     args += ["--tmpfs", "/run:rw,nosuid,nodev", "--tmpfs", "/run/lock:rw,nosuid,nodev"]
+    # Docker's default seccomp policy masks every CLONE_NEW* flag off clone(2) for containers
+    # without CAP_SYS_ADMIN, which is the one and only thing that blocks unprivileged user
+    # namespaces on a current engine. This profile allows them; it stays mandatory.
     args += ["--security-opt", f"seccomp={mounts.seccomp_profile}"]
-    # The setuid-root bubblewrap image contract REQUIRES an unconfined outer AppArmor policy. Do
-    # not confine with lab-codex: setuid bwrap cannot build its sandbox under the profile on
-    # production kernels (verified on 6.17, 2026-07-04) even though the CI kernel accepts it.
-    # Seccomp remains enabled through the dedicated profile above.
-    args += ["--security-opt", "apparmor=unconfined"]
+    # Labs MUST stay AppArmor-confined. Under Ubuntu's kernel.apparmor_restrict_unprivileged_userns
+    # an *unconfined* task cannot even write its own /proc/self/uid_map, so apparmor=unconfined
+    # breaks unprivileged bwrap (measured 2026-08-15). The lab-codex profile grants the bwrap child
+    # profile the mount/pivot_root/userns permissions the sandbox needs and denies the rest.
+    args += ["--security-opt", f"apparmor={mounts.apparmor_profile}"]
     # Docker normally bind-mounts masks/read-only overlays below /proc. Linux then rejects the
     # fresh procfs mount that an unprivileged bubblewrap PID namespace requires because it would
     # be less restrictive than the procfs already visible in the mount namespace. The dedicated

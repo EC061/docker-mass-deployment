@@ -181,9 +181,9 @@ def _userspace_driver_version() -> str:
 
 
 def _security_profiles_ok(cfg: AgentConfig) -> bool:
-    # Managed containers deliberately run apparmor=unconfined: setuid bwrap cannot build its
-    # sandbox under the lab-codex profile on production kernels. The seccomp policy is mandatory.
-    return os.path.isfile(cfg.seccomp_profile)
+    # Both profiles are mandatory now: seccomp is what permits unprivileged user namespaces at all,
+    # and the AppArmor profile is what lets bwrap mount inside one (see build_run_args).
+    return os.path.isfile(cfg.seccomp_profile) and os.path.isfile("/etc/apparmor.d/lab-codex")
 
 
 def _stale_seccomp_containers(cfg: AgentConfig) -> list[str]:
@@ -258,8 +258,13 @@ def _stale_lab_userns_containers() -> list[str]:
 
 
 def _stale_bwrap_capability_containers() -> list[str]:
-    """Return managed containers missing capabilities required by setuid bubblewrap."""
-    required = {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"}
+    """Return managed containers still carrying the legacy setuid-bubblewrap capabilities.
+
+    Unprivileged bubblewrap needs none of them, and CAP_SYS_ADMIN in a ``--userns=host`` container
+    with student shells is a host-root escape surface. Capabilities are fixed at creation, so a
+    container that still has them needs recreation.
+    """
+    forbidden = {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"}
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
     ], timeout=20)
@@ -281,7 +286,7 @@ def _stale_bwrap_capability_containers() -> list[str]:
         normalized = {
             str(cap).upper().removeprefix("CAP_") for cap in cap_add
         } if isinstance(cap_add, list) else set()
-        if not required.issubset(normalized):
+        if normalized & forbidden:
             stale.append(container)
     return stale
 
@@ -307,12 +312,14 @@ def _seccomp_enforcement_ok(container: str, user: str) -> bool:
     return result.ok
 
 
-def _stale_apparmor_containers() -> list[str]:
-    """Return managed containers not created with the unconfined AppArmor contract.
+def _stale_apparmor_containers(cfg: AgentConfig) -> list[str]:
+    """Return managed containers not created under the lab-codex AppArmor profile.
 
-    Setuid bubblewrap cannot build its sandbox under the lab-codex profile on production
-    kernels, so labs must run ``apparmor=unconfined``. Confinement is fixed at container
-    creation; a confined container needs recreation, not a host profile change.
+    Unprivileged bubblewrap requires confinement: under Ubuntu's
+    ``kernel.apparmor_restrict_unprivileged_userns`` an unconfined task cannot write its own
+    ``/proc/self/uid_map``, so an ``apparmor=unconfined`` lab fails the bwrap smoke test.
+    Confinement is fixed at container creation; an unconfined container needs recreation, not a
+    host profile change.
     """
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
@@ -324,7 +331,7 @@ def _stale_apparmor_containers() -> list[str]:
         profile = run([
             "docker", "inspect", "--format", "{{.AppArmorProfile}}", container,
         ], timeout=20)
-        if not profile.ok or profile.stdout.strip() != "unconfined":
+        if not profile.ok or profile.stdout.strip() != cfg.apparmor_profile:
             stale.append(container)
     return stale
 
@@ -459,17 +466,18 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 issues,
                 "container_bwrap_caps_stale",
                 "critical",
-                "Managed containers require recreation with the setuid bubblewrap capability "
-                "contract: " + ", ".join(stale_bwrap_caps),
+                "Managed containers still carry the legacy setuid bubblewrap capabilities and "
+                "require recreation: " + ", ".join(stale_bwrap_caps),
             )
-        stale_apparmor = _stale_apparmor_containers()
+        stale_apparmor = _stale_apparmor_containers(cfg)
         if stale_apparmor:
             _issue(
                 issues,
                 "container_apparmor_stale",
                 "critical",
-                "Managed containers require recreation with the unconfined AppArmor contract "
-                "(setuid bwrap breaks under confinement): " + ", ".join(stale_apparmor),
+                f"Managed containers require recreation under the '{cfg.apparmor_profile}' "
+                "AppArmor profile (unconfined breaks unprivileged bwrap): "
+                + ", ".join(stale_apparmor),
             )
         target = _first_student_container()
         if target:
@@ -480,9 +488,11 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                     "critical",
                     f"SSH key exchange failed in '{target[0]}'; inspect its Docker logs",
                 )
+            # bwrap must NOT be setuid: the unprivileged path is the supported one, and a setuid
+            # binary reachable by students is exactly the escape surface this design removes.
             mode = run(["docker", "exec", target[0], "stat", "-c", "%a", "/usr/bin/bwrap"],
                        timeout=20)
-            mode_ok = mode.ok and mode.stdout.strip() == "4755"
+            mode_ok = mode.ok and mode.stdout.strip() == "755"
             bwrap_smoke = [
                 "bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
                 "--unshare-pid", "--", "echo", "bwrap works",

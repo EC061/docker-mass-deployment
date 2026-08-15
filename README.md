@@ -8,9 +8,9 @@ daemon-remapped parent namespace locks the inherited mounts that nested bubblewr
 The lab image starts from Ubuntu 24.04 and installs NVIDIA's minimal CUDA 13.3 build packages. It
 includes `nvcc`, the CUDA runtime and headers needed for basic CUDA applications, standard C/C++
 build tooling, Python, and distribution `/usr/bin/bwrap`; it does not install the full CUDA library
-suite, Node.js, npm, or Codex. The outer container uses a dedicated seccomp profile,
-`apparmor=unconfined`, and the three capabilities required by bubblewrap's setuid setup path:
-`SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`.
+suite, Node.js, npm, or Codex. The outer container uses a dedicated seccomp profile and runs
+confined by the `lab-codex` AppArmor profile, with **no added capabilities** and a plain
+(non-setuid) `/usr/bin/bwrap`.
 
 ## Host preparation
 
@@ -87,13 +87,25 @@ nvcc --version
 ```
 
 Doctor executes that exact bwrap smoke test and `nvcc --version` as a provisioned ordinary student.
-Managed labs enforce root ownership and setuid mode (`4755`) on `/usr/bin/bwrap`, and run with
-`--security-opt apparmor=unconfined` plus `SYS_ADMIN`, `NET_ADMIN`, and `SYS_PTRACE`, which the
-setuid bubblewrap code requires while constructing the nested sandbox. Labs must stay
-`apparmor=unconfined`: setuid bwrap cannot build its sandbox under the `lab-codex` profile on
-production kernels, and doctor flags any confined lab for recreation. The dedicated seccomp profile
-remains enabled. `host-prepare` and `Repair` re-assert this bwrap mode; capability changes
-require container recreation.
+
+Bubblewrap runs its **unprivileged** path: `/usr/bin/bwrap` is plain `0755`, the container adds no
+capabilities, and bwrap creates a user namespace first, gaining its setup capabilities inside that
+namespace where they have no authority over the host. Three container settings make that work, all
+fixed at creation time:
+
+- `--security-opt seccomp=<lab-codex-seccomp.json>` — Docker's default policy masks every
+  `CLONE_NEW*` flag off `clone(2)` for containers without `CAP_SYS_ADMIN`, and that is the only
+  thing that blocks unprivileged user namespaces on a current engine.
+- `--security-opt apparmor=lab-codex` — labs must stay **confined**. Under Ubuntu's
+  `kernel.apparmor_restrict_unprivileged_userns` an *unconfined* task cannot write its own
+  `/proc/self/uid_map`, so `apparmor=unconfined` breaks bwrap outright. The profile's
+  `lab-codex//lab-codex-bwrap` child grants the mount, `pivot_root`, and `userns` permissions the
+  sandbox needs; the parent profile denies mounting.
+- `--security-opt systempaths=unconfined` — removes runc's `/proc` overmounts, without which the
+  kernel rejects the fresh procfs a nested PID namespace requires.
+
+Doctor flags any lab that is unconfined, still carries the legacy `SYS_ADMIN`/`NET_ADMIN`/
+`SYS_PTRACE` capabilities, or whose `bwrap` is setuid, and requires recreation for each.
 
 Also verify `nvidia-smi`, CUDA compilation, network namespace isolation, and that container root
 cannot modify a host sentinel outside `/home` and `/cold-storage`.
@@ -107,7 +119,7 @@ ownership.
 The Nodes page exposes:
 
 - **Check**: refresh structured Docker/userns, bubblewrap/Codex, NVIDIA, CDI, ZFS and SMB health;
-- **Repair**: reload AppArmor, restore setuid-root mode on `bwrap`, regenerate CDI, and restart
+- **Repair**: reload AppArmor, refresh security-profile permissions, regenerate CDI, and restart
   affected lab containers;
 - **Reboot**: schedule a reboot, which is the supported response to an NVML kernel/userspace mismatch.
 

@@ -1,6 +1,7 @@
 # SSH-accessible CUDA development lab. Docker/NVIDIA device integration lives on the host. This
 # image installs NVIDIA's minimal CUDA build package rather than inheriting the much larger devel
-# image. Students retain password-authenticated sudo. Bubblewrap is setuid-root.
+# image. Students retain password-authenticated sudo. Bubblewrap is deliberately NOT setuid: it
+# runs the unprivileged user-namespace path, so the lab needs no added capabilities.
 
 FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
 
@@ -30,8 +31,8 @@ RUN apt-get update \
         build-essential cmake ninja-build pkg-config \
         git ripgrep procps util-linux nano gnupg \
     && chown root:root /usr/bin/bwrap \
-    && chmod 4755 /usr/bin/bwrap \
-    && test -u /usr/bin/bwrap \
+    && chmod 0755 /usr/bin/bwrap \
+    && test ! -u /usr/bin/bwrap \
     && test "$(readlink -f /usr/bin/python)" = "$(readlink -f /usr/bin/python3)" \
     && nvcc --version \
     && printf '%s\n' '__global__ void kernel() {}' 'int main() { return 0; }' \

@@ -35,10 +35,11 @@ def test_runc_host_userns_outer_container_contract():
     assert "--userns=host" in args
     assert "--device nvidia.com/gpu=all" in joined
     assert "seccomp=/etc/lab-agent/security/lab-codex-seccomp.json" in joined
-    assert "apparmor=unconfined" in joined
+    assert "apparmor=lab-codex" in joined
     assert "systempaths=unconfined" in joined
-    for capability in ("SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"):
-        assert f"--cap-add {capability}" in joined
+    # Unprivileged bwrap needs no capabilities; CAP_SYS_ADMIN in a --userns=host lab with student
+    # shells would be a host-root escape surface.
+    assert "--cap-add" not in args
     assert "source=/fast/bio,target=/home" in joined
     assert "source=/cold/bio,target=/cold-storage" in joined
     assert "target=/run/labquota,readonly" in joined
@@ -46,7 +47,7 @@ def test_runc_host_userns_outer_container_contract():
     assert "--stop-signal SIGTERM" in joined
     assert "SIGRTMIN+3" not in joined
     for forbidden in ("--privileged", "/var/run/docker.sock", "no-new-privileges",
-                      "seccomp=unconfined"):
+                      "seccomp=unconfined", "apparmor=unconfined"):
         assert forbidden not in joined
 
 

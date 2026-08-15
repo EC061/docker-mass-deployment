@@ -175,26 +175,28 @@ def test_stale_lab_userns_containers_detects_remapped_contract(monkeypatch):
     assert system._stale_lab_userns_containers() == ["lab-old", "lab-remapped"]
 
 
-def test_stale_apparmor_containers_detects_confined(monkeypatch):
+def test_stale_apparmor_containers_detects_unconfined(monkeypatch):
+    # Unprivileged bwrap cannot write its own uid_map when the task is AppArmor-unconfined, so an
+    # unconfined lab (or one whose profile cannot be read) must be flagged for recreation.
     monkeypatch.setattr(system, "run", Runner({
-        "docker ps": (True, "lab-old\nlab-confined\nlab-current\n"),
+        "docker ps": (True, "lab-old\nlab-unconfined\nlab-current\n"),
         "docker inspect --format {{.AppArmorProfile}} lab-old": (True, ""),
-        "docker inspect --format {{.AppArmorProfile}} lab-confined": (True, "lab-codex"),
-        "docker inspect --format {{.AppArmorProfile}} lab-current": (True, "unconfined"),
+        "docker inspect --format {{.AppArmorProfile}} lab-unconfined": (True, "unconfined"),
+        "docker inspect --format {{.AppArmorProfile}} lab-current": (True, "lab-codex"),
     }))
-    assert system._stale_apparmor_containers() == ["lab-old", "lab-confined"]
+    assert system._stale_apparmor_containers(cfg()) == ["lab-old", "lab-unconfined"]
 
 
-def test_stale_bwrap_capability_containers_detects_missing_contract(monkeypatch):
+def test_stale_bwrap_capability_containers_detects_legacy_capabilities(monkeypatch):
     monkeypatch.setattr(system, "run", Runner({
-        "docker ps": (True, "lab-old\nlab-partial\nlab-current\n"),
-        "docker inspect --format {{json .HostConfig.CapAdd}} lab-old": (True, "null"),
+        "docker ps": (True, "lab-current\nlab-partial\nlab-legacy\n"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-current": (True, "null"),
         "docker inspect --format {{json .HostConfig.CapAdd}} lab-partial":
             (True, '["CAP_SYS_ADMIN"]'),
-        "docker inspect --format {{json .HostConfig.CapAdd}} lab-current":
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-legacy":
             (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
     }))
-    assert system._stale_bwrap_capability_containers() == ["lab-old", "lab-partial"]
+    assert system._stale_bwrap_capability_containers() == ["lab-partial", "lab-legacy"]
 
 
 def test_deep_doctor_accepts_bwrap_and_cuda_toolkit(monkeypatch):
@@ -206,11 +208,10 @@ def test_deep_doctor_accepts_bwrap_and_cuda_toolkit(monkeypatch):
         "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
             (True, "[]\t[]"),
         "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
-        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test":
-            (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
-        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "unconfined"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test": (True, "null"),
+        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "lab-codex"),
         "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
-        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
+        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "755"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
             (True, "bwrap works"),
         # Seccomp enforcement: add_key returns EPERM (probe exits 0 = blocked).
@@ -248,11 +249,10 @@ def test_seccomp_enforcement_failure_is_critical(monkeypatch):
         "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
             (True, "[]\t[]"),
         "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
-        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test":
-            (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
-        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "unconfined"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test": (True, "null"),
+        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "lab-codex"),
         "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
-        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
+        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "755"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
             (True, "bwrap works"),
         # Seccomp enforcement: add_key not blocked with EPERM (probe exits 1 = not enforcing).
@@ -276,7 +276,7 @@ def test_seccomp_enforcement_failure_is_critical(monkeypatch):
     assert issue.repairable is True
 
 
-def test_confined_container_is_flagged_stale(monkeypatch):
+def test_unconfined_container_is_flagged_stale(monkeypatch):
     runner = healthy_runner()
     runner.responses.update({
         'docker ps --filter label=lab-agent.managed=true --format {{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}':
@@ -285,13 +285,12 @@ def test_confined_container_is_flagged_stale(monkeypatch):
         "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
             (True, "[]\t[]"),
         "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
-        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test":
-            (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
-        # Container was created confined (e.g. by a since-reverted agent): setuid bwrap breaks
-        # under confinement, so doctor must demand recreation.
-        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "lab-codex"),
+        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test": (True, "null"),
+        # Container was created unconfined (by the previous setuid-bwrap contract): unprivileged
+        # bwrap cannot write its uid_map there, so doctor must demand recreation.
+        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "unconfined"),
         "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
-        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "4755"),
+        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "755"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
             (True, "bwrap works"),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test python3":

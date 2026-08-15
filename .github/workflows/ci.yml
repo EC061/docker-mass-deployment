@@ -56,6 +56,13 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
       - name: Parse AppArmor policy
         run: sudo apparmor_parser -Q -T agent/src/lab_agent/assets/lab-codex.apparmor
+      - name: AppArmor profile loads
+        run: |
+          # Managed labs run CONFINED by this profile: unprivileged bwrap cannot write its own
+          # /proc/self/uid_map when the task is AppArmor-unconfined, so confinement is what makes
+          # the sandbox work. The bubblewrap smoke test below depends on this profile being loaded.
+          sudo apparmor_parser -r agent/src/lab_agent/assets/lab-codex.apparmor
+          sudo aa-status | grep -q "lab-codex" || { echo "FAIL: lab-codex profile not loaded"; exit 1; }
       - name: Build pinned lab image
         run: docker build --tag custom-ssh:ci image
       - name: Verify CUDA toolkit and bubblewrap
@@ -71,30 +78,21 @@ jobs:
             ! command -v npm
             ! command -v codex
             test "$(stat -c %U:%G /usr/bin/bwrap)" = root:root
-            test "$(stat -c %a /usr/bin/bwrap)" = 4755
+            test "$(stat -c %a /usr/bin/bwrap)" = 755
             useradd -m -s /bin/bash student
             su - student -c "nvcc --version"
             env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
               nvcc --version
           '
+          # Exactly the contract build_run_args emits: no capabilities, confined by lab-codex.
           output=$(docker run --rm \
-            --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add SYS_PTRACE \
             --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
-            --security-opt apparmor=unconfined --security-opt systempaths=unconfined \
+            --security-opt apparmor=lab-codex --security-opt systempaths=unconfined \
             --entrypoint sh custom-ssh:ci -c '
               useradd -m -s /bin/bash student
               su - student -c '\''bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"'\''
             ')
           test "$output" = "bwrap works"
-
-      - name: AppArmor profile loads
-        run: |
-          # Managed labs run apparmor=unconfined (setuid bwrap breaks under confinement on
-          # production kernels, even where the CI kernel accepts it — do NOT add confinement
-          # tests back). host-prepare still hard-fails if apparmor_parser rejects the profile,
-          # so keep the parse/load path honest here.
-          sudo apparmor_parser -r agent/src/lab_agent/assets/lab-codex.apparmor
-          sudo aa-status | grep -q "lab-codex" || { echo "FAIL: lab-codex profile not loaded"; exit 1; }
 
       - name: Seccomp denial tests
         run: |

@@ -42,11 +42,8 @@ def run_repair(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
     ], timeout=20)
     containers = listed.stdout.splitlines() if listed.ok else []
-    for name in containers:
-        owner = docker.exec_in(name, ["chown", "root:root", "/usr/bin/bwrap"], timeout=20)
-        mode = docker.exec_in(name, ["chmod", "4755", "/usr/bin/bwrap"], timeout=20)
-        if owner.ok and mode.ok:
-            repaired.append(f"bwrap_mode_repaired:{name}")
+    # /usr/bin/bwrap needs no mode repair: it is plain 0755 in the image and takes the unprivileged
+    # user-namespace path. Restoring a setuid bit here would break it (see build_run_args).
     if run(["nvidia-ctk", "--version"], timeout=10).ok:
         generated = run([
             "nvidia-ctk", "cdi", "generate", "--output=/etc/cdi/nvidia.yaml"
