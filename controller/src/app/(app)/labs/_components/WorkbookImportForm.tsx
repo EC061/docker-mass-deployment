@@ -1,15 +1,17 @@
 "use client";
 
-import { useRef, useState, useTransition } from "react";
+import { Fragment, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { ChevronDown } from "lucide-react";
 import { parseXlsx } from "@/lib/xlsx";
 import type {
-  WorkbookAccount,
   WorkbookImportPlan,
   WorkbookImportResult,
+  WorkbookLabPlan,
+  WorkbookPerson,
   WorkbookSheet,
 } from "@/lib/workbookimport";
+import { composeName } from "@/lib/names";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -18,24 +20,6 @@ import { cn } from "@/lib/utils";
 interface Props {
   preview: (sheets: WorkbookSheet[]) => Promise<WorkbookImportPlan>;
   apply: (sheets: WorkbookSheet[]) => Promise<{ result?: WorkbookImportResult; error?: string }>;
-}
-
-/** Which of the four summary counters is expanded to show the people (or labs) behind it. */
-type Detail = "labs" | "create" | "update" | "members";
-
-function AccountList({ accounts }: { accounts: WorkbookAccount[] }) {
-  return (
-    <ul className="divide-y divide-border/60">
-      {accounts.map((a) => (
-        <li key={a.username} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5">
-          <code className="text-foreground">{a.username}</code>
-          <span>{a.name ?? "—"}</span>
-          <span className="text-muted-foreground">{a.email ?? "no email"}</span>
-          <span className="ml-auto text-muted-foreground">{a.labs.join(", ")}</span>
-        </li>
-      ))}
-    </ul>
-  );
 }
 
 function summarize(result: WorkbookImportResult): string {
@@ -51,61 +35,51 @@ function summarize(result: WorkbookImportResult): string {
   return `Imported: ${parts.join("; ")}.`;
 }
 
-/**
- * The people (or labs) behind one summary counter. Roster additions overlap the account counters on
- * purpose — an account is a login, a roster addition is a lab membership — so the overlap is spelled
- * out rather than left for the reader to work out from two numbers that often match.
- */
-function ImportDetail({ plan, detail }: { plan: WorkbookImportPlan; detail: Detail }) {
-  const alsoNew = plan.rosterAdditions.filter((m) => m.newAccount).length;
-  const body = {
-    labs: {
-      note: "Sheets naming a lab that does not exist yet. Each is created with the roster below it.",
-      list: (
-        <ul className="flex flex-wrap gap-1.5 py-1.5">
-          {plan.newLabs.map((lab) => (
-            <li key={lab}>
-              <Badge variant="ok">{lab}</Badge>
-            </li>
-          ))}
-        </ul>
-      ),
-    },
-    create: {
-      note: "People with no account yet — a login is created for each, once, however many labs list them.",
-      list: <AccountList accounts={plan.accountsToCreate} />,
-    },
-    update: {
-      note: "People who already have an account whose name, email, degree, or UGA ID the workbook changes.",
-      list: <AccountList accounts={plan.accountsToUpdate} />,
-    },
-    members: {
-      note:
-        `One row per person per lab — this is lab membership, not a login, so it counts people who ` +
-        `already have an account joining a lab. ${alsoNew} of ${plan.rosterAdditions.length} also ` +
-        `need an account created.`,
-      list: (
-        <ul className="divide-y divide-border/60">
-          {plan.rosterAdditions.map((m) => (
-            <li key={`${m.lab}/${m.username}`} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5">
-              <code className="text-foreground">{m.username}</code>
-              <span>{m.name ?? "—"}</span>
-              {m.isPi && <Badge variant="default">PI</Badge>}
-              <Badge variant={m.newAccount ? "ok" : "secondary"}>
-                {m.newAccount ? "new account" : "existing account"}
-              </Badge>
-              <span className="ml-auto text-muted-foreground">{m.lab}</span>
-            </li>
-          ))}
-        </ul>
-      ),
-    },
-  }[detail];
+/** What the import does to one person's global login, said in the roster's own words. */
+const ACCOUNT_LABEL: Record<WorkbookPerson["action"], { text: string; variant: "ok" | "warn" | "secondary" }> = {
+  create: { text: "new account", variant: "ok" },
+  update: { text: "account updated", variant: "warn" },
+  unchanged: { text: "account exists", variant: "secondary" },
+};
 
+/**
+ * One lab's roster as the workbook lists it. An account is a login and a membership is a place on
+ * this lab's roster — the two differ (someone with an account can still be joining), so each person
+ * carries both, rather than leaving the reader to work it out from the counters.
+ */
+function LabRoster({ lab }: { lab: WorkbookLabPlan }) {
+  const already = lab.people.length - lab.membersToAdd;
   return (
     <div className="rounded-md border border-border/60 bg-muted/30 p-2.5 text-xs">
-      <p className="text-muted-foreground">{body.note}</p>
-      {body.list}
+      <p className="text-muted-foreground">
+        Everyone on sheet <code>{lab.sheet}</code> — {lab.people.length} listed,{" "}
+        {lab.membersToAdd === 0
+          ? `all already on ${lab.lab}'s roster`
+          : already === 0
+            ? `all joining ${lab.lab}`
+            : `${lab.membersToAdd} joining ${lab.lab}, ${already} already on its roster`}
+        .
+      </p>
+      <ul className="divide-y divide-border/60">
+        {lab.people.map((p) => {
+          const account = ACCOUNT_LABEL[p.action];
+          return (
+            <li key={p.username} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5">
+              <code className="text-foreground">{p.username}</code>
+              <span>{composeName(p.firstName, p.lastName) ?? "—"}</span>
+              <span className="text-muted-foreground">{p.email ?? "no email"}</span>
+              {p.degree && <span className="text-muted-foreground">{p.degree}</span>}
+              {p.isPi && <Badge variant="default">PI</Badge>}
+              <span className="ml-auto flex items-center gap-1.5">
+                <Badge variant={account.variant}>{account.text}</Badge>
+                <Badge variant={p.alreadyMember ? "secondary" : "ok"}>
+                  {p.alreadyMember ? "on roster" : "joining"}
+                </Badge>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
     </div>
   );
 }
@@ -122,14 +96,15 @@ export function WorkbookImportForm({ preview, apply }: Props) {
   const [plan, setPlan] = useState<WorkbookImportPlan | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
-  const [detail, setDetail] = useState<Detail | null>(null);
+  /** Sheet name of the lab whose roster is expanded, if any. */
+  const [openSheet, setOpenSheet] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
   /** Drop the chosen workbook and its preview, leaving any success/error message on screen. */
   function clearWorkbook() {
     setSheets([]);
     setPlan(null);
-    setDetail(null);
+    setOpenSheet(null);
     setFileName("");
     if (fileRef.current) fileRef.current.value = "";
   }
@@ -145,7 +120,7 @@ export function WorkbookImportForm({ preview, apply }: Props) {
     setErr(null);
     setDone(null);
     setPlan(null);
-    setDetail(null);
+    setOpenSheet(null);
     setFileName(file.name);
     let parsed: WorkbookSheet[];
     try {
@@ -227,46 +202,20 @@ export function WorkbookImportForm({ preview, apply }: Props) {
 
       {plan && (
         <div className="space-y-3 rounded-md border border-border/60 p-3">
-          <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-sm sm:grid-cols-4">
+          <div className="grid grid-cols-1 gap-x-2 gap-y-1 text-sm sm:grid-cols-3">
             {(
               [
-                ["labs", "Labs to create", plan.labsToCreate],
-                ["create", "Accounts to create", plan.studentsToCreate],
-                ["update", "Accounts to update", plan.studentsToUpdate],
-                ["members", "Roster additions", plan.membersToAdd],
+                ["Labs to create", plan.labsToCreate],
+                ["Accounts to create", plan.studentsToCreate],
+                ["Accounts to update", plan.studentsToUpdate],
               ] as const
-            ).map(([key, label, n]) => (
-              <button
-                key={key}
-                type="button"
-                disabled={n === 0}
-                aria-expanded={detail === key}
-                onClick={() => setDetail(detail === key ? null : key)}
-                className={cn(
-                  "flex items-center justify-between gap-2 rounded-md px-2 py-1 text-left transition-colors",
-                  n === 0
-                    ? "cursor-default"
-                    : "hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
-                  detail === key && "bg-muted ring-1 ring-border",
-                )}
-              >
-                <span className={cn("text-muted-foreground", detail === key && "text-foreground")}>{label}</span>
-                <span className="flex items-center gap-1">
-                  <span className="font-semibold tabular-nums">{n}</span>
-                  {n > 0 && (
-                    <ChevronDown
-                      className={cn(
-                        "size-3.5 text-muted-foreground transition-transform",
-                        detail === key && "rotate-180 text-foreground",
-                      )}
-                    />
-                  )}
-                </span>
-              </button>
+            ).map(([label, n]) => (
+              <div key={label} className="flex items-center justify-between gap-2 px-2 py-1">
+                <span className="text-muted-foreground">{label}</span>
+                <span className="font-semibold tabular-nums">{n}</span>
+              </div>
             ))}
           </div>
-
-          {detail && <ImportDetail plan={plan} detail={detail} />}
 
           {plan.issues.length > 0 && (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">
@@ -289,30 +238,65 @@ export function WorkbookImportForm({ preview, apply }: Props) {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {plan.labs.map((lab) => (
-                <TableRow key={lab.sheet} className={lab.ok ? undefined : "opacity-70"}>
-                  <TableCell className="whitespace-nowrap">{lab.sheet}</TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {lab.lab || "—"}{" "}
-                    <Badge variant={lab.labExists ? "warn" : "ok"}>{lab.labExists ? "exists" : "new"}</Badge>
-                  </TableCell>
-                  <TableCell className="whitespace-nowrap">{lab.piUsername ?? "—"}</TableCell>
-                  <TableCell className="whitespace-nowrap">
-                    {lab.people.length} · {lab.membersToAdd} to add
-                  </TableCell>
-                  <TableCell className={lab.ok ? "text-ok" : "text-err"}>
-                    {lab.ok ? (
-                      lab.warnings.length > 0 ? (
-                        <span className="text-muted-foreground">{lab.warnings.join("; ")}</span>
-                      ) : (
-                        "ok"
-                      )
-                    ) : (
-                      lab.issues.map((i) => (i.line ? `row ${i.line}: ${i.message}` : i.message)).join("; ")
+              {plan.labs.map((lab) => {
+                const open = openSheet === lab.sheet;
+                return (
+                  <Fragment key={lab.sheet}>
+                    <TableRow className={cn(lab.ok ? undefined : "opacity-70", open && "bg-muted/40")}>
+                      <TableCell className="whitespace-nowrap">
+                        <button
+                          type="button"
+                          disabled={lab.people.length === 0}
+                          aria-expanded={open}
+                          onClick={() => setOpenSheet(open ? null : lab.sheet)}
+                          className={cn(
+                            "-mx-1 flex items-center gap-1.5 rounded-md px-1 py-0.5 text-left transition-colors",
+                            lab.people.length === 0
+                              ? "cursor-default"
+                              : "hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                          )}
+                        >
+                          {lab.people.length > 0 && (
+                            <ChevronDown
+                              className={cn(
+                                "size-3.5 shrink-0 text-muted-foreground transition-transform",
+                                open && "rotate-180 text-foreground",
+                              )}
+                            />
+                          )}
+                          {lab.sheet}
+                        </button>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {lab.lab || "—"}{" "}
+                        <Badge variant={lab.labExists ? "warn" : "ok"}>{lab.labExists ? "exists" : "new"}</Badge>
+                      </TableCell>
+                      <TableCell className="whitespace-nowrap">{lab.piUsername ?? "—"}</TableCell>
+                      <TableCell className="whitespace-nowrap">
+                        {lab.people.length} · {lab.membersToAdd} to add
+                      </TableCell>
+                      <TableCell className={lab.ok ? "text-ok" : "text-err"}>
+                        {lab.ok ? (
+                          lab.warnings.length > 0 ? (
+                            <span className="text-muted-foreground">{lab.warnings.join("; ")}</span>
+                          ) : (
+                            "ok"
+                          )
+                        ) : (
+                          lab.issues.map((i) => (i.line ? `row ${i.line}: ${i.message}` : i.message)).join("; ")
+                        )}
+                      </TableCell>
+                    </TableRow>
+                    {open && (
+                      <TableRow className="hover:bg-transparent">
+                        <TableCell colSpan={5} className="p-2">
+                          <LabRoster lab={lab} />
+                        </TableCell>
+                      </TableRow>
                     )}
-                  </TableCell>
-                </TableRow>
-              ))}
+                  </Fragment>
+                );
+              })}
             </TableBody>
           </Table>
 
