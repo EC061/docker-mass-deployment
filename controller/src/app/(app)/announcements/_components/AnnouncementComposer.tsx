@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
-import type { AnnouncementTemplate, Person } from "@/lib/announcements";
+import type { AnnouncementTemplate, Person, RecipientGroup } from "@/lib/announcements";
 import { extractBracketTokens } from "@/lib/template";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,8 +12,8 @@ import { RecipientPicker } from "./RecipientPicker";
 interface Props {
   templates: AnnouncementTemplate[];
   vars: { key: string; desc: string }[];
-  counts: { students: number; pis: number };
   people: Person[];
+  groups: RecipientGroup[];
   action: (formData: FormData) => void | Promise<void>;
 }
 
@@ -25,7 +25,7 @@ interface Props {
  * controlled so the picker/inserts and the user's typing agree; the form still submits straight to
  * the server action.
  */
-export function AnnouncementComposer({ templates, vars, counts, people, action }: Props) {
+export function AnnouncementComposer({ templates, vars, people, groups, action }: Props) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   // Placeholder values are keyed by token and kept even when a token temporarily disappears while
@@ -142,21 +142,12 @@ export function AnnouncementComposer({ templates, vars, counts, people, action }
 
       <fieldset className="rounded-md border border-border p-3">
         <legend className="px-1 text-xs text-muted-foreground">Recipients</legend>
-        <div className="flex flex-wrap gap-x-6 gap-y-2">
-          <label className="flex items-center gap-1.5 text-sm">
-            <input type="checkbox" name="students" defaultChecked className="accent-primary" />
-            All users ({counts.students})
-          </label>
-          <label className="flex items-center gap-1.5 text-sm">
-            <input type="checkbox" name="pis" className="accent-primary" />
-            All PIs ({counts.pis})
-          </label>
-        </div>
-        <div className="mt-3 space-y-1.5">
+        <div className="space-y-1.5">
           <p className="text-xs text-muted-foreground">
-            Or pick individual recipients (merged with the audiences above, each address mailed once):
+            The shortcuts tick everyone in that group below — untick anyone you want to leave out.
+            Each address is mailed once however many groups it falls in.
           </p>
-          <RecipientPicker people={people} />
+          <RecipientPicker people={people} groups={groups} />
         </div>
       </fieldset>
 

@@ -1,8 +1,8 @@
 import {
   ANNOUNCEMENT_VARS,
-  audienceCounts,
   listAnnouncementPeople,
   listAnnouncementTemplates,
+  listRecipientGroups,
   recentAnnouncements,
 } from "@/lib/announcements";
 import { isSmtpConfigured } from "@/lib/settings";
@@ -22,8 +22,8 @@ export default async function AnnouncementsPage({
 }) {
   const sp = await searchParams;
   const msg = typeof sp.msg === "string" ? sp.msg : undefined;
-  const counts = audienceCounts();
   const people = listAnnouncementPeople();
+  const groups = listRecipientGroups();
   const history = recentAnnouncements();
   const templates = listAnnouncementTemplates();
   const smtpOk = isSmtpConfigured();
@@ -60,13 +60,13 @@ export default async function AnnouncementsPage({
           <AnnouncementComposer
             templates={templates}
             vars={ANNOUNCEMENT_VARS}
-            counts={counts}
             people={people}
+            groups={groups}
             action={sendAnnouncementAction}
           />
           <p className="text-xs text-muted-foreground">
-            Sent by email to the distinct addresses in the selected audiences and individually selected recipients
-            (each address is mailed once). ALL-CAPS <code>[BRACKET]</code> spans in the subject or
+            Sent by email to the distinct addresses ticked under Recipients (each address is mailed
+            once). ALL-CAPS <code>[BRACKET]</code> spans in the subject or
             message become input fields above. <code>{"{name}"}</code> and <code>{"{email}"}</code>{" "}
             are filled in per recipient. Manage the prebuilt templates and see every email variable
             under <a href="/email-templates" className="underline">Email templates</a>.
@@ -110,7 +110,14 @@ export default async function AnnouncementsPage({
                   <TableRow key={a.id}>
                     <TableCell className="whitespace-nowrap text-muted-foreground">{ago(a.ts)}</TableCell>
                     <TableCell>{a.actor ?? "—"}</TableCell>
-                    <TableCell>{a.audiences.replace("students", "users").replace(/,/g, ", ")}</TableCell>
+                    {/* Rows recorded before recipient groups stored the raw audience keys; map the
+                        one that was renamed and leave everything else as written. */}
+                    <TableCell>
+                      {a.audiences
+                        .split(",")
+                        .map((part) => (part === "students" ? "users" : part))
+                        .join(", ")}
+                    </TableCell>
                     <TableCell>{a.subject}</TableCell>
                     <TableCell>
                       {a.skipped ? (

@@ -352,3 +352,114 @@ describe("announcement templates", () => {
     expect(() => ann.updateAnnouncementTemplate(99999, { name: "n", subject: "s", body: "b" })).toThrow(/not found/);
   });
 });
+
+describe("recipient groups", () => {
+  beforeAll(() => {
+    const d = dbmod.db();
+    // A second roster slice with standings, two labs with members, and two nodes — one lab placed
+    // on each node plus a lab placed on both, so node groups have something to union.
+    const student = (u: string, email: string, degree: string | null, uid: number) =>
+      d
+        .prepare("INSERT INTO students (username, email, degree, linux_uid, created_at) VALUES (?,?,?,?,0)")
+        .run(u, email, degree, uid).lastInsertRowid as number;
+    const dana = student("dana", "dana@uga.edu", "PhD", 10003);
+    const evan = student("evan", "evan@uga.edu", "MS", 10004);
+    const finn = student("finn", "finn@uga.edu", "PhD", 10005);
+    student("prof", "prof@uga.edu", "Faculty", 10006);
+
+    const labD = d
+      .prepare("INSERT INTO labs (name, pi_email, created_at, updated_at) VALUES ('labD','prof@uga.edu',0,0)")
+      .run().lastInsertRowid as number;
+    const labE = d
+      .prepare("INSERT INTO labs (name, pi_email, created_at, updated_at) VALUES ('labE','prof@uga.edu',0,0)")
+      .run().lastInsertRowid as number;
+    const member = (lab: number, s: number) =>
+      d.prepare("INSERT INTO lab_members (lab_id, student_id, created_at) VALUES (?,?,0)").run(lab, s);
+    member(labD, dana);
+    member(labD, evan);
+    member(labE, finn);
+
+    const node = (name: string) =>
+      d.prepare("INSERT INTO nodes (name, online, created_at) VALUES (?,1,0)").run(name)
+        .lastInsertRowid as number;
+    const gpu1 = node("gpu-a");
+    const gpu2 = node("gpu-b");
+    const place = (lab: number, nodeId: number, port: number) =>
+      d
+        .prepare(
+          `INSERT INTO lab_placements (lab_id, node_id, fast_quota_bytes, ssh_port, image, created_at, updated_at)
+           VALUES (?,?,1,?, 'img', 0, 0)`,
+        )
+        .run(lab, nodeId, port);
+    place(labD, gpu1, 2201);
+    place(labE, gpu1, 2202); // gpu-a hosts both labs
+    place(labE, gpu2, 2203);
+  });
+
+  const group = (id: string) => ann.listRecipientGroups().find((g) => g.id === id)!;
+
+  it("splits everyone into all users, all students, and all PIs", () => {
+    // Faculty rows mark PIs, so they are in "All users" but not "All students".
+    expect(group("all-users").emails).toContain("prof@uga.edu");
+    expect(group("all-students").emails).not.toContain("prof@uga.edu");
+    expect(group("all-students").emails).toContain("dana@uga.edu");
+    expect(group("all-pis").emails).toContain("prof@uga.edu");
+    expect(group("all-pis").emails).not.toContain("dana@uga.edu");
+    // Every group is a subset of the addressable people.
+    const addressable = new Set(ann.listAnnouncementPeople().map((p) => p.email));
+    for (const g of ann.listRecipientGroups()) {
+      for (const e of g.emails) expect(addressable.has(e)).toBe(true);
+    }
+  });
+
+  it("groups by standing with PhD before MS", () => {
+    const degrees = ann.listRecipientGroups().filter((g) => g.kind === "degree").map((g) => g.label);
+    expect(degrees.indexOf("PhD")).toBeLessThan(degrees.indexOf("MS"));
+    expect(group("degree:PhD").emails.sort()).toEqual(["dana@uga.edu", "finn@uga.edu"]);
+    expect(group("degree:MS").emails).toEqual(["evan@uga.edu"]);
+  });
+
+  it("puts a lab's members and its PI in the lab's group", () => {
+    const labD = ann.listRecipientGroups().find((g) => g.kind === "lab" && g.label === "labD")!;
+    expect(labD.emails.sort()).toEqual(["dana@uga.edu", "evan@uga.edu", "prof@uga.edu"]);
+  });
+
+  it("unions every lab placed on a node into the node's group", () => {
+    const a = ann.listRecipientGroups().find((g) => g.kind === "node" && g.label === "gpu-a")!;
+    const b = ann.listRecipientGroups().find((g) => g.kind === "node" && g.label === "gpu-b")!;
+    // gpu-a hosts labD + labE; gpu-b only labE. Deduped despite the shared PI.
+    expect(a.emails.sort()).toEqual(["dana@uga.edu", "evan@uga.edu", "finn@uga.edu", "prof@uga.edu"]);
+    expect(b.emails.sort()).toEqual(["finn@uga.edu", "prof@uga.edu"]);
+  });
+
+  it("labels a history row with the groups the selection covers", async () => {
+    settings.setSetting("smtpHost", "smtp.test");
+    settings.setSetting("smtpFrom", "no-reply@uga.edu");
+
+    await ann.sendAnnouncement({
+      subject: "s",
+      body: "b",
+      audiences: [],
+      individuals: group("degree:PhD").emails,
+    });
+    const row = dbmod
+      .db()
+      .prepare("SELECT audiences FROM announcements ORDER BY id DESC LIMIT 1")
+      .get() as { audiences: string };
+    expect(row.audiences).toBe("PhD");
+  });
+
+  it("counts leftovers a group does not cover", async () => {
+    await ann.sendAnnouncement({
+      subject: "s",
+      body: "b",
+      audiences: [],
+      individuals: [...group("degree:PhD").emails, "evan@uga.edu"],
+    });
+    const row = dbmod
+      .db()
+      .prepare("SELECT audiences FROM announcements ORDER BY id DESC LIMIT 1")
+      .get() as { audiences: string };
+    expect(row.audiences).toBe("PhD,MS");
+  });
+});

@@ -3,15 +3,14 @@
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
-import { clearAnnouncements, deleteAnnouncement, sendAnnouncement, type Audience } from "@/lib/announcements";
+import { clearAnnouncements, deleteAnnouncement, sendAnnouncement } from "@/lib/announcements";
 
 export async function sendAnnouncementAction(formData: FormData) {
   const admin = await requireAdmin();
   const subject = String(formData.get("subject") ?? "");
   const body = String(formData.get("body") ?? "");
-  const audiences: Audience[] = [];
-  if (formData.get("students") === "on") audiences.push("students");
-  if (formData.get("pis") === "on") audiences.push("pis");
+  // The form's group shortcuts tick individuals rather than posting an audience, so every send
+  // arrives as an explicit recipient list that sendAnnouncement re-checks against known people.
   const individuals = formData.getAll("recipient").map(String);
   // Placeholder values arrive as ph_<TOKEN> fields, one per [BRACKET] span in the subject/body.
   const placeholders: Record<string, string> = {};
@@ -24,7 +23,7 @@ export async function sendAnnouncementAction(formData: FormData) {
     const res = await sendAnnouncement({
       subject,
       body,
-      audiences,
+      audiences: [],
       individuals,
       placeholders,
       sender: { name: admin.name, email: admin.email },

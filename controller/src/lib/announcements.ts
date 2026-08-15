@@ -1,16 +1,20 @@
 /**
- * Service announcements: an admin composes a message and broadcasts it by email to all students
- * and/or all PIs. Each send is recorded in the `announcements` table for an audit trail and shown
- * as recent history on the Announcements page.
+ * Service announcements: an admin composes a message and broadcasts it by email. Each send is
+ * recorded in the `announcements` table for an audit trail and shown as recent history on the
+ * Announcements page.
  *
- * Recipients are deduped across audiences (a PI who is also a student is mailed once). If SMTP is not
- * configured the send is recorded as skipped and nothing goes out, mirroring the rest of the mailer.
+ * The compose form picks recipients individually — its shortcuts (see listRecipientGroups) tick
+ * everyone in a group so the admin can then untick individuals — while `audiences` stays available
+ * for callers that want a whole set resolved server-side. Recipients are deduped either way (a PI
+ * who is also a student is mailed once). If SMTP is not configured the send is recorded as skipped
+ * and nothing goes out, mirroring the rest of the mailer.
  */
 
 import { audit } from "./labs";
 import { db } from "./db";
 import { sendMail } from "./mailer";
 import { isSmtpConfigured } from "./settings";
+import { DEGREE_OPTIONS, isFacultyDegree, normalizeDegree } from "./names";
 import { extractBracketTokens, fillBracketTokens, renderTemplate } from "./template";
 
 export type Audience = "students" | "pis";
@@ -139,12 +143,161 @@ export function listAnnouncementPeople(): Person[] {
   return [...byEmail.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
-/** How many addressable recipients each audience currently has (for the compose UI). */
+/** How many addressable recipients each audience currently has. */
 export function audienceCounts(): { students: number; pis: number } {
   return {
     students: audienceRecipients("students").length,
     pis: audienceRecipients("pis").length,
   };
+}
+
+/**
+ * A named set of addressable people the compose form can select in one click — "All PIs", a
+ * standing like "PhD", a single lab, or everyone on a node. Groups are only a shortcut for
+ * *selecting* individuals: the form still posts one `recipient` field per person, so any member can
+ * be unchecked afterwards.
+ */
+export interface RecipientGroup {
+  id: string;
+  /** Which row of the picker's shortcut bar this belongs to. */
+  kind: "all" | "degree" | "lab" | "node";
+  label: string;
+  /** Addressable emails in the group, deduped. Always a subset of listAnnouncementPeople(). */
+  emails: string[];
+}
+
+/**
+ * Every one-click selection shortcut, in display order: the three "everyone" sets, then one per
+ * roster standing (PhD / MS / …), one per lab, and one per node.
+ *
+ * A lab's set is its roster plus its PI; a node's set is the union of the labs placed on it, so
+ * "email each node" reaches everyone with a container there. Emails are intersected with the
+ * addressable people so a group can never widen who `sendAnnouncement` will accept.
+ */
+export function listRecipientGroups(): RecipientGroup[] {
+  const people = listAnnouncementPeople();
+  const addressable = new Set(people.map((p) => p.email));
+
+  /** Dedupe, drop anything unaddressable, and keep the picker's display order. */
+  const resolve = (emails: Iterable<string>): string[] => {
+    const seen = new Set<string>();
+    for (const raw of emails) {
+      const email = raw.trim();
+      if (email && addressable.has(email)) seen.add(email);
+    }
+    return people.filter((p) => seen.has(p.email)).map((p) => p.email);
+  };
+
+  const groups: RecipientGroup[] = [];
+
+  // — Everyone. "All users" is the whole list; "All students" is the roster minus the Faculty rows
+  // that mark PIs, so the three sets stay distinct and add up the way the labels read.
+  const roster = db()
+    .prepare(`SELECT email, degree FROM students WHERE email IS NOT NULL AND TRIM(email) <> ''`)
+    .all() as { email: string; degree: string | null }[];
+  const piEmails = db()
+    .prepare(`SELECT DISTINCT pi_email AS email FROM labs WHERE pi_email IS NOT NULL AND TRIM(pi_email) <> ''`)
+    .all() as { email: string }[];
+
+  groups.push({ id: "all-users", kind: "all", label: "All users", emails: resolve(addressable) });
+  groups.push({
+    id: "all-students",
+    kind: "all",
+    label: "All students",
+    emails: resolve(roster.filter((r) => !isFacultyDegree(r.degree)).map((r) => r.email)),
+  });
+  groups.push({ id: "all-pis", kind: "all", label: "All PIs", emails: resolve(piEmails.map((r) => r.email)) });
+
+  // — Standing. PhD / MS first (the distinction the roster is actually keyed on), then any other
+  // canonical option, then whatever free-form values an import left behind.
+  const byDegree = new Map<string, string[]>();
+  for (const r of roster) {
+    const degree = normalizeDegree(r.degree);
+    if (!degree) continue;
+    const bucket = byDegree.get(degree);
+    if (bucket) bucket.push(r.email);
+    else byDegree.set(degree, [r.email]);
+  }
+  const degreeRank = (d: string) => {
+    const i = DEGREE_OPTIONS.indexOf(d);
+    return i === -1 ? DEGREE_OPTIONS.length : i;
+  };
+  for (const degree of [...byDegree.keys()].sort((a, b) => degreeRank(a) - degreeRank(b) || a.localeCompare(b))) {
+    groups.push({
+      id: `degree:${degree}`,
+      kind: "degree",
+      label: degree,
+      emails: resolve(byDegree.get(degree)!),
+    });
+  }
+
+  // — Labs: roster members plus the PI, whether or not the PI is on the roster.
+  const labRows = db()
+    .prepare(
+      `SELECT labs.id AS lab_id, labs.name AS lab_name, s.email AS email
+         FROM labs
+         JOIN lab_members m ON m.lab_id = labs.id
+         JOIN students s ON s.id = m.student_id
+        WHERE s.email IS NOT NULL AND TRIM(s.email) <> ''
+        UNION
+       SELECT labs.id, labs.name, labs.pi_email
+         FROM labs
+        WHERE labs.pi_email IS NOT NULL AND TRIM(labs.pi_email) <> ''`,
+    )
+    .all() as { lab_id: number; lab_name: string; email: string }[];
+  const labEmails = new Map<number, { name: string; emails: string[] }>();
+  for (const r of labRows) {
+    const entry = labEmails.get(r.lab_id);
+    if (entry) entry.emails.push(r.email);
+    else labEmails.set(r.lab_id, { name: r.lab_name, emails: [r.email] });
+  }
+  const labs = [...labEmails.entries()].sort((a, b) => a[1].name.localeCompare(b[1].name));
+  for (const [labId, lab] of labs) {
+    groups.push({ id: `lab:${labId}`, kind: "lab", label: lab.name, emails: resolve(lab.emails) });
+  }
+
+  // — Nodes: everyone in any lab placed on the node.
+  const placements = db()
+    .prepare(
+      `SELECT n.id AS node_id, n.name AS node_name, p.lab_id
+         FROM lab_placements p JOIN nodes n ON n.id = p.node_id`,
+    )
+    .all() as { node_id: number; node_name: string; lab_id: number }[];
+  const nodeEmails = new Map<number, { name: string; emails: string[] }>();
+  for (const p of placements) {
+    const entry = nodeEmails.get(p.node_id) ?? { name: p.node_name, emails: [] };
+    entry.emails.push(...(labEmails.get(p.lab_id)?.emails ?? []));
+    nodeEmails.set(p.node_id, entry);
+  }
+  const nodes = [...nodeEmails.entries()].sort((a, b) => a[1].name.localeCompare(b[1].name));
+  for (const [nodeId, node] of nodes) {
+    groups.push({ id: `node:${nodeId}`, kind: "node", label: node.name, emails: resolve(node.emails) });
+  }
+
+  return groups;
+}
+
+/**
+ * A readable audit label for an individually-picked recipient set: names every recipient group the
+ * selection fully covers (largest first, skipping ones a bigger group already accounts for) and
+ * counts whatever is left over. Purely descriptive — it never affects who is mailed.
+ */
+function describeSelection(emails: string[]): string {
+  const chosen = new Set(emails);
+  if (chosen.size === 0) return "";
+  const covered = listRecipientGroups()
+    .filter((g) => g.emails.length > 0 && g.emails.every((e) => chosen.has(e)))
+    .sort((a, b) => b.emails.length - a.emails.length);
+  const named = new Set<string>();
+  const parts: string[] = [];
+  for (const g of covered) {
+    if (g.emails.every((e) => named.has(e))) continue;
+    parts.push(g.label);
+    for (const e of g.emails) named.add(e);
+  }
+  const extra = [...chosen].filter((e) => !named.has(e)).length;
+  if (extra > 0) parts.push(`${extra} picked`);
+  return parts.join(",");
 }
 
 export interface AnnouncementRow {
@@ -251,10 +404,12 @@ export async function sendAnnouncement(input: {
     sent = results.filter((r) => r.sent).length;
   }
 
-  const audienceLabel = [
-    ...input.audiences,
-    ...(individuals.length > 0 ? [`${individuals.length} picked`] : []),
-  ].join(",");
+  // Audience keys stay verbatim for callers that use them; a purely individual send (what the
+  // compose form posts) is described by whichever recipient groups the selection covers.
+  const audienceLabel =
+    input.audiences.length === 0
+      ? describeSelection(individuals)
+      : [...input.audiences, ...(individuals.length > 0 ? [`${individuals.length} picked`] : [])].join(",");
   db()
     .prepare(
       `INSERT INTO announcements (ts, actor, audiences, subject, body, recipients, sent, skipped)

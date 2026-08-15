@@ -1,15 +1,26 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import type { Person } from "@/lib/announcements";
+import type { Person, RecipientGroup } from "@/lib/announcements";
 import { Input } from "@/components/ui/input";
 
 /**
- * Searchable checkbox list for picking individual announcement recipients. Selection lives in
- * state and posts as repeated hidden `recipient` fields, so filtering the visible list never
- * drops a selection. The filter input and checkboxes have no `name` and are never submitted.
+ * Recipient chooser: one-click group shortcuts over a searchable checkbox list of every addressable
+ * person. A shortcut ("All PIs", "PhD", a lab, a node) only *selects* its members, so any of them
+ * can be unchecked afterwards — there is no separate audience concept. Selection lives in state and
+ * posts as repeated hidden `recipient` fields, so filtering the visible list never drops a
+ * selection. The filter input and checkboxes have no `name` and are never submitted.
  */
-export function RecipientPicker({ people }: { people: Person[] }) {
+
+/** The shortcut bar's rows, in display order. */
+const GROUP_ROWS: { kind: RecipientGroup["kind"]; label: string }[] = [
+  { kind: "all", label: "Everyone" },
+  { kind: "degree", label: "Standing" },
+  { kind: "lab", label: "Labs" },
+  { kind: "node", label: "Nodes" },
+];
+
+export function RecipientPicker({ people, groups }: { people: Person[]; groups: RecipientGroup[] }) {
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
 
@@ -28,6 +39,19 @@ export function RecipientPicker({ people }: { people: Person[] }) {
     });
   }
 
+  /** Select every member of a group, or clear them all when the group is already fully selected. */
+  function toggleGroup(group: RecipientGroup) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      const all = group.emails.every((e) => next.has(e));
+      for (const e of group.emails) {
+        if (all) next.delete(e);
+        else next.add(e);
+      }
+      return next;
+    });
+  }
+
   const chosen = people.filter((p) => selected.has(p.email));
 
   if (people.length === 0) {
@@ -35,7 +59,47 @@ export function RecipientPicker({ people }: { people: Person[] }) {
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
+      {GROUP_ROWS.map((row) => {
+        const rowGroups = groups.filter((g) => g.kind === row.kind && g.emails.length > 0);
+        if (rowGroups.length === 0) return null;
+        return (
+          <div key={row.kind} className="flex flex-wrap items-baseline gap-1.5">
+            <span className="w-16 shrink-0 text-xs text-muted-foreground">{row.label}</span>
+            {rowGroups.map((g) => {
+              const hit = g.emails.filter((e) => selected.has(e)).length;
+              const all = hit === g.emails.length;
+              return (
+                <button
+                  key={g.id}
+                  type="button"
+                  aria-pressed={all}
+                  onClick={() => toggleGroup(g)}
+                  title={
+                    all
+                      ? `Deselect the ${g.emails.length} recipient(s) in ${g.label}`
+                      : `Select the ${g.emails.length} recipient(s) in ${g.label}`
+                  }
+                  className={
+                    "rounded border px-2 py-0.5 text-xs transition-colors " +
+                    (all
+                      ? "border-primary bg-primary text-primary-foreground"
+                      : hit > 0
+                        ? "border-primary bg-primary/15 text-foreground"
+                        : "border-border bg-muted text-muted-foreground hover:bg-accent hover:text-accent-foreground")
+                  }
+                >
+                  {g.label}{" "}
+                  <span className="tabular-nums opacity-70">
+                    {hit > 0 && !all ? `${hit}/${g.emails.length}` : g.emails.length}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        );
+      })}
+
       <Input
         type="search"
         value={query}
@@ -64,33 +128,47 @@ export function RecipientPicker({ people }: { people: Person[] }) {
                   PI
                 </span>
               )}
+              {p.degree && (
+                <span className="rounded bg-muted px-1 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                  {p.degree}
+                </span>
+              )}
               <span className="ml-auto truncate text-xs text-muted-foreground">{p.email}</span>
             </label>
           ))
         )}
       </div>
-      {chosen.length > 0 && (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-xs text-muted-foreground">Picked:</span>
-          {chosen.map((p) => (
-            <span
-              key={p.email}
-              className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs"
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="text-xs text-muted-foreground">
+          {chosen.length === 0
+            ? "No recipients selected."
+            : `${chosen.length} recipient${chosen.length === 1 ? "" : "s"} selected:`}
+        </span>
+        {chosen.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+          >
+            Clear
+          </button>
+        )}
+        {chosen.map((p) => (
+          <span key={p.email} className="flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-xs">
+            {p.name}
+            <button
+              type="button"
+              onClick={() => toggle(p.email)}
+              aria-label={`Remove ${p.name}`}
+              className="text-muted-foreground hover:text-foreground"
             >
-              {p.name}
-              <button
-                type="button"
-                onClick={() => toggle(p.email)}
-                aria-label={`Remove ${p.name}`}
-                className="text-muted-foreground hover:text-foreground"
-              >
-                ×
-              </button>
-              <input type="hidden" name="recipient" value={p.email} />
-            </span>
-          ))}
-        </div>
-      )}
+              ×
+            </button>
+            <input type="hidden" name="recipient" value={p.email} />
+          </span>
+        ))}
+      </div>
     </div>
   );
 }
