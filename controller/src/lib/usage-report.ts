@@ -20,6 +20,9 @@ export interface UsageReportStudent {
   studentId: number;
   username: string;
   name: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  degree: string | null;
   email: string | null;
 }
 
@@ -29,6 +32,9 @@ export interface UsageReport {
   labName: string;
   nodeName: string;
   piName: string | null;
+  piFirstName: string | null;
+  piLastName: string | null;
+  piDegree: string | null;
   piEmail: string | null;
   students: UsageReportStudent[];
 }
@@ -110,8 +116,12 @@ export function buildUsageReport(
     studentId: m.id,
     username: m.username,
     name: m.name ?? null,
+    firstName: m.first_name ?? null,
+    lastName: m.last_name ?? null,
+    degree: m.degree ?? null,
     email: m.email ?? null,
   }));
+  const pi = members.find((m) => m.is_pi) ?? null;
 
   // One table: roster sorted by username, then the lab TOTAL. Per-student percentages are shares of
   // the lab's total quota for that tier; rootfs is shared by the whole lab, so (unlike labquota's
@@ -149,6 +159,9 @@ export function buildUsageReport(
     labName: placement.lab_name,
     nodeName: placement.node_name,
     piName: lab?.pi_name ?? null,
+    piFirstName: pi?.first_name ?? null,
+    piLastName: pi?.last_name ?? null,
+    piDegree: pi?.degree ?? null,
     piEmail: lab?.pi_email ?? null,
     students,
   };

@@ -6,6 +6,7 @@ import { takeFlash } from "@/lib/flash";
 import { getLab } from "@/lib/labs";
 import { listPlacements, type Placement } from "@/lib/placements";
 import { listMembers } from "@/lib/students";
+import { DEGREE_OPTIONS, FACULTY_DEGREE } from "@/lib/names";
 import { getSettings, TIB } from "@/lib/settings";
 import { PlacementForm, type NodeOpt } from "../_components/PlacementForm";
 import { RosterImportForm } from "../_components/RosterImportForm";
@@ -14,6 +15,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Select } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   addMemberAction,
@@ -81,6 +83,7 @@ export default async function LabDetail({
   if (!lab) notFound();
 
   const members = listMembers(labId);
+  const pi = members.find((member) => member.is_pi) ?? null;
   const placements = listPlacements(labId);
   const offlinePlacements = placements.filter((p) => !p.online);
   const placedNodeIds = new Set(placements.map((p) => p.node_id));
@@ -145,25 +148,39 @@ export default async function LabDetail({
       <Card>
         <CardContent className="space-y-3">
           <h2 className="text-base font-semibold">PI / metadata</h2>
-          <form action={updateLabMetaAction} className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+          <form action={updateLabMetaAction} className="grid grid-cols-1 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <input type="hidden" name="labId" value={lab.id} />
             <div>
               <Label>PI login username</Label>
               <Input
                 name="piUsername"
-                defaultValue={members.find((member) => member.is_pi)?.username ?? ""}
+                defaultValue={pi?.username ?? ""}
                 readOnly={lab.pi_student_id != null}
                 required
                 placeholder="jsmith"
               />
             </div>
             <div>
-              <Label>PI name</Label>
-              <Input name="piName" defaultValue={lab.pi_name ?? ""} placeholder="Dr. Jane Smith" />
+              <Label>PI first name</Label>
+              <Input name="piFirstName" defaultValue={pi?.first_name ?? ""} placeholder="Jane" />
+            </div>
+            <div>
+              <Label>PI last name</Label>
+              <Input name="piLastName" defaultValue={pi?.last_name ?? ""} placeholder="Smith" />
             </div>
             <div>
               <Label>PI email</Label>
               <Input name="piEmail" type="email" defaultValue={lab.pi_email ?? ""} placeholder="pi@uga.edu" />
+            </div>
+            <div>
+              <Label>PI standing</Label>
+              <Select name="piDegree" defaultValue={pi?.degree ?? FACULTY_DEGREE}>
+                {[...new Set([...DEGREE_OPTIONS, ...(pi?.degree ? [pi.degree] : [])])].map((degree) => (
+                  <option key={degree} value={degree}>
+                    {degree}
+                  </option>
+                ))}
+              </Select>
             </div>
             <div className="flex items-end">
               <Button type="submit">Save</Button>
@@ -222,8 +239,22 @@ export default async function LabDetail({
               <Input name="email" type="email" placeholder="alice@uga.edu" />
             </div>
             <div>
-              <Label>Name</Label>
-              <Input name="name" placeholder="Alice A." />
+              <Label>First name</Label>
+              <Input name="firstName" placeholder="Alice" />
+            </div>
+            <div>
+              <Label>Last name</Label>
+              <Input name="lastName" placeholder="Adams" />
+            </div>
+            <div>
+              <Label>Standing</Label>
+              <Select name="degree" defaultValue="PhD">
+                {DEGREE_OPTIONS.map((degree) => (
+                  <option key={degree} value={degree}>
+                    {degree}
+                  </option>
+                ))}
+              </Select>
             </div>
             <div>
               <Label>Student ID</Label>
@@ -239,7 +270,9 @@ export default async function LabDetail({
                 <TableRow>
                   <TableHead>Username</TableHead>
                   <TableHead>Email</TableHead>
-                  <TableHead>Name</TableHead>
+                  <TableHead>First name</TableHead>
+                  <TableHead>Last name</TableHead>
+                  <TableHead>Standing</TableHead>
                   <TableHead>Student ID</TableHead>
                   <TableHead></TableHead>
                 </TableRow>
@@ -249,7 +282,9 @@ export default async function LabDetail({
                   <TableRow key={m.member_id}>
                     <TableCell>{m.username}</TableCell>
                     <TableCell>{m.email ?? "—"}</TableCell>
-                    <TableCell>{m.name ?? "—"}</TableCell>
+                    <TableCell>{m.first_name ?? "—"}</TableCell>
+                    <TableCell>{m.last_name ?? "—"}</TableCell>
+                    <TableCell>{m.degree ?? "—"}</TableCell>
                     <TableCell>{m.student_id ?? "—"}</TableCell>
                     <TableCell className="text-right">
                       {m.is_pi ? (

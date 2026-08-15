@@ -1,8 +1,9 @@
 import { takeFlash } from "@/lib/flash";
 import { listLabPlacementSummaries, listLabs } from "@/lib/labs";
 import Link from "next/link";
-import { createLabAction } from "./actions";
+import { applyWorkbookImportAction, createLabAction, previewWorkbookImportAction } from "./actions";
 import { CreateLabForm, type LabTemplate } from "./_components/CreateLabForm";
+import { WorkbookImportForm } from "./_components/WorkbookImportForm";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -36,6 +37,18 @@ export default async function LabsPage({
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardContent className="space-y-3">
+          <div className="space-y-1">
+            <h2 className="text-base font-semibold">Upload lab workbook (.xlsx)</h2>
+            <p className="text-xs text-muted-foreground">
+              Create every lab in one step from the department roster workbook — one sheet per lab.
+            </p>
+          </div>
+          <WorkbookImportForm preview={previewWorkbookImportAction} apply={applyWorkbookImportAction} />
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent className="space-y-3">

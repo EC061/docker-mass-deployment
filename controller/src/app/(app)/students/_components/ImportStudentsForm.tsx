@@ -21,7 +21,14 @@ interface Props {
   // The server action is passed in so this client component stays decoupled from "use server" imports.
   importAction: (input: {
     labId: number;
-    rows: { username?: string; email?: string; name?: string; studentId?: string }[];
+    rows: {
+      username?: string;
+      email?: string;
+      firstName?: string;
+      lastName?: string;
+      degree?: string;
+      studentId?: string;
+    }[];
     requireEmail?: boolean;
   }) => Promise<ImportResult>;
 }
@@ -33,7 +40,14 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
   const [labId, setLabId] = useState<number>(0);
   const [csvText, setCsvText] = useState("");
   const [fileName, setFileName] = useState<string>("");
-  const [cols, setCols] = useState({ username: "username", email: "email", name: "name", studentId: "" });
+  const [cols, setCols] = useState({
+    username: "username",
+    email: "email",
+    firstName: "first name",
+    lastName: "last name",
+    degree: "",
+    studentId: "",
+  });
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<ImportResult | null>(null);
 
@@ -44,7 +58,9 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
     const mapping = {
       username: cols.username || "username",
       email: cols.email || undefined,
-      name: cols.name || undefined,
+      firstName: cols.firstName || undefined,
+      lastName: cols.lastName || undefined,
+      degree: cols.degree || undefined,
       studentId: cols.studentId || undefined,
     };
     return { headers: parsed.headers, rows: applyMapping(parsed, mapping) };
@@ -79,7 +95,9 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
         rows: validRows.map((r) => ({
           username: r.username,
           email: r.email,
-          name: r.name,
+          firstName: r.firstName,
+          lastName: r.lastName,
+          degree: r.degree,
           studentId: r.studentId,
         })),
       });
@@ -98,7 +116,7 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
 
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <Label>Target lab</Label>
           <Select value={labId} onChange={(e) => setLabId(Number(e.target.value))}>
@@ -121,8 +139,20 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
           <Input value={cols.email} onChange={(e) => set({ email: e.target.value })} />
         </div>
         <div>
-          <Label>Name column</Label>
-          <Input value={cols.name} onChange={(e) => set({ name: e.target.value })} />
+          <Label>First name column</Label>
+          <Input value={cols.firstName} onChange={(e) => set({ firstName: e.target.value })} />
+        </div>
+        <div>
+          <Label>Last name column</Label>
+          <Input value={cols.lastName} onChange={(e) => set({ lastName: e.target.value })} />
+        </div>
+        <div>
+          <Label>Standing column</Label>
+          <Input
+            value={cols.degree}
+            placeholder="(optional: MS or PhD)"
+            onChange={(e) => set({ degree: e.target.value })}
+          />
         </div>
         <div>
           <Label>Student ID column</Label>
@@ -152,7 +182,7 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
           }}
           rows={6}
           className="font-mono"
-          placeholder={"username,email,name\nalice,alice@uga.edu,Alice A."}
+          placeholder={"username,email,first name,last name\nalice,alice@uga.edu,Alice,Adams"}
         />
       </div>
 
@@ -177,7 +207,9 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
                 <TableRow>
                   <TableHead>Username</TableHead>
                   <TableHead>Email</TableHead>
-                  <TableHead>Name</TableHead>
+                  <TableHead>First name</TableHead>
+                  <TableHead>Last name</TableHead>
+                  <TableHead>Standing</TableHead>
                   <TableHead>Student ID</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
@@ -187,7 +219,9 @@ export function ImportStudentsForm({ labs, importAction }: Props) {
                   <TableRow key={i} className={r.issues.length ? "opacity-60" : undefined}>
                     <TableCell>{r.username || "—"}</TableCell>
                     <TableCell>{r.email ?? "—"}</TableCell>
-                    <TableCell>{r.name ?? "—"}</TableCell>
+                    <TableCell>{r.firstName ?? "—"}</TableCell>
+                    <TableCell>{r.lastName ?? "—"}</TableCell>
+                    <TableCell>{r.degree ?? "—"}</TableCell>
                     <TableCell>{r.studentId ?? "—"}</TableCell>
                     <TableCell className={r.issues.length ? "text-err" : "text-ok"}>
                       {r.issues.length ? r.issues.join("; ") : "ok"}

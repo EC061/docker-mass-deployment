@@ -1,7 +1,10 @@
 /**
  * CSV import with a configurable column mapping (replaces the old eLC-specific parser).
- * The admin maps CSV columns to username/email/name/studentId; we validate before committing.
+ * The admin maps CSV columns to username/email/first name/last name/standing/studentId; we validate
+ * before committing.
  */
+
+import { normalizeDegree } from "./names";
 
 export interface ParsedCsv {
   headers: string[];
@@ -64,14 +67,18 @@ export function parseCsv(text: string): ParsedCsv {
 export interface ColumnMapping {
   username: string;
   email?: string;
-  name?: string;
+  firstName?: string;
+  lastName?: string;
+  degree?: string;
   studentId?: string;
 }
 
 export interface ImportRow {
   username: string;
   email?: string;
-  name?: string;
+  firstName?: string;
+  lastName?: string;
+  degree?: string;
   studentId?: string;
   issues: string[];
 }
@@ -82,7 +89,10 @@ const USERNAME_RE = /^[a-z_][a-z0-9_-]{0,31}$/;
 export interface RawImportRow {
   username?: string;
   email?: string;
-  name?: string;
+  firstName?: string;
+  lastName?: string;
+  /** Academic standing ("PhD", "MS", "Faculty", …); normalized on the way into the DB. */
+  degree?: string;
   studentId?: string;
 }
 
@@ -100,7 +110,9 @@ export function validateImportRows(
     const issues: string[] = [];
     const username = (r.username ?? "").trim().toLowerCase();
     const email = r.email?.trim() || undefined;
-    const name = r.name?.trim() || undefined;
+    const firstName = r.firstName?.trim() || undefined;
+    const lastName = r.lastName?.trim() || undefined;
+    const degree = normalizeDegree(r.degree) ?? undefined;
     const studentId = r.studentId?.trim() || undefined;
 
     if (!username) issues.push("missing username");
@@ -109,7 +121,7 @@ export function validateImportRows(
     if (username) seen.add(username);
     if (opts.requireEmail && !email) issues.push("missing email");
 
-    return { username, email, name, studentId, issues };
+    return { username, email, firstName, lastName, degree, studentId, issues };
   });
 }
 
@@ -117,7 +129,9 @@ export function applyMapping(parsed: ParsedCsv, mapping: ColumnMapping): ImportR
   const raw = parsed.rows.map((r) => ({
     username: r[mapping.username] ?? "",
     email: mapping.email ? (r[mapping.email] ?? "") : undefined,
-    name: mapping.name ? (r[mapping.name] ?? "") : undefined,
+    firstName: mapping.firstName ? (r[mapping.firstName] ?? "") : undefined,
+    lastName: mapping.lastName ? (r[mapping.lastName] ?? "") : undefined,
+    degree: mapping.degree ? (r[mapping.degree] ?? "") : undefined,
     studentId: mapping.studentId ? (r[mapping.studentId] ?? "") : undefined,
   }));
   return validateImportRows(raw, { requireEmail: !!mapping.email });

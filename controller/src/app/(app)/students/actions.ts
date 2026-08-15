@@ -46,7 +46,14 @@ export async function importStudentsAction(input: {
     try {
       await addStudentToLab(
         labId,
-        { username: row.username, email: row.email, name: row.name, studentId: row.studentId },
+        {
+          username: row.username,
+          email: row.email,
+          firstName: row.firstName,
+          lastName: row.lastName,
+          degree: row.degree,
+          studentId: row.studentId,
+        },
         actor,
       );
       added++;

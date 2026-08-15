@@ -384,6 +384,9 @@ interface PendingCredential {
   credential_secret: string | null;
   email: string | null;
   name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  degree: string | null;
   username: string;
   student_id: string | null;
   lab_name: string;
@@ -396,7 +399,8 @@ function pendingCredential(labName: string, nodeName: string, username: string):
   const row = db()
     .prepare(
       `SELECT pm.id AS member_id, pm.state, pm.credential_secret,
-              students.email, students.name, students.username, students.student_id,
+              students.email, students.name, students.first_name, students.last_name,
+              students.degree, students.username, students.student_id,
               labs.name AS lab_name, nodes.name AS node_name, nodes.alias AS node_alias, p.ssh_port
        FROM placement_members pm
        JOIN students ON students.id = pm.student_id
@@ -424,6 +428,9 @@ export async function deliverPlacementCredential(
   const result = await sendCredentialEmail({
     to: pending.email,
     name: pending.name ?? undefined,
+    firstName: pending.first_name,
+    lastName: pending.last_name,
+    degree: pending.degree,
     username: pending.username,
     password,
     host,
@@ -449,7 +456,8 @@ export async function maybeDeliverPlacementCompletion(labName: string, nodeName:
     `SELECT p.id, p.state, p.fast_quota_bytes, p.cold_quota_bytes,
             p.student_fast_quota_bytes, p.student_cold_quota_bytes,
             p.completion_email_sent_at, labs.pi_name, labs.pi_email,
-            pi.username AS pi_username, nodes.alias AS node_alias
+            pi.username AS pi_username, pi.first_name AS pi_first_name,
+            pi.last_name AS pi_last_name, pi.degree AS pi_degree, nodes.alias AS node_alias
      FROM lab_placements p
      JOIN labs ON labs.id = p.lab_id
      JOIN nodes ON nodes.id = p.node_id
@@ -459,7 +467,8 @@ export async function maybeDeliverPlacementCompletion(labName: string, nodeName:
     id: number; state: PlacementState; fast_quota_bytes: number; cold_quota_bytes: number | null;
     student_fast_quota_bytes: number | null; student_cold_quota_bytes: number | null;
     completion_email_sent_at: number | null; pi_name: string | null; pi_email: string | null;
-    pi_username: string | null; node_alias: string | null;
+    pi_username: string | null; pi_first_name: string | null; pi_last_name: string | null;
+    pi_degree: string | null; node_alias: string | null;
   } | undefined;
   if (!row || row.state !== "active" || row.completion_email_sent_at != null ||
       !row.pi_email || !row.pi_username) return false;
@@ -477,6 +486,9 @@ export async function maybeDeliverPlacementCompletion(labName: string, nodeName:
   const result = await sendPlacementCompleteEmail({
     to: row.pi_email,
     name: row.pi_name || row.pi_username,
+    firstName: row.pi_first_name,
+    lastName: row.pi_last_name,
+    degree: row.pi_degree,
     lab: labName,
     node: row.node_alias?.trim() || nodeName,
     usernames: members.map((member) => member.username),

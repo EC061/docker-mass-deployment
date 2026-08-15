@@ -15,15 +15,22 @@ import { extractBracketTokens, fillBracketTokens, renderTemplate } from "./templ
 
 export type Audience = "students" | "pis";
 
-/** A resolved recipient: the email plus a best-effort display name for {name} substitution. */
+/** A resolved recipient: the email plus a best-effort display name for {name} substitution, and the
+ * roster's name parts / standing for {first_name}, {last_name} and {degree}. */
 export interface Recipient {
   email: string;
   name: string;
+  firstName: string | null;
+  lastName: string | null;
+  degree: string | null;
 }
 
 /** Placeholders an announcement template understands, rendered per recipient. */
 export const ANNOUNCEMENT_VARS: { key: string; desc: string }[] = [
   { key: "name", desc: "recipient's name (falls back to username, then email)" },
+  { key: "first_name", desc: "recipient's first name (may be blank)" },
+  { key: "last_name", desc: "recipient's last name (may be blank)" },
+  { key: "degree", desc: "recipient's standing: PhD, MS, Faculty… (may be blank)" },
   { key: "email", desc: "recipient's email address" },
   { key: "sender", desc: "sending admin's name" },
   { key: "sender_email", desc: "sending admin's email address" },
@@ -90,22 +97,32 @@ export function deleteAnnouncementTemplate(id: number): void {
 function audienceRecipients(audience: Audience): Recipient[] {
   const sql =
     audience === "students"
-      ? "SELECT email, name, username FROM students WHERE email IS NOT NULL AND TRIM(email) <> '' ORDER BY username"
-      : "SELECT pi_email AS email, pi_name AS name FROM labs WHERE pi_email IS NOT NULL AND TRIM(pi_email) <> '' ORDER BY name";
-  const rows = db().prepare(sql).all() as { email: string; name: string | null; username?: string }[];
+      ? `SELECT email, name, first_name, last_name, degree, username FROM students
+         WHERE email IS NOT NULL AND TRIM(email) <> '' ORDER BY username`
+      : `SELECT labs.pi_email AS email, labs.pi_name AS name, pi.first_name, pi.last_name, pi.degree
+         FROM labs LEFT JOIN students pi ON pi.id = labs.pi_student_id
+         WHERE labs.pi_email IS NOT NULL AND TRIM(labs.pi_email) <> '' ORDER BY labs.pi_name`;
+  const rows = db().prepare(sql).all() as {
+    email: string; name: string | null; first_name: string | null; last_name: string | null;
+    degree: string | null; username?: string;
+  }[];
   const byEmail = new Map<string, Recipient>();
   for (const r of rows) {
     const email = r.email.trim();
     if (!email || byEmail.has(email)) continue;
-    byEmail.set(email, { email, name: r.name?.trim() || r.username?.trim() || email });
+    byEmail.set(email, {
+      email,
+      name: r.name?.trim() || r.username?.trim() || email,
+      firstName: r.first_name?.trim() || null,
+      lastName: r.last_name?.trim() || null,
+      degree: r.degree?.trim() || null,
+    });
   }
   return [...byEmail.values()];
 }
 
 /** An addressable person for the individual-recipient picker. */
-export interface Person {
-  email: string;
-  name: string;
+export interface Person extends Recipient {
   kind: "user" | "pi";
 }
 
@@ -207,7 +224,7 @@ export async function sendAnnouncement(input: {
     for (const email of individuals) {
       const person = known.get(email);
       if (!person) throw new Error(`unknown recipient: ${email}`);
-      if (!byEmail.has(email)) byEmail.set(email, { email, name: person.name });
+      if (!byEmail.has(email)) byEmail.set(email, person);
     }
   }
   const recipients = [...byEmail.values()];
@@ -220,7 +237,14 @@ export async function sendAnnouncement(input: {
   if (!skipped) {
     const results = await Promise.all(
       recipients.map((r) => {
-        const vars = { ...senderVars, name: r.name, email: r.email };
+        const vars = {
+          ...senderVars,
+          name: r.name,
+          first_name: r.firstName ?? "",
+          last_name: r.lastName ?? "",
+          degree: r.degree ?? "",
+          email: r.email,
+        };
         return sendMail(r.email, renderTemplate(subject, vars), renderTemplate(body, vars));
       }),
     );

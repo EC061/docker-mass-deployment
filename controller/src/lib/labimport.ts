@@ -2,7 +2,10 @@
  * Per-lab roster CSV import (Phase 2, role-based). The import is scoped to a single lab (run from that
  * lab's page), so the lab is never named in the file and PI info is not repeated on every row. Columns:
  *
- *   role,username,email,name,student_id
+ *   role,username,email,first_name,last_name,degree,student_id
+ *
+ * `first_name`/`last_name` are stored separately (a legacy single `name` column is still accepted and
+ * split on its last space) and `degree` is the roster's standing — PhD / MS / Faculty (see lib/names.ts).
  *
  * `role` is `student` (the default when the column is blank or absent) or `pi`. A `pi` row carries
  * the PI's login username/name/email and enters the same membership + per-placement provisioning
@@ -19,6 +22,7 @@ import { audit } from "./audit";
 import { parseCsv } from "./csv";
 import { db } from "./db";
 import { getLab } from "./labs";
+import { composeName, normalizeDegree, splitFullName } from "./names";
 import { listPlacements, provisionMemberOnPlacement, type ProvisionStudent } from "./placements";
 
 export const MAX_IMPORT_BYTES = 1_000_000; // 1 MB
@@ -37,12 +41,18 @@ export interface StudentCreate {
   username: string;
   studentId: string | null;
   name: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  degree: string | null;
   email: string | null;
 }
 export interface StudentUpdate {
   username: string;
   studentId?: string;
   name?: string;
+  firstName?: string;
+  lastName?: string;
+  degree?: string;
   email?: string;
 }
 /** The PI fields that would change on this lab (only changed, non-blank fields are present). */
@@ -69,6 +79,9 @@ interface ValidRow {
   user: string | null;
   sid: string | null;
   sname: string | null;
+  sfirst: string | null;
+  slast: string | null;
+  sdegree: string | null;
   semail: string | null;
 }
 
@@ -78,6 +91,9 @@ interface DbStudent {
   username: string;
   email: string | null;
   name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  degree: string | null;
 }
 
 const norm = (v: string | undefined) => (v ?? "").trim();
@@ -125,7 +141,12 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
     const role = roleRaw;
     const user = lower(r.username) || null;
     const sid = norm(r.student_id) || null;
-    const sname = norm(r.name) || null;
+    // first_name/last_name are authoritative; a legacy single `name` column is split as a fallback.
+    const legacy = splitFullName(norm(r.name));
+    const sfirst = norm(r.first_name) || legacy.firstName;
+    const slast = norm(r.last_name) || legacy.lastName;
+    const sname = composeName(sfirst, slast);
+    const sdegree = normalizeDegree(r.degree);
     const semail = lower(r.email) || null;
 
     if (role === "pi") {
@@ -134,7 +155,7 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
       if (!semail) return void bad("email required on a pi row");
       if (semail && !EMAIL_RE.test(semail)) return void bad("invalid pi email");
       if (sid && !STUDENT_ID_RE.test(sid)) return void bad(`invalid student_id '${sid}'`);
-      valid.push({ line, role, user, sid, sname, semail });
+      valid.push({ line, role, user, sid, sname, sfirst, slast, sdegree, semail });
       return;
     }
     // student row
@@ -142,7 +163,7 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
     if (!USERNAME_RE.test(user)) return void bad(`invalid username '${user}'`);
     if (sid && !STUDENT_ID_RE.test(sid)) return void bad(`invalid student_id '${sid}'`);
     if (semail && !EMAIL_RE.test(semail)) return void bad("invalid email");
-    valid.push({ line, role, user, sid, sname, semail });
+    valid.push({ line, role, user, sid, sname, sfirst, slast, sdegree, semail });
   });
 
   // Phase B — PI metadata: at most one effective PI (repeated 'pi' rows must agree).
@@ -168,7 +189,9 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
   // Load current DB state for this lab.
   const dbByName = new Map<string, DbStudent>();
   const dbById = new Map<string, DbStudent>();
-  for (const s of db().prepare("SELECT id, student_id, username, email, name FROM students").all() as DbStudent[]) {
+  for (const s of db()
+    .prepare("SELECT id, student_id, username, email, name, first_name, last_name, degree FROM students")
+    .all() as DbStudent[]) {
     dbByName.set(s.username, s);
     if (s.student_id) dbById.set(s.student_id, s);
   }
@@ -178,17 +201,31 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
   }
 
   // Phase C — merge student rows by username, detecting in-batch conflicts.
-  interface BatchStudent { sid: string | null; name: string | null; email: string | null; line: number }
+  interface BatchStudent {
+    sid: string | null;
+    name: string | null;
+    first: string | null;
+    last: string | null;
+    degree: string | null;
+    email: string | null;
+    line: number;
+  }
   const batch = new Map<string, BatchStudent>();
   for (const r of valid) {
     if (!r.user) continue;
     const prev = batch.get(r.user);
     if (!prev) {
-      batch.set(r.user, { sid: r.sid, name: r.sname, email: r.semail, line: r.line });
+      batch.set(r.user, {
+        sid: r.sid, name: r.sname, first: r.sfirst, last: r.slast, degree: r.sdegree,
+        email: r.semail, line: r.line,
+      });
     } else {
       if (r.sid && prev.sid && r.sid !== prev.sid) conflicts.push({ line: r.line, message: `username '${r.user}' mapped to two student IDs` });
       else if (r.sid && !prev.sid) prev.sid = r.sid;
       if (r.sname && !prev.name) prev.name = r.sname;
+      if (r.sfirst && !prev.first) prev.first = r.sfirst;
+      if (r.slast && !prev.last) prev.last = r.slast;
+      if (r.sdegree && !prev.degree) prev.degree = r.sdegree;
       if (r.semail && !prev.email) prev.email = r.semail;
     }
   }
@@ -217,14 +254,20 @@ export function planRosterImport(labId: number, text: string): RosterImportPlan 
     }
     const existing = byId ?? byName;
     if (!existing) {
-      studentsToCreate.push({ username: user, studentId: info.sid, name: info.name, email: info.email });
+      studentsToCreate.push({
+        username: user, studentId: info.sid, name: info.name, firstName: info.first,
+        lastName: info.last, degree: info.degree, email: info.email,
+      });
       continue;
     }
     const upd: StudentUpdate = { username: user };
     if (info.name && info.name !== existing.name) upd.name = info.name;
+    if (info.first && info.first !== existing.first_name) upd.firstName = info.first;
+    if (info.last && info.last !== existing.last_name) upd.lastName = info.last;
+    if (info.degree && info.degree !== existing.degree) upd.degree = info.degree;
     if (info.email && info.email !== existing.email) upd.email = info.email;
     if (info.sid && !existing.student_id) upd.studentId = info.sid;
-    if (upd.name !== undefined || upd.email !== undefined || upd.studentId !== undefined) studentsToUpdate.push(upd);
+    if (Object.keys(upd).length > 1) studentsToUpdate.push(upd);
   }
 
   // PI update — only changed, non-blank fields relative to the lab's current PI.
@@ -310,12 +353,19 @@ export async function applyRosterImport(labId: number, text: string, actor?: str
       stmt("UPDATE labs SET updated_at = ? WHERE id = ?").run(now, labId);
     }
     for (const s of plan.studentsToCreate) {
-      const info = stmt("INSERT INTO students (student_id, username, email, name, linux_uid, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(s.studentId, s.username, s.email, s.name, takeUid(), now, now);
+      const info = stmt(
+        `INSERT INTO students
+           (student_id, username, email, name, first_name, last_name, degree, linux_uid, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(s.studentId, s.username, s.email, s.name, s.firstName, s.lastName, s.degree, takeUid(), now, now);
       studentId.set(s.username, Number(info.lastInsertRowid));
     }
     for (const s of plan.studentsToUpdate) {
       if (s.studentId !== undefined) stmt("UPDATE students SET student_id = ? WHERE username = ?").run(s.studentId, s.username);
       if (s.name !== undefined) stmt("UPDATE students SET name = ? WHERE username = ?").run(s.name, s.username);
+      if (s.firstName !== undefined) stmt("UPDATE students SET first_name = ? WHERE username = ?").run(s.firstName, s.username);
+      if (s.lastName !== undefined) stmt("UPDATE students SET last_name = ? WHERE username = ?").run(s.lastName, s.username);
+      if (s.degree !== undefined) stmt("UPDATE students SET degree = ? WHERE username = ?").run(s.degree, s.username);
       if (s.email !== undefined) stmt("UPDATE students SET email = ? WHERE username = ?").run(s.email, s.username);
       stmt("UPDATE students SET updated_at = ? WHERE username = ?").run(now, s.username);
     }

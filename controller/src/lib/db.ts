@@ -13,6 +13,7 @@ import Database from "better-sqlite3";
 const { existsSync, mkdirSync, renameSync, rmSync } = process.getBuiltinModule("node:fs");
 const { dirname } = process.getBuiltinModule("node:path");
 import { env } from "./env";
+import { splitFullName } from "./names";
 import { legacySignatureHtmlToText, stripLegacyEmailSignature } from "./template";
 
 /** If a WebDAV restore was staged as <dbPath>.restore, swap it in before opening. */
@@ -678,6 +679,29 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
     CREATE INDEX idx_student_quota_alert_lookup
       ON student_quota_alerts(placement_id, student_id, pool, ts);
     `,
+  },
+  {
+    // Rosters arrive with separate first/last name columns and an "MS or PhD" standing (the value
+    // "Faculty" is how a workbook sheet marks its PI), so store all three. `name` is kept as the
+    // composed display form — every existing screen and {name} email template keeps working — and
+    // is written from the parts from here on. Pre-existing single-field names are split on their
+    // final space.
+    id: "0027_student_name_parts",
+    fn: (conn) => {
+      conn.exec(`
+        ALTER TABLE students ADD COLUMN first_name TEXT;
+        ALTER TABLE students ADD COLUMN last_name TEXT;
+        ALTER TABLE students ADD COLUMN degree TEXT;
+      `);
+      const rows = conn
+        .prepare("SELECT id, name FROM students WHERE name IS NOT NULL AND TRIM(name) <> ''")
+        .all() as { id: number; name: string }[];
+      const update = conn.prepare("UPDATE students SET first_name = ?, last_name = ? WHERE id = ?");
+      for (const row of rows) {
+        const { firstName, lastName } = splitFullName(row.name);
+        update.run(firstName, lastName, row.id);
+      }
+    },
   },
 ];
 

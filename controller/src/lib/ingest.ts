@@ -186,12 +186,14 @@ function maybeStudentQuotaAlert(
   if (recent && now - recent.ts < STUDENT_QUOTA_ALERT_DEDUP_MS) return;
 
   const recipient = db().prepare(
-    `SELECT students.username, students.email, students.name, labs.name AS lab_name,
+    `SELECT students.username, students.email, students.name, students.first_name,
+            students.last_name, students.degree, labs.name AS lab_name,
             nodes.alias AS node_alias
      FROM students JOIN labs ON labs.id = ? JOIN nodes ON nodes.name = ?
      WHERE students.id = ?`,
   ).get(labId, node, studentId) as {
     username: string; email: string | null; name: string | null;
+    first_name: string | null; last_name: string | null; degree: string | null;
     lab_name: string; node_alias: string | null;
   } | undefined;
   if (!recipient?.email) return;
@@ -201,6 +203,9 @@ function maybeStudentQuotaAlert(
   ).run(placementId, studentId, pool, pct, now);
   const info = {
     name: recipient.name || recipient.username,
+    firstName: recipient.first_name,
+    lastName: recipient.last_name,
+    degree: recipient.degree,
     username: recipient.username,
     lab: recipient.lab_name,
     node: recipient.node_alias?.trim() || node,

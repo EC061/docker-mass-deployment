@@ -101,19 +101,31 @@ export async function emailUsageReportAction(formData: FormData): Promise<EmailU
 
   let to: string | null;
   let name: string;
+  let firstName: string | null;
+  let lastName: string | null;
+  let degree: string | null;
   if (toPi) {
     to = report.piEmail;
     name = report.piName?.trim() || "Professor";
+    firstName = report.piFirstName;
+    lastName = report.piLastName;
+    degree = report.piDegree;
   } else {
     const student = report.students.find((s) => s.studentId === studentId);
     if (!student) return { status: "unknown_recipient" };
     to = student.email;
     name = student.name?.trim() || student.username;
+    firstName = student.firstName;
+    lastName = student.lastName;
+    degree = student.degree;
   }
   if (!to || !to.trim()) return { status: "missing_email" };
 
   const result = await sendUsageReportEmail(to, toPi ? "pi" : "student", {
     name,
+    firstName,
+    lastName,
+    degree,
     lab: report.labName,
     node: report.nodeName,
     report: report.text,

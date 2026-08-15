@@ -52,7 +52,9 @@ export default async function StudentsPage() {
                       <TableRow>
                         <TableHead>Username</TableHead>
                         <TableHead>Email</TableHead>
-                        <TableHead>Name</TableHead>
+                        <TableHead>First name</TableHead>
+                        <TableHead>Last name</TableHead>
+                        <TableHead>Standing</TableHead>
                         <TableHead>Student ID</TableHead>
                         <TableHead></TableHead>
                       </TableRow>
@@ -62,7 +64,9 @@ export default async function StudentsPage() {
                         <TableRow key={m.member_id}>
                           <TableCell>{m.username}</TableCell>
                           <TableCell>{m.email ?? "—"}</TableCell>
-                          <TableCell>{m.name ?? "—"}</TableCell>
+                          <TableCell>{m.first_name ?? "—"}</TableCell>
+                          <TableCell>{m.last_name ?? "—"}</TableCell>
+                          <TableCell>{m.degree ?? "—"}</TableCell>
                           <TableCell>{m.student_id ?? "—"}</TableCell>
                           <TableCell className="text-right">
                             {m.is_pi ? (

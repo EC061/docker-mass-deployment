@@ -5,10 +5,10 @@ import type { RosterImportPlan, RosterImportResult } from "@/lib/labimport";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
-const SAMPLE = `role,username,email,name,student_id
-pi,jsmith,jane.smith@example.edu,Dr. Jane Smith,
-student,jdoe,jdoe@example.edu,John Doe,100001
-student,asmith,asmith@example.edu,Alice Smith,100002`;
+const SAMPLE = `role,username,email,first_name,last_name,degree,student_id
+pi,jsmith,jane.smith@example.edu,Jane,Smith,Faculty,
+student,jdoe,jdoe@example.edu,John,Doe,PhD,100001
+student,asmith,asmith@example.edu,Alice,Smith,MS,100002`;
 
 interface Props {
   labId: number;
@@ -113,7 +113,8 @@ export function RosterImportForm({ labId, preview, apply }: Props) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-muted-foreground">
-        Columns: <code>role,username,email,name,student_id</code>. <code>role</code> is{" "}
+        Columns: <code>role,username,email,first_name,last_name,degree,student_id</code>.{" "}
+        <code>degree</code> is the roster standing (PhD / MS / Faculty). <code>role</code> is{" "}
         <code>student</code> (the default) or <code>pi</code>; a single <code>pi</code> row creates the
         lab&apos;s protected PI login (no need to repeat it on every student row). The whole file is validated before
         anything is written, and re-importing is idempotent.

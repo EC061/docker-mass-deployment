@@ -26,8 +26,8 @@ describe("applyMapping", () => {
   );
 
   it("maps columns and lowercases usernames", () => {
-    const rows = applyMapping(parsed, { username: "user", email: "mail", name: "full" });
-    expect(rows[0]).toMatchObject({ username: "alice", email: "alice@uga.edu", name: "Alice", issues: [] });
+    const rows = applyMapping(parsed, { username: "user", email: "mail", firstName: "full" });
+    expect(rows[0]).toMatchObject({ username: "alice", email: "alice@uga.edu", firstName: "Alice", issues: [] });
     expect(rows[1].username).toBe("bob");
   });
 

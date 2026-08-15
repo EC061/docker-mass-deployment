@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { DEGREE_OPTIONS, FACULTY_DEGREE } from "@/lib/names";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -31,12 +32,26 @@ export function CreateLabForm({ labs, action }: Props) {
         <Input name="piUsername" required placeholder="jsmith" />
       </div>
       <div>
-        <Label>PI name</Label>
-        <Input name="piName" required placeholder="Dr. Jane Smith" />
+        <Label>PI first name</Label>
+        <Input name="piFirstName" required placeholder="Jane" />
+      </div>
+      <div>
+        <Label>PI last name</Label>
+        <Input name="piLastName" required placeholder="Smith" />
       </div>
       <div>
         <Label>PI email</Label>
         <Input name="piEmail" type="email" required placeholder="pi@uga.edu" />
+      </div>
+      <div>
+        <Label>PI standing</Label>
+        <Select name="piDegree" defaultValue={FACULTY_DEGREE}>
+          {DEGREE_OPTIONS.map((degree) => (
+            <option key={degree} value={degree}>
+              {degree}
+            </option>
+          ))}
+        </Select>
       </div>
       {labs.length > 0 && (
         <div>

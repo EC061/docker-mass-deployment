@@ -5,6 +5,7 @@
  */
 
 import nodemailer from "nodemailer";
+import { nameVars } from "./names";
 import { renderTemplate, stripLegacyEmailSignature } from "./template";
 import {
   DEFAULT_GPU_KILL_BODY,
@@ -106,6 +107,10 @@ export async function sendRemovalEmail(to: string, lab: string, dataDeleted: boo
 export interface CredentialEmail {
   to: string;
   name?: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  /** Standing from the roster (PhD / MS / Faculty …), for the {degree} template variable. */
+  degree?: string | null;
   username: string;
   password: string;
   host: string;
@@ -202,6 +207,9 @@ export async function sendQuotaEmail(info: QuotaEmail): Promise<SendResult> {
 export interface StudentQuotaEmail {
   to: string;
   name: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  degree?: string | null;
   username: string;
   lab: string;
   node: string;
@@ -213,7 +221,13 @@ export interface StudentQuotaEmail {
 
 export function renderStudentQuotaEmail(info: Omit<StudentQuotaEmail, "to">): { subject: string; body: string } {
   const vars = {
-    name: info.name,
+    ...nameVars({
+      first_name: info.firstName,
+      last_name: info.lastName,
+      name: info.name,
+      username: info.username,
+    }),
+    degree: info.degree ?? "",
     username: info.username,
     lab: info.lab,
     node: info.node,
@@ -236,6 +250,9 @@ export type UsageReportKind = "student" | "pi";
 
 export interface UsageReportEmailVars {
   name: string; // recipient's greeting name (student name/username, or PI name)
+  firstName?: string | null;
+  lastName?: string | null;
+  degree?: string | null;
   lab: string;
   node: string;
   report: string; // the plain-text usage table (see lib/usage-report.ts)
@@ -254,7 +271,13 @@ export function renderUsageReportEmail(
   const body =
     getSetting(isPi ? "usageReportPiBody" : "usageReportStudentBody").trim() ||
     (isPi ? DEFAULT_USAGE_REPORT_PI_BODY : DEFAULT_USAGE_REPORT_STUDENT_BODY);
-  const subs: Record<string, string> = { name: vars.name, lab: vars.lab, node: vars.node, report: vars.report };
+  const subs: Record<string, string> = {
+    ...nameVars({ first_name: vars.firstName, last_name: vars.lastName, name: vars.name }),
+    degree: vars.degree ?? "",
+    lab: vars.lab,
+    node: vars.node,
+    report: vars.report,
+  };
   return { subject: renderTemplate(subject, subs), body: renderTemplate(body, subs) };
 }
 
@@ -270,6 +293,9 @@ export async function sendUsageReportEmail(
 export interface PlacementCompleteEmail {
   to: string;
   name: string;
+  firstName?: string | null;
+  lastName?: string | null;
+  degree?: string | null;
   lab: string;
   node: string;
   usernames: string[];
@@ -283,7 +309,8 @@ export function renderPlacementCompleteEmail(
   info: Omit<PlacementCompleteEmail, "to">,
 ): { subject: string; body: string } {
   const vars = {
-    name: info.name,
+    ...nameVars({ first_name: info.firstName, last_name: info.lastName, name: info.name }),
+    degree: info.degree ?? "",
     lab: info.lab,
     node: info.node,
     usernames: info.usernames.map((username) => `  ${username}`).join("\n"),
@@ -305,7 +332,13 @@ export async function sendPlacementCompleteEmail(info: PlacementCompleteEmail): 
 /** Build the {placeholder} substitution map for the welcome email from a credential payload. */
 export function welcomeEmailVars(info: CredentialEmail): Record<string, string | number> {
   return {
-    name: info.name ?? info.username,
+    ...nameVars({
+      first_name: info.firstName,
+      last_name: info.lastName,
+      name: info.name,
+      username: info.username,
+    }),
+    degree: info.degree ?? "",
     username: info.username,
     password: info.password,
     host: info.host,

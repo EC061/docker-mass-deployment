@@ -10,6 +10,7 @@ import { audit } from "./audit";
 import { db } from "./db";
 import { normalizeEmail } from "./email";
 import { getLab } from "./labs";
+import { composeName, normalizeDegree, splitFullName } from "./names";
 import { sendRemovalEmail } from "./mailer";
 import { generatePassword } from "./passwords";
 import {
@@ -26,7 +27,12 @@ export interface Student {
   student_id: string | null;
   username: string;
   email: string | null;
+  /** Composed display name, derived from first_name + last_name. */
   name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  /** Academic standing from the roster: PhD / MS / Faculty / … (see lib/names.ts). */
+  degree: string | null;
   linux_uid: number;
 }
 
@@ -44,6 +50,7 @@ export function listMembers(labId: number): Member[] {
   return db()
     .prepare(
       `SELECT students.id, students.student_id, students.username, students.email, students.name,
+              students.first_name, students.last_name, students.degree,
               students.linux_uid, lab_members.id AS member_id,
               CASE WHEN labs.pi_student_id = students.id THEN 1 ELSE 0 END AS is_pi
        FROM lab_members JOIN students ON students.id = lab_members.student_id
@@ -72,10 +79,13 @@ export async function ensurePiAccess(
 
   // Keep the global account's contact details aligned with the lab's PI metadata. A PI may be used
   // by more than one lab; these values are the same real person in that case.
-  db().prepare("UPDATE students SET email = ?, name = ?, updated_at = ? WHERE id = ?")
-    .run(normalizeEmail(input.email), input.name?.trim() || null, Date.now(), record.id);
+  const profile = studentProfileFields(input);
+  db().prepare(
+    "UPDATE students SET email = ?, name = ?, first_name = ?, last_name = ?, degree = ?, updated_at = ? WHERE id = ?",
+  ).run(normalizeEmail(input.email), profile.name, profile.firstName, profile.lastName,
+    profile.degree ?? record.degree, Date.now(), record.id);
   db().prepare("UPDATE labs SET pi_student_id = ?, pi_name = ?, pi_email = ?, updated_at = ? WHERE id = ?")
-    .run(record.id, input.name?.trim() || null, normalizeEmail(input.email), Date.now(), labId);
+    .run(record.id, profile.name, normalizeEmail(input.email), Date.now(), labId);
 
   const member = db().prepare("SELECT 1 FROM lab_members WHERE lab_id = ? AND student_id = ?")
     .get(labId, record.id);
@@ -96,8 +106,65 @@ export async function ensurePiAccess(
 export interface StudentInput {
   username: string;
   email?: string;
+  firstName?: string;
+  lastName?: string;
+  /** Legacy single-field name; used only when firstName/lastName are absent (split on its last space). */
   name?: string;
+  /** Academic standing ("PhD", "MS", "Faculty", …); normalized before it is stored. */
+  degree?: string;
   studentId?: string;
+}
+
+export interface StudentProfileFields {
+  firstName: string | null;
+  lastName: string | null;
+  name: string | null;
+  degree: string | null;
+}
+
+/** Resolve an input's name parts + degree to what gets stored (see lib/names.ts). */
+export function studentProfileFields(input: StudentInput): StudentProfileFields {
+  const legacy = splitFullName(input.name);
+  const firstName = (input.firstName ?? "").trim() || legacy.firstName;
+  const lastName = (input.lastName ?? "").trim() || legacy.lastName;
+  return {
+    firstName: firstName || null,
+    lastName: lastName || null,
+    name: composeName(firstName, lastName),
+    degree: normalizeDegree(input.degree),
+  };
+}
+
+/**
+ * Refresh a known student's contact details from an import/edit. Only non-blank incoming values are
+ * written, so a sparse row never blanks out details another source already filled in. Returns true
+ * when something actually changed.
+ */
+export function updateStudentProfile(id: number, input: StudentInput): boolean {
+  const current = db().prepare("SELECT * FROM students WHERE id = ?").get(id) as Student | undefined;
+  if (!current) return false;
+  const profile = studentProfileFields(input);
+  const email = normalizeEmail(input.email);
+  const studentId = input.studentId?.trim() || null;
+
+  const sets: string[] = [];
+  const values: (string | number | null)[] = [];
+  const set = (column: string, value: string | null) => {
+    sets.push(`${column} = ?`);
+    values.push(value);
+  };
+  if (email && email !== current.email) set("email", email);
+  if (profile.firstName && profile.firstName !== current.first_name) set("first_name", profile.firstName);
+  if (profile.lastName && profile.lastName !== current.last_name) set("last_name", profile.lastName);
+  if (profile.name && profile.name !== current.name) set("name", profile.name);
+  if (profile.degree && profile.degree !== current.degree) set("degree", profile.degree);
+  if (studentId && !current.student_id) set("student_id", studentId);
+  if (sets.length === 0) return false;
+
+  sets.push("updated_at = ?");
+  values.push(Date.now(), id);
+  db().prepare(`UPDATE students SET ${sets.join(", ")} WHERE id = ?`).run(...values);
+  return true;
 }
 
 /** Find a student by student_id (preferred) then username, creating the record if neither matches. */
@@ -123,14 +190,15 @@ export function findOrCreateStudent(input: StudentInput): Student {
     while (linuxUid <= 59_999 && used.has(linuxUid)) linuxUid++;
     if (linuxUid > 59_999) throw new Error("student UID range 10000..59999 is exhausted");
     const now = Date.now();
+    const profile = studentProfileFields(input);
     const info = db()
       .prepare(
         `INSERT INTO students
-          (student_id, username, email, name, linux_uid, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          (student_id, username, email, name, first_name, last_name, degree, linux_uid, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(input.studentId ?? null, username, normalizeEmail(input.email), input.name ?? null,
-        linuxUid, now, now);
+      .run(input.studentId ?? null, username, normalizeEmail(input.email), profile.name,
+        profile.firstName, profile.lastName, profile.degree, linuxUid, now, now);
     return db().prepare("SELECT * FROM students WHERE id = ?")
       .get(Number(info.lastInsertRowid)) as Student;
   })();
@@ -194,7 +262,14 @@ export async function copyMembers(
     }
     await addStudentToLab(
       toLabId,
-      { username: m.username, email: m.email ?? undefined, name: m.name ?? undefined, studentId: m.student_id ?? undefined },
+      {
+        username: m.username,
+        email: m.email ?? undefined,
+        firstName: m.first_name ?? undefined,
+        lastName: m.last_name ?? undefined,
+        degree: m.degree ?? undefined,
+        studentId: m.student_id ?? undefined,
+      },
       actor,
     );
     result.added += 1;

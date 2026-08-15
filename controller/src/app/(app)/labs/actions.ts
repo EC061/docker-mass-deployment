@@ -5,6 +5,14 @@ import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { putFlash } from "@/lib/flash";
 import { applyRosterImport, type RosterImportPlan, type RosterImportResult, planRosterImport } from "@/lib/labimport";
+import {
+  applyWorkbookImport,
+  normalizeWorkbookSheets,
+  planWorkbookImport,
+  type WorkbookImportPlan,
+  type WorkbookImportResult,
+  type WorkbookSheet,
+} from "@/lib/workbookimport";
 import { createLab, destroyLab, getLab, updateLabMeta } from "@/lib/labs";
 import {
   type ContainerOptions,
@@ -21,6 +29,7 @@ import {
 import { QUOTA_UNIT_BYTES, type QuotaUnit } from "@/lib/format";
 import { TIB } from "@/lib/settings";
 import { addStudentToLab, copyMembers, ensurePiAccess, removeStudentFromLab } from "@/lib/students";
+import { composeName } from "@/lib/names";
 
 // Enforcing auth gate: throws/redirects when the caller is not a live admin, and returns the
 // verified email used as the audit actor. Call as the first line of every action.
@@ -68,14 +77,21 @@ function containerOptionsFromForm(formData: FormData): ContainerOptions {
 export async function createLabAction(formData: FormData) {
   const who = await actor();
   const name = String(formData.get("name") ?? "").trim();
-  const piName = String(formData.get("piName") ?? "").trim() || undefined;
+  const piFirstName = String(formData.get("piFirstName") ?? "").trim() || undefined;
+  const piLastName = String(formData.get("piLastName") ?? "").trim() || undefined;
+  const piDegree = String(formData.get("piDegree") ?? "").trim() || undefined;
+  const piName = composeName(piFirstName, piLastName) ?? undefined;
   const piEmail = String(formData.get("piEmail") ?? "").trim() || undefined;
   const piUsername = String(formData.get("piUsername") ?? "").trim().toLowerCase();
   if (!name) throw new Error("Lab name is required");
 
   const lab = createLab({ name, piName, piEmail, actor: who });
   if (piUsername) {
-    await ensurePiAccess(lab.id, { username: piUsername, name: piName, email: piEmail }, who);
+    await ensurePiAccess(
+      lab.id,
+      { username: piUsername, firstName: piFirstName, lastName: piLastName, degree: piDegree, email: piEmail },
+      who,
+    );
   }
 
   // Optionally seed the roster from an existing lab (membership only; each placement later created
@@ -99,11 +115,19 @@ export async function createLabAction(formData: FormData) {
 export async function updateLabMetaAction(formData: FormData) {
   const who = await actor();
   const labId = Number(formData.get("labId"));
-  const piName = String(formData.get("piName") ?? "").trim();
+  const piFirstName = String(formData.get("piFirstName") ?? "").trim();
+  const piLastName = String(formData.get("piLastName") ?? "").trim();
+  const piDegree = String(formData.get("piDegree") ?? "").trim();
+  const piName = composeName(piFirstName, piLastName) ?? "";
   const piEmail = String(formData.get("piEmail") ?? "").trim();
   const piUsername = String(formData.get("piUsername") ?? "").trim().toLowerCase();
-  if (piUsername) await ensurePiAccess(labId, { username: piUsername, name: piName, email: piEmail }, who);
-  else updateLabMeta(labId, { piName, piEmail }, who);
+  if (piUsername) {
+    await ensurePiAccess(
+      labId,
+      { username: piUsername, firstName: piFirstName, lastName: piLastName, degree: piDegree, email: piEmail },
+      who,
+    );
+  } else updateLabMeta(labId, { piName, piEmail }, who);
   revalidatePath(`/labs/${labId}`);
   const fid = putFlash("Lab metadata saved.");
   redirect(`/labs/${labId}?saved=${fid}`);
@@ -308,10 +332,16 @@ export async function addMemberAction(formData: FormData) {
   const labId = Number(formData.get("labId"));
   const username = String(formData.get("username") ?? "").trim().toLowerCase();
   const email = String(formData.get("email") ?? "").trim() || undefined;
-  const name = String(formData.get("name") ?? "").trim() || undefined;
+  const firstName = String(formData.get("firstName") ?? "").trim() || undefined;
+  const lastName = String(formData.get("lastName") ?? "").trim() || undefined;
+  const degree = String(formData.get("degree") ?? "").trim() || undefined;
   const studentId = String(formData.get("studentId") ?? "").trim() || undefined;
   if (!username) throw new Error("Username required");
-  const result = await addStudentToLab(labId, { username, email, name, studentId }, who);
+  const result = await addStudentToLab(
+    labId,
+    { username, email, firstName, lastName, degree, studentId },
+    who,
+  );
   revalidatePath(`/labs/${labId}`);
 
   const n = result.provisioned.length;
@@ -338,6 +368,30 @@ export async function applyRosterImportAction(
   try {
     const result = await applyRosterImport(Number(labId), String(text ?? ""), who);
     revalidatePath(`/labs/${Number(labId)}`);
+    revalidatePath("/students");
+    return { result };
+  } catch (e) {
+    return { error: e instanceof Error ? e.message : "import failed" };
+  }
+}
+
+/**
+ * Preview a whole-workbook import (one lab per sheet). The .xlsx is parsed in the browser; only the
+ * resulting cell grids arrive here, and every one of them is re-validated before it is read.
+ */
+export async function previewWorkbookImportAction(sheets: WorkbookSheet[]): Promise<WorkbookImportPlan> {
+  await requireAdmin();
+  return planWorkbookImport(normalizeWorkbookSheets(sheets));
+}
+
+/** Apply a previewed workbook import: create the labs named by each sheet and enroll their rosters. */
+export async function applyWorkbookImportAction(
+  sheets: WorkbookSheet[],
+): Promise<{ result?: WorkbookImportResult; error?: string }> {
+  const who = await actor();
+  try {
+    const result = await applyWorkbookImport(normalizeWorkbookSheets(sheets), who);
+    revalidatePath("/labs");
     revalidatePath("/students");
     return { result };
   } catch (e) {

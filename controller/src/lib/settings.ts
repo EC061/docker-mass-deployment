@@ -144,6 +144,9 @@ export interface Settings {
 /** Placeholders the welcome-email template understands, shown to the admin in the settings UI. */
 export const WELCOME_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "name", desc: "student's full name (falls back to username)" },
+  { key: "first_name", desc: "student's first name (may be blank)" },
+  { key: "last_name", desc: "student's last name (may be blank)" },
+  { key: "degree", desc: "standing from the roster: PhD, MS, Faculty… (may be blank)" },
   { key: "username", desc: "login username" },
   { key: "password", desc: "generated initial password" },
   { key: "host", desc: "SSH host (node name)" },
@@ -232,6 +235,9 @@ You may want to ask students to clean up unneeded data, or request a larger quot
 
 export const STUDENT_QUOTA_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "name", desc: "user's full name (falls back to username)" },
+  { key: "first_name", desc: "user's first name (may be blank)" },
+  { key: "last_name", desc: "user's last name (may be blank)" },
+  { key: "degree", desc: "standing from the roster: PhD, MS, Faculty… (may be blank)" },
   { key: "username", desc: "login username" },
   { key: "lab", desc: "lab name" },
   { key: "node", desc: "node name or alias" },
@@ -251,6 +257,9 @@ Please remove files you no longer need or contact the lab administrator if the a
 /** Placeholders the storage-usage-report emails understand, shown to the admin in the Templates UI. */
 export const USAGE_REPORT_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "name", desc: "recipient's name (student name/username, or PI name)" },
+  { key: "first_name", desc: "recipient's first name (may be blank)" },
+  { key: "last_name", desc: "recipient's last name (may be blank)" },
+  { key: "degree", desc: "recipient's standing: PhD, MS, Faculty… (may be blank)" },
   { key: "lab", desc: "lab name" },
   { key: "node", desc: "node name the lab runs on" },
   { key: "report", desc: "the plain-text storage-usage table" },
@@ -282,6 +291,9 @@ Per-student numbers come from the most recent nightly scan; lab totals are live.
 
 export const PLACEMENT_COMPLETE_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "name", desc: "PI's name (falls back to username)" },
+  { key: "first_name", desc: "PI's first name (may be blank)" },
+  { key: "last_name", desc: "PI's last name (may be blank)" },
+  { key: "degree", desc: "PI's standing from the roster, usually Faculty (may be blank)" },
   { key: "lab", desc: "lab name" },
   { key: "node", desc: "node name or alias" },
   { key: "usernames", desc: "all verified login usernames, one per line" },
