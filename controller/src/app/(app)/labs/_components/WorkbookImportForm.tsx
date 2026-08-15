@@ -2,15 +2,40 @@
 
 import { useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { ChevronDown } from "lucide-react";
 import { parseXlsx } from "@/lib/xlsx";
-import type { WorkbookImportPlan, WorkbookImportResult, WorkbookSheet } from "@/lib/workbookimport";
+import type {
+  WorkbookAccount,
+  WorkbookImportPlan,
+  WorkbookImportResult,
+  WorkbookSheet,
+} from "@/lib/workbookimport";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { cn } from "@/lib/utils";
 
 interface Props {
   preview: (sheets: WorkbookSheet[]) => Promise<WorkbookImportPlan>;
   apply: (sheets: WorkbookSheet[]) => Promise<{ result?: WorkbookImportResult; error?: string }>;
+}
+
+/** Which of the four summary counters is expanded to show the people (or labs) behind it. */
+type Detail = "labs" | "create" | "update" | "members";
+
+function AccountList({ accounts }: { accounts: WorkbookAccount[] }) {
+  return (
+    <ul className="divide-y divide-border/60">
+      {accounts.map((a) => (
+        <li key={a.username} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5">
+          <code className="text-foreground">{a.username}</code>
+          <span>{a.name ?? "—"}</span>
+          <span className="text-muted-foreground">{a.email ?? "no email"}</span>
+          <span className="ml-auto text-muted-foreground">{a.labs.join(", ")}</span>
+        </li>
+      ))}
+    </ul>
+  );
 }
 
 function summarize(result: WorkbookImportResult): string {
@@ -27,6 +52,65 @@ function summarize(result: WorkbookImportResult): string {
 }
 
 /**
+ * The people (or labs) behind one summary counter. Roster additions overlap the account counters on
+ * purpose — an account is a login, a roster addition is a lab membership — so the overlap is spelled
+ * out rather than left for the reader to work out from two numbers that often match.
+ */
+function ImportDetail({ plan, detail }: { plan: WorkbookImportPlan; detail: Detail }) {
+  const alsoNew = plan.rosterAdditions.filter((m) => m.newAccount).length;
+  const body = {
+    labs: {
+      note: "Sheets naming a lab that does not exist yet. Each is created with the roster below it.",
+      list: (
+        <ul className="flex flex-wrap gap-1.5 py-1.5">
+          {plan.newLabs.map((lab) => (
+            <li key={lab}>
+              <Badge variant="ok">{lab}</Badge>
+            </li>
+          ))}
+        </ul>
+      ),
+    },
+    create: {
+      note: "People with no account yet — a login is created for each, once, however many labs list them.",
+      list: <AccountList accounts={plan.accountsToCreate} />,
+    },
+    update: {
+      note: "People who already have an account whose name, email, degree, or UGA ID the workbook changes.",
+      list: <AccountList accounts={plan.accountsToUpdate} />,
+    },
+    members: {
+      note:
+        `One row per person per lab — this is lab membership, not a login, so it counts people who ` +
+        `already have an account joining a lab. ${alsoNew} of ${plan.rosterAdditions.length} also ` +
+        `need an account created.`,
+      list: (
+        <ul className="divide-y divide-border/60">
+          {plan.rosterAdditions.map((m) => (
+            <li key={`${m.lab}/${m.username}`} className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5 py-1.5">
+              <code className="text-foreground">{m.username}</code>
+              <span>{m.name ?? "—"}</span>
+              {m.isPi && <Badge variant="default">PI</Badge>}
+              <Badge variant={m.newAccount ? "ok" : "secondary"}>
+                {m.newAccount ? "new account" : "existing account"}
+              </Badge>
+              <span className="ml-auto text-muted-foreground">{m.lab}</span>
+            </li>
+          ))}
+        </ul>
+      ),
+    },
+  }[detail];
+
+  return (
+    <div className="rounded-md border border-border/60 bg-muted/30 p-2.5 text-xs">
+      <p className="text-muted-foreground">{body.note}</p>
+      {body.list}
+    </div>
+  );
+}
+
+/**
  * Upload the department roster workbook: one sheet per lab, parsed in the browser (the .xlsx itself
  * never leaves the machine) and previewed against the server before anything is created.
  */
@@ -38,15 +122,22 @@ export function WorkbookImportForm({ preview, apply }: Props) {
   const [plan, setPlan] = useState<WorkbookImportPlan | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
+  const [detail, setDetail] = useState<Detail | null>(null);
   const [pending, start] = useTransition();
 
-  function reset() {
+  /** Drop the chosen workbook and its preview, leaving any success/error message on screen. */
+  function clearWorkbook() {
     setSheets([]);
     setPlan(null);
-    setErr(null);
-    setDone(null);
+    setDetail(null);
     setFileName("");
     if (fileRef.current) fileRef.current.value = "";
+  }
+
+  function reset() {
+    clearWorkbook();
+    setErr(null);
+    setDone(null);
   }
 
   async function onFile(file: File | undefined) {
@@ -54,6 +145,7 @@ export function WorkbookImportForm({ preview, apply }: Props) {
     setErr(null);
     setDone(null);
     setPlan(null);
+    setDetail(null);
     setFileName(file.name);
     let parsed: WorkbookSheet[];
     try {
@@ -83,7 +175,7 @@ export function WorkbookImportForm({ preview, apply }: Props) {
       }
       if (res.result) {
         setDone(summarize(res.result));
-        reset();
+        clearWorkbook();
         router.refresh();
       }
     });
@@ -135,21 +227,46 @@ export function WorkbookImportForm({ preview, apply }: Props) {
 
       {plan && (
         <div className="space-y-3 rounded-md border border-border/60 p-3">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-sm sm:grid-cols-4">
             {(
               [
-                ["Labs to create", plan.labsToCreate],
-                ["Accounts to create", plan.studentsToCreate],
-                ["Accounts to update", plan.studentsToUpdate],
-                ["Roster additions", plan.membersToAdd],
+                ["labs", "Labs to create", plan.labsToCreate],
+                ["create", "Accounts to create", plan.studentsToCreate],
+                ["update", "Accounts to update", plan.studentsToUpdate],
+                ["members", "Roster additions", plan.membersToAdd],
               ] as const
-            ).map(([label, n]) => (
-              <div key={label} className="flex justify-between gap-2">
-                <span className="text-muted-foreground">{label}</span>
-                <span className="font-semibold tabular-nums">{n}</span>
-              </div>
+            ).map(([key, label, n]) => (
+              <button
+                key={key}
+                type="button"
+                disabled={n === 0}
+                aria-expanded={detail === key}
+                onClick={() => setDetail(detail === key ? null : key)}
+                className={cn(
+                  "flex items-center justify-between gap-2 rounded-md px-2 py-1 text-left transition-colors",
+                  n === 0
+                    ? "cursor-default"
+                    : "hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring",
+                  detail === key && "bg-muted ring-1 ring-border",
+                )}
+              >
+                <span className={cn("text-muted-foreground", detail === key && "text-foreground")}>{label}</span>
+                <span className="flex items-center gap-1">
+                  <span className="font-semibold tabular-nums">{n}</span>
+                  {n > 0 && (
+                    <ChevronDown
+                      className={cn(
+                        "size-3.5 text-muted-foreground transition-transform",
+                        detail === key && "rotate-180 text-foreground",
+                      )}
+                    />
+                  )}
+                </span>
+              </button>
             ))}
           </div>
+
+          {detail && <ImportDetail plan={plan} detail={detail} />}
 
           {plan.issues.length > 0 && (
             <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2.5 text-xs text-destructive">

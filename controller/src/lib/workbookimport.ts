@@ -79,12 +79,39 @@ export interface WorkbookLabPlan {
   ok: boolean;
 }
 
+/** One person the import would write to the `students` table, wherever the workbook lists them. */
+export interface WorkbookAccount {
+  username: string;
+  name: string | null;
+  email: string | null;
+  degree: string | null;
+  /** Every lab whose sheet lists this person (the same UGA ID can appear on several tabs). */
+  labs: string[];
+}
+
+/** One person joining one lab's roster. */
+export interface WorkbookMembership {
+  username: string;
+  name: string | null;
+  lab: string;
+  isPi: boolean;
+  /** True when this import also creates the account — the overlap with `accountsToCreate`. */
+  newAccount: boolean;
+}
+
 export interface WorkbookImportPlan {
   labs: WorkbookLabPlan[];
   labsToCreate: number;
   studentsToCreate: number;
   studentsToUpdate: number;
   membersToAdd: number;
+  /** Names of the labs that do not exist yet (`labsToCreate` is this list's length). */
+  newLabs: string[];
+  /** Accounts to create/update, one entry per person — the counters above are these lengths. */
+  accountsToCreate: WorkbookAccount[];
+  accountsToUpdate: WorkbookAccount[];
+  /** Roster joins, one entry per person *per lab* — a person on two tabs is two additions. */
+  rosterAdditions: WorkbookMembership[];
   /** Problems that are not tied to a single sheet (e.g. two sheets mapping to one lab name). */
   issues: string[];
   ok: boolean;
@@ -335,6 +362,7 @@ export function planWorkbookImport(sheets: WorkbookSheet[]): WorkbookImportPlan 
   if (list.length === 0) issues.push("the workbook has no sheets");
   if (list.length > MAX_WORKBOOK_SHEETS) {
     return { labs: [], labsToCreate: 0, studentsToCreate: 0, studentsToUpdate: 0, membersToAdd: 0,
+      newLabs: [], accountsToCreate: [], accountsToUpdate: [], rosterAdditions: [],
       issues: [`too many sheets (${list.length}; max ${MAX_WORKBOOK_SHEETS})`], ok: false };
   }
 
@@ -362,12 +390,57 @@ export function planWorkbookImport(sheets: WorkbookSheet[]): WorkbookImportPlan 
     }
   }
 
+  // One account per person, even when the same UGA ID appears on several tabs: the student record is
+  // global, so listing someone on two sheets creates them once (and joins two rosters).
+  const accounts = new Map<string, { action: PersonAction; account: WorkbookAccount }>();
+  const rosterAdditions: WorkbookMembership[] = [];
+  for (const lab of labs) {
+    for (const person of lab.people) {
+      const name = composeName(person.firstName, person.lastName);
+      const seen = accounts.get(person.username);
+      if (seen) {
+        if (!seen.account.labs.includes(lab.lab)) seen.account.labs.push(lab.lab);
+        // A create anywhere wins: the record is written once, by whichever sheet gets there first.
+        if (person.action === "create") seen.action = "create";
+        else if (person.action === "update" && seen.action === "unchanged") seen.action = "update";
+      } else {
+        accounts.set(person.username, {
+          action: person.action,
+          account: {
+            username: person.username,
+            name,
+            email: person.email,
+            degree: person.degree,
+            labs: [lab.lab],
+          },
+        });
+      }
+      if (!person.alreadyMember) {
+        rosterAdditions.push({
+          username: person.username,
+          name,
+          lab: lab.lab,
+          isPi: person.isPi,
+          newAccount: person.action === "create",
+        });
+      }
+    }
+  }
+  const entries = [...accounts.values()];
+  const accountsToCreate = entries.filter((e) => e.action === "create").map((e) => e.account);
+  const accountsToUpdate = entries.filter((e) => e.action === "update").map((e) => e.account);
+  const newLabs = labs.filter((l) => !l.labExists && l.ok).map((l) => l.lab);
+
   return {
     labs,
-    labsToCreate: labs.filter((l) => !l.labExists && l.ok).length,
-    studentsToCreate: labs.reduce((n, l) => n + l.studentsToCreate, 0),
-    studentsToUpdate: labs.reduce((n, l) => n + l.studentsToUpdate, 0),
-    membersToAdd: labs.reduce((n, l) => n + l.membersToAdd, 0),
+    labsToCreate: newLabs.length,
+    studentsToCreate: accountsToCreate.length,
+    studentsToUpdate: accountsToUpdate.length,
+    membersToAdd: rosterAdditions.length,
+    newLabs,
+    accountsToCreate,
+    accountsToUpdate,
+    rosterAdditions,
     issues,
     ok: issues.length === 0 && labs.length > 0 && labs.every((l) => l.ok),
   };
@@ -403,6 +476,10 @@ export async function applyWorkbookImport(
     provisioned: 0,
   };
 
+  // Student records are global, so someone listed on two tabs is created/updated once even though
+  // they are walked twice — count them once too, matching what the preview promised.
+  const written = new Set<string>();
+
   for (const sheetPlan of plan.labs) {
     const existing = getLabByName(sheetPlan.lab);
     const pi = sheetPlan.people.find((p) => p.isPi) ?? null;
@@ -426,7 +503,9 @@ export async function applyWorkbookImport(
         degree: person.degree ?? undefined,
         studentId: person.username, // the UGA ID is both the login and the institutional ID
       };
-      if (person.action === "create") result.studentsCreated += 1;
+      const first = !written.has(person.username);
+      written.add(person.username);
+      if (person.action === "create" && first) result.studentsCreated += 1;
 
       if (person.isPi) {
         // ensurePiAccess writes the PI's details, records the protected membership, and provisions
@@ -435,12 +514,13 @@ export async function applyWorkbookImport(
         result.pisSet += 1;
         if (!person.alreadyMember) result.membershipsAdded += 1;
         result.provisioned += res.provisioned.length;
-        if (person.action === "update") result.studentsUpdated += 1;
+        if (person.action === "update" && first) result.studentsUpdated += 1;
         continue;
       }
 
       const record = findOrCreateStudent(input);
-      if (person.action === "update" && updateStudentProfile(record.id, input)) result.studentsUpdated += 1;
+      const wrote = person.action === "update" && updateStudentProfile(record.id, input);
+      if (wrote && first) result.studentsUpdated += 1;
       if (person.alreadyMember) continue;
       const res = await addStudentToLab(lab.id, input, actor);
       result.membershipsAdded += 1;

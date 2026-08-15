@@ -72,6 +72,48 @@ describe("planWorkbookImport", () => {
     expect(plan.membersToAdd).toBe(5);
   });
 
+  it("lists the labs and people behind each counter", () => {
+    const plan = wb.planWorkbookImport(SHEETS());
+    expect(plan.newLabs).toEqual(["Geng_Yuan_Lab", "Wei_Niu_Lab"]);
+    expect(plan.accountsToCreate).toHaveLength(plan.studentsToCreate);
+    expect(plan.accountsToUpdate).toEqual([]);
+    expect(plan.accountsToCreate[0]).toMatchObject({
+      username: "gy23443",
+      name: "Geng Yuan",
+      email: "geng.yuan@uga.edu",
+      labs: ["Geng_Yuan_Lab"],
+    });
+    expect(plan.rosterAdditions).toHaveLength(plan.membersToAdd);
+    expect(plan.rosterAdditions[0]).toMatchObject({ username: "gy23443", lab: "Geng_Yuan_Lab", isPi: true, newAccount: true });
+  });
+
+  it("counts a person listed on two sheets as one account but two roster additions", () => {
+    const sheets = SHEETS();
+    sheets[1].rows.push(["Ningxi", "Cheng", "nc96132", "nc96132@uga.edu", "PhD"]);
+    const plan = wb.planWorkbookImport(sheets);
+    expect(plan.studentsToCreate).toBe(5);
+    expect(plan.membersToAdd).toBe(6);
+    expect(plan.accountsToCreate.find((a) => a.username === "nc96132")!.labs).toEqual([
+      "Geng_Yuan_Lab",
+      "Wei_Niu_Lab",
+    ]);
+    expect(plan.rosterAdditions.filter((m) => m.username === "nc96132").map((m) => m.lab)).toEqual([
+      "Geng_Yuan_Lab",
+      "Wei_Niu_Lab",
+    ]);
+  });
+
+  it("marks a roster addition for someone who already has an account", async () => {
+    await wb.applyWorkbookImport(SHEETS(), "admin@uga.edu");
+    const sheets = SHEETS();
+    sheets[1].rows.push(["Ningxi", "Cheng", "nc96132", "nc96132@uga.edu", "PhD"]);
+    const plan = wb.planWorkbookImport(sheets);
+    expect(plan.studentsToCreate).toBe(0);
+    expect(plan.rosterAdditions).toEqual([
+      { username: "nc96132", name: "Ningxi Cheng", lab: "Wei_Niu_Lab", isPi: false, newAccount: false },
+    ]);
+  });
+
   it("sanitizes a sheet name into a lab name", () => {
     expect(wb.labNameFromSheet(" Geng Yuan Lab! ")).toBe("Geng_Yuan_Lab");
     expect(wb.labNameFromSheet("2025 – Fei Dou")).toBe("2025_Fei_Dou");
@@ -191,6 +233,15 @@ describe("applyWorkbookImport", () => {
     expect(result.membershipsAdded).toBe(1);
     expect(student("nc96132")!.email).toBe("edwardcheng@uga.edu");
     expect(student("cz06540")!.degree).toBe("MS");
+  });
+
+  it("creates a person listed on two sheets once and enrols them in both labs", async () => {
+    const sheets = SHEETS();
+    sheets[1].rows.push(["Ningxi", "Cheng", "nc96132", "nc96132@uga.edu", "PhD"]);
+    const result = await wb.applyWorkbookImport(sheets, "admin@uga.edu");
+    expect(result.studentsCreated).toBe(5);
+    expect(result.membershipsAdded).toBe(6);
+    expect((dbmod.db().prepare("SELECT COUNT(*) AS n FROM students").get() as { n: number }).n).toBe(5);
   });
 
   it("refuses a workbook that would change an already-provisioned PI", async () => {
