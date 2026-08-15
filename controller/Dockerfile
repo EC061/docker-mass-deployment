@@ -13,6 +13,12 @@ RUN npm ci
 
 FROM node:26-bookworm-slim@sha256:e999d087492c7227c85adc70574cf9d3cce774c3e6d7b8dfe473ee6b142c8f2c AS build
 WORKDIR /app
+# honker-node >= 0.4.0 links the system SQLite dynamically (0.3.x bundled it statically), and the
+# slim base does not ship libsqlite3. `next build` loads the native module while collecting page
+# data, so the library has to be here too — not just in the runtime stage. Installed before the
+# COPYs so a source change does not invalidate this layer.
+RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
@@ -20,6 +26,9 @@ RUN npm run build
 FROM node:26-bookworm-slim@sha256:e999d087492c7227c85adc70574cf9d3cce774c3e6d7b8dfe473ee6b142c8f2c AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
+# Runtime half of the honker-node SQLite dependency described in the build stage.
+RUN apt-get update && apt-get install -y --no-install-recommends libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
 # Non-root runtime user.
 RUN useradd --create-home --uid 10001 app
 # COPY --chown sets ownership inline during extraction. A separate `chown -R app:app /app` instead
