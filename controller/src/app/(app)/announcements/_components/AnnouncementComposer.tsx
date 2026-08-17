@@ -2,6 +2,7 @@
 
 import { useMemo, useRef, useState } from "react";
 import type { AnnouncementTemplate, Person, RecipientGroup } from "@/lib/announcements";
+import { renderAnnouncementPreview, type AnnouncementPreviewSender } from "@/lib/announcement-preview";
 import { extractBracketTokens } from "@/lib/template";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -14,6 +15,8 @@ interface Props {
   vars: { key: string; desc: string }[];
   people: Person[];
   groups: RecipientGroup[];
+  sender: AnnouncementPreviewSender;
+  signatureText: string;
   action: (formData: FormData) => void | Promise<void>;
 }
 
@@ -25,15 +28,32 @@ interface Props {
  * controlled so the picker/inserts and the user's typing agree; the form still submits straight to
  * the server action.
  */
-export function AnnouncementComposer({ templates, vars, people, groups, action }: Props) {
+export function AnnouncementComposer({ templates, vars, people, groups, sender, signatureText, action }: Props) {
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
+  const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
   // Placeholder values are keyed by token and kept even when a token temporarily disappears while
   // editing, so retyping [DATE] doesn't lose what was already entered.
   const [phValues, setPhValues] = useState<Record<string, string>>({});
   const bodyRef = useRef<HTMLTextAreaElement>(null);
 
   const tokens = useMemo(() => extractBracketTokens(subject + "\n" + body), [subject, body]);
+  const peopleByEmail = useMemo(() => new Map(people.map((person) => [person.email, person])), [people]);
+  const selectedPeople = useMemo(
+    () => selectedEmails.map((email) => peopleByEmail.get(email)).filter((person): person is Person => !!person),
+    [peopleByEmail, selectedEmails],
+  );
+  const preview = useMemo(
+    () => renderAnnouncementPreview({
+      subject,
+      body,
+      recipients: selectedPeople,
+      sender,
+      placeholders: phValues,
+      signatureText,
+    }),
+    [body, phValues, selectedPeople, sender, signatureText, subject],
+  );
 
   function applyTemplate(id: string) {
     const tpl = templates.find((t) => String(t.id) === id);
@@ -147,9 +167,42 @@ export function AnnouncementComposer({ templates, vars, people, groups, action }
             The shortcuts tick everyone in that group below — untick anyone you want to leave out.
             Each address is mailed once however many groups it falls in.
           </p>
-          <RecipientPicker people={people} groups={groups} />
+          <RecipientPicker
+            people={people}
+            groups={groups}
+            selectedEmails={selectedEmails}
+            onSelectedEmailsChange={setSelectedEmails}
+          />
         </div>
       </fieldset>
+
+      <section className="overflow-hidden rounded-md border border-border bg-muted/20" aria-live="polite">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <h3 className="text-sm font-semibold">Live email preview</h3>
+          <span className="text-xs text-muted-foreground">
+            {preview.recipient
+              ? `First selected recipient: ${preview.recipient.name}`
+              : "Select a recipient to preview recipient variables"}
+          </span>
+        </div>
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 border-b border-border px-3 py-2 text-xs">
+          <dt className="text-muted-foreground">From</dt>
+          <dd className="min-w-0 truncate">
+            {sender.name || "{sender}"} &lt;{sender.email || "{sender_email}"}&gt;
+          </dd>
+          <dt className="text-muted-foreground">To</dt>
+          <dd className="min-w-0 truncate">
+            {preview.recipient
+              ? `${preview.recipient.name} <${preview.recipient.email}>`
+              : "{name} <{email}>"}
+          </dd>
+          <dt className="text-muted-foreground">Subject</dt>
+          <dd className="min-w-0 break-words font-medium">{preview.subject || "(No subject yet)"}</dd>
+        </dl>
+        <pre className="min-h-40 whitespace-pre-wrap break-words px-3 py-3 font-sans text-sm">
+          {preview.body || "Write a message to preview it here."}
+        </pre>
+      </section>
 
       <Button type="submit">Send announcement</Button>
     </form>

@@ -68,6 +68,7 @@ describe("Server Actions reject unauthenticated callers", () => {
       settings.saveStorageSettingsAction(fd()),
       settings.saveUsageScanSettingsAction(fd()),
       settings.saveSmtpSettingsAction(fd()),
+      settings.saveAnnouncementSenderSettingsAction(fd()),
       settings.saveAlertSettingsAction(fd()),
       settings.saveGpuPolicyAction(fd()),
       settings.saveScrubSettingsAction(fd()),

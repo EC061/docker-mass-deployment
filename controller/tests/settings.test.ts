@@ -31,6 +31,8 @@ describe("getSetting / setSetting", () => {
     // Nightly per-student usage-scan defaults (enabled, midnight UTC).
     expect(settings.getSetting("usageScanEnabled")).toBe(true);
     expect(settings.getSetting("usageScanHour")).toBe(0);
+    expect(settings.getSetting("announcementSenderName")).toBe("");
+    expect(settings.getSetting("announcementSenderEmail")).toBe("");
   });
 
   it("roundtrips a value through JSON", () => {
@@ -74,6 +76,25 @@ describe("getSetting / setSetting", () => {
       )
       .run();
     expect(settings.getSetting("usageScanHour")).toBe(0);
+  });
+});
+
+describe("resolveAnnouncementSender", () => {
+  it("falls back to the signed-in admin and allows either value to be customized", () => {
+    const admin = { name: "Admin User", email: "admin@uga.edu" };
+    expect(settings.resolveAnnouncementSender(admin)).toEqual(admin);
+
+    settings.setSetting("announcementSenderName", "Research Computing");
+    expect(settings.resolveAnnouncementSender(admin)).toEqual({
+      name: "Research Computing",
+      email: "admin@uga.edu",
+    });
+
+    settings.setSetting("announcementSenderEmail", "support@uga.edu");
+    expect(settings.resolveAnnouncementSender(admin)).toEqual({
+      name: "Research Computing",
+      email: "support@uga.edu",
+    });
   });
 });
 

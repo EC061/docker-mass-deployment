@@ -50,6 +50,10 @@ export interface Settings {
   smtpConfigs: SmtpConfig[];
   // Plain-text signature appended by the mailer to every outbound email.
   emailSignatureText: string;
+  // Values used for {sender}/{sender_email} in announcements. Blank values fall back to the
+  // authenticated admin who sends the announcement.
+  announcementSenderName: string;
+  announcementSenderEmail: string;
   // Welcome email sent to a student when added to a lab. Both fields support {placeholder}
   // substitution (see WELCOME_EMAIL_VARS / renderTemplate in lib/mailer.ts). Empty falls back to
   // the built-in default.
@@ -345,6 +349,8 @@ export const DEFAULT_SETTINGS: Settings = {
   smtpSecure: false,
   smtpConfigs: [],
   emailSignatureText: DEFAULT_EMAIL_SIGNATURE_TEXT,
+  announcementSenderName: "",
+  announcementSenderEmail: "",
   welcomeEmailSubject: DEFAULT_WELCOME_SUBJECT,
   welcomeEmailBody: DEFAULT_WELCOME_BODY,
   gpuEnabled: false,
@@ -453,6 +459,17 @@ export function broadcastGpuPolicy(actor?: string): void {
 
 export function isSmtpConfigured(): boolean {
   return getSmtpConfigs().some((config) => config.host !== "" && config.from !== "");
+}
+
+/** Resolve customizable announcement variables, retaining the signed-in admin as a safe default. */
+export function resolveAnnouncementSender(fallback: { name: string; email: string }): {
+  name: string;
+  email: string;
+} {
+  return {
+    name: getSetting("announcementSenderName").trim() || fallback.name,
+    email: getSetting("announcementSenderEmail").trim() || fallback.email,
+  };
 }
 
 /** Return every SMTP config in failover order (lowest rank is attempted first). */

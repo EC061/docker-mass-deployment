@@ -5,7 +5,8 @@ import {
   listRecipientGroups,
   recentAnnouncements,
 } from "@/lib/announcements";
-import { isSmtpConfigured } from "@/lib/settings";
+import { getSetting, isSmtpConfigured, resolveAnnouncementSender } from "@/lib/settings";
+import { requireAdminPage } from "@/lib/auth";
 import { ago } from "@/lib/format";
 import { clearAnnouncementsAction, deleteAnnouncementAction, sendAnnouncementAction } from "./actions";
 import { AnnouncementComposer } from "./_components/AnnouncementComposer";
@@ -21,12 +22,15 @@ export default async function AnnouncementsPage({
   searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const sp = await searchParams;
+  const admin = await requireAdminPage();
   const msg = typeof sp.msg === "string" ? sp.msg : undefined;
   const people = listAnnouncementPeople();
   const groups = listRecipientGroups();
   const history = recentAnnouncements();
   const templates = listAnnouncementTemplates();
   const smtpOk = isSmtpConfigured();
+  const sender = resolveAnnouncementSender(admin);
+  const signatureText = getSetting("emailSignatureText");
 
   return (
     <div className="space-y-4">
@@ -62,6 +66,8 @@ export default async function AnnouncementsPage({
             vars={ANNOUNCEMENT_VARS}
             people={people}
             groups={groups}
+            sender={sender}
+            signatureText={signatureText}
             action={sendAnnouncementAction}
           />
           <p className="text-xs text-muted-foreground">

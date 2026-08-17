@@ -8,6 +8,7 @@ import { broadcastGpuPolicy, getSmtpConfigs, setSetting, TIB } from "@/lib/setti
 import { requireAdmin } from "@/lib/auth";
 import { db } from "@/lib/db";
 import { pruneLogs } from "@/lib/maintenance";
+import { normalizeEmail } from "@/lib/email";
 
 export async function saveStorageSettingsAction(formData: FormData) {
   await requireAdmin();
@@ -113,6 +114,18 @@ export async function deleteSmtpSettingsAction(formData: FormData) {
   setSetting("smtpConfigs", configs.filter((config) => config.id !== id));
   revalidatePath("/settings");
   redirect(`/settings?smtp=${encodeURIComponent(removed ? `Deleted ${removed.name}` : "SMTP server deleted")}`);
+}
+
+/** Configure the values substituted into {sender}/{sender_email} for every announcement. */
+export async function saveAnnouncementSenderSettingsAction(formData: FormData) {
+  await requireAdmin();
+  setSetting("announcementSenderName", String(formData.get("announcementSenderName") ?? "").trim());
+  setSetting(
+    "announcementSenderEmail",
+    normalizeEmail(String(formData.get("announcementSenderEmail") ?? "")) ?? "",
+  );
+  revalidatePath("/settings");
+  revalidatePath("/announcements");
 }
 
 export async function saveAlertSettingsAction(formData: FormData) {

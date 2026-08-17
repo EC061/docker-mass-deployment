@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { clearAnnouncements, deleteAnnouncement, sendAnnouncement } from "@/lib/announcements";
+import { resolveAnnouncementSender } from "@/lib/settings";
 
 export async function sendAnnouncementAction(formData: FormData) {
   const admin = await requireAdmin();
@@ -26,7 +27,7 @@ export async function sendAnnouncementAction(formData: FormData) {
       audiences: [],
       individuals,
       placeholders,
-      sender: { name: admin.name, email: admin.email },
+      sender: resolveAnnouncementSender(admin),
       actor: admin.email,
     });
     msg = res.skipped

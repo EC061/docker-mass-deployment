@@ -20,9 +20,19 @@ const GROUP_ROWS: { kind: RecipientGroup["kind"]; label: string }[] = [
   { kind: "node", label: "Nodes" },
 ];
 
-export function RecipientPicker({ people, groups }: { people: Person[]; groups: RecipientGroup[] }) {
+export function RecipientPicker({
+  people,
+  groups,
+  selectedEmails,
+  onSelectedEmailsChange,
+}: {
+  people: Person[];
+  groups: RecipientGroup[];
+  selectedEmails: string[];
+  onSelectedEmailsChange: (emails: string[]) => void;
+}) {
   const [query, setQuery] = useState("");
-  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const selected = useMemo(() => new Set(selectedEmails), [selectedEmails]);
 
   const matches = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -31,28 +41,23 @@ export function RecipientPicker({ people, groups }: { people: Person[]; groups: 
   }, [people, query]);
 
   function toggle(email: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(email)) next.delete(email);
-      else next.add(email);
-      return next;
-    });
+    onSelectedEmailsChange(
+      selected.has(email) ? selectedEmails.filter((candidate) => candidate !== email) : [...selectedEmails, email],
+    );
   }
 
   /** Select every member of a group, or clear them all when the group is already fully selected. */
   function toggleGroup(group: RecipientGroup) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      const all = group.emails.every((e) => next.has(e));
-      for (const e of group.emails) {
-        if (all) next.delete(e);
-        else next.add(e);
-      }
-      return next;
-    });
+    const all = group.emails.every((email) => selected.has(email));
+    onSelectedEmailsChange(
+      all
+        ? selectedEmails.filter((email) => !group.emails.includes(email))
+        : [...selectedEmails, ...group.emails.filter((email) => !selected.has(email))],
+    );
   }
 
-  const chosen = people.filter((p) => selected.has(p.email));
+  const peopleByEmail = new Map(people.map((person) => [person.email, person]));
+  const chosen = selectedEmails.map((email) => peopleByEmail.get(email)).filter((person): person is Person => !!person);
 
   if (people.length === 0) {
     return <p className="text-xs text-muted-foreground">No addressable users or PIs yet.</p>;
@@ -148,7 +153,7 @@ export function RecipientPicker({ people, groups }: { people: Person[]; groups: 
         {chosen.length > 0 && (
           <button
             type="button"
-            onClick={() => setSelected(new Set())}
+            onClick={() => onSelectedEmailsChange([])}
             className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
           >
             Clear

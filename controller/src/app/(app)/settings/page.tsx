@@ -13,6 +13,7 @@ import {
   clearLogsAction,
   deleteSmtpSettingsAction,
   saveAlertSettingsAction,
+  saveAnnouncementSenderSettingsAction,
   saveGpuPolicyAction,
   saveScrubSettingsAction,
   saveSmtpSettingsAction,
@@ -123,6 +124,35 @@ export default async function SettingsPage({
             Servers are attempted from the lowest rank to the highest. A failed delivery automatically
             falls through to the next configured server.
           </p>
+          <form action={saveAnnouncementSenderSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 rounded-md border p-3 sm:grid-cols-2">
+            <div className="space-y-1 sm:col-span-2">
+              <h3 className="text-sm font-semibold">Announcement sender variables</h3>
+              <p className="text-xs text-muted-foreground">
+                Used for <code>{"{sender}"}</code> and <code>{"{sender_email}"}</code> in announcement
+                templates and previews. Leave either blank to use the signed-in admin&apos;s value.
+              </p>
+            </div>
+            <div>
+              <Label>Sender name</Label>
+              <Input
+                name="announcementSenderName"
+                defaultValue={s.announcementSenderName}
+                placeholder="Signed-in admin"
+              />
+            </div>
+            <div>
+              <Label>Sender email</Label>
+              <Input
+                name="announcementSenderEmail"
+                type="email"
+                defaultValue={s.announcementSenderEmail}
+                placeholder="Signed-in admin email"
+              />
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit" variant="secondary">Save announcement sender</Button>
+            </div>
+          </form>
           {smtpConfigs.map((config) => (
             <div key={config.id} className="flex max-w-xl flex-col gap-3 rounded-md border p-3">
               <form action={saveSmtpSettingsAction} className="grid grid-cols-1 gap-3 sm:grid-cols-2">
