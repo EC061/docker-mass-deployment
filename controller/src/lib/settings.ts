@@ -152,17 +152,17 @@ export const WELCOME_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "host", desc: "SSH host (node name)" },
   { key: "host_alias", desc: "node alias (falls back to node name)" },
   { key: "port", desc: "SSH port" },
-  { key: "lab", desc: "lab name" },
+  { key: "lab", desc: "email lab name derived from the PI (for example, Dr. Jane Smith's Lab)" },
   { key: "node", desc: "node name the lab runs on" },
   { key: "student_id", desc: "student ID (may be blank)" },
   { key: "email", desc: "student's email address" },
 ];
 
-export const DEFAULT_WELCOME_SUBJECT = "Your access to lab {lab}";
+export const DEFAULT_WELCOME_SUBJECT = "Your access to {lab}";
 
 export const DEFAULT_WELCOME_BODY = `Hello {name},
 
-You have been added to the lab "{lab}" on {node}. Connect over SSH:
+You have been added to {lab} on {node}. Connect over SSH:
 
     ssh {username}@{host} -p {port}
 
@@ -179,7 +179,7 @@ Please change your password after first login (run: passwd).`;
 export const GPU_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "username", desc: "owner's login username" },
   { key: "pid", desc: "process ID (may be blank)" },
-  { key: "lab", desc: "lab name (may be blank)" },
+  { key: "lab", desc: "email lab name derived from the PI (may be blank)" },
   { key: "node", desc: "node the process runs on" },
   { key: "grace_minutes", desc: "minutes before termination (warning email only)" },
 ];
@@ -202,13 +202,13 @@ Please checkpoint long-running work and keep the GPU active, or ask an admin to 
 
 /** Placeholders the removal email understands, shown to the admin in the Templates UI. */
 export const REMOVAL_EMAIL_VARS: { key: string; desc: string }[] = [
-  { key: "lab", desc: "lab name the student was removed from" },
+  { key: "lab", desc: "PI-based lab name the student was removed from" },
   { key: "data_status", desc: "sentence noting whether their data was deleted or retained" },
 ];
 
-export const DEFAULT_REMOVAL_SUBJECT = "Removed from lab {lab}";
+export const DEFAULT_REMOVAL_SUBJECT = "Removed from {lab}";
 
-export const DEFAULT_REMOVAL_BODY = `You have been removed from the lab "{lab}". {data_status}`;
+export const DEFAULT_REMOVAL_BODY = `You have been removed from {lab}. {data_status}`;
 
 /** The two fixed sentences {data_status} resolves to (chosen by whether the data was deleted). */
 export const REMOVAL_DATA_DELETED = "Your home and cold-storage data in this lab has been deleted.";
@@ -216,7 +216,7 @@ export const REMOVAL_DATA_RETAINED = "Your data has been retained for now; conta
 
 /** Placeholders the quota-alert email understands, shown to the admin in the Templates UI. */
 export const QUOTA_EMAIL_VARS: { key: string; desc: string }[] = [
-  { key: "lab", desc: "lab name" },
+  { key: "lab", desc: "email lab name derived from the PI" },
   { key: "pool", desc: "pool that crossed the threshold (fast/cold)" },
   { key: "pct", desc: "percent of quota used" },
   { key: "used", desc: "human-readable amount used" },
@@ -224,9 +224,9 @@ export const QUOTA_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "breakdown", desc: "indented per-student usage lines for the pool" },
 ];
 
-export const DEFAULT_QUOTA_SUBJECT = "Lab {lab} is at {pct}% of its {pool} quota";
+export const DEFAULT_QUOTA_SUBJECT = "{lab} is at {pct}% of its {pool} quota";
 
-export const DEFAULT_QUOTA_BODY = `Lab "{lab}" has reached {pct}% of its {pool} storage quota ({used} of {quota}).
+export const DEFAULT_QUOTA_BODY = `{lab} has reached {pct}% of its {pool} storage quota ({used} of {quota}).
 
 Per-student usage on the {pool} pool:
 {breakdown}
@@ -239,7 +239,7 @@ export const STUDENT_QUOTA_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "last_name", desc: "user's last name (may be blank)" },
   { key: "degree", desc: "standing from the roster: PhD, MS, Faculty… (may be blank)" },
   { key: "username", desc: "login username" },
-  { key: "lab", desc: "lab name" },
+  { key: "lab", desc: "email lab name derived from the PI" },
   { key: "node", desc: "node name or alias" },
   { key: "pool", desc: "fast or cold storage" },
   { key: "pct", desc: "percentage of the user's quota consumed" },
@@ -260,7 +260,7 @@ export const USAGE_REPORT_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "first_name", desc: "recipient's first name (may be blank)" },
   { key: "last_name", desc: "recipient's last name (may be blank)" },
   { key: "degree", desc: "recipient's standing: PhD, MS, Faculty… (may be blank)" },
-  { key: "lab", desc: "lab name" },
+  { key: "lab", desc: "email lab name derived from the PI" },
   { key: "node", desc: "node name the lab runs on" },
   { key: "report", desc: "the plain-text storage-usage table" },
 ];
@@ -269,7 +269,7 @@ export const DEFAULT_USAGE_REPORT_STUDENT_SUBJECT = "[{lab}] Please review your 
 
 export const DEFAULT_USAGE_REPORT_STUDENT_BODY = `Hi {name},
 
-Your lab '{lab}' on node {node} is using a significant amount of storage. Please take a few minutes to review your files and remove anything you no longer need — old datasets, model checkpoints, caches, and build artifacts are the usual suspects.
+{lab} on node {node} is using a significant amount of storage. Please take a few minutes to review your files and remove anything you no longer need — old datasets, model checkpoints, caches, and build artifacts are the usual suspects.
 
 Current usage (your row is marked "(you)"):
 
@@ -279,11 +279,11 @@ HOME (fast) is your home directory on the fast pool; COLD (slow) is /cold-storag
 
 Thank you for helping keep the lab within its quota.`;
 
-export const DEFAULT_USAGE_REPORT_PI_SUBJECT = "[{lab}] Lab storage usage report — {node}";
+export const DEFAULT_USAGE_REPORT_PI_SUBJECT = "[{lab}] Storage usage report — {node}";
 
 export const DEFAULT_USAGE_REPORT_PI_BODY = `Hi {name},
 
-Here is the current storage usage report for your lab '{lab}' on node {node}. Please ask your group to clean up files they no longer need — old datasets, model checkpoints, caches, and build artifacts are the usual suspects.
+Here is the current storage usage report for {lab} on node {node}. Please ask your group to clean up files they no longer need — old datasets, model checkpoints, caches, and build artifacts are the usual suspects.
 
 {report}
 
@@ -294,7 +294,7 @@ export const PLACEMENT_COMPLETE_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "first_name", desc: "PI's first name (may be blank)" },
   { key: "last_name", desc: "PI's last name (may be blank)" },
   { key: "degree", desc: "PI's standing from the roster, usually Faculty (may be blank)" },
-  { key: "lab", desc: "lab name" },
+  { key: "lab", desc: "email lab name derived from the PI" },
   { key: "node", desc: "node name or alias" },
   { key: "usernames", desc: "all verified login usernames, one per line" },
   { key: "fast_quota", desc: "placement fast-storage quota" },
@@ -307,7 +307,7 @@ export const DEFAULT_PLACEMENT_COMPLETE_SUBJECT = "[{lab}] Node setup complete �
 
 export const DEFAULT_PLACEMENT_COMPLETE_BODY = `Hi {name},
 
-Setup for lab "{lab}" on node {node} is complete. The node agent successfully signed in over SSH with every initial credential before this message was sent.
+Setup for {lab} on node {node} is complete. The node agent successfully signed in over SSH with every initial credential before this message was sent.
 
 Verified usernames:
 {usernames}

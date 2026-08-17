@@ -11,6 +11,7 @@
  */
 
 import { getLab } from "./labs";
+import { emailLabName } from "./email-lab-name";
 import { getPlacement } from "./placements";
 import { latestSamples, sampleKey, type Cell } from "./stats";
 import { listMembers } from "./students";
@@ -142,7 +143,7 @@ export function buildUsageReport(
   const liveUpdatedAt = liveTs.length ? Math.max(...liveTs) : null;
 
   const lines: string[] = [
-    `Lab '${placement.lab_name}' on node ${placement.node_name} — storage usage`,
+    `${emailLabName(placement.lab_name)} on node ${placement.node_name} — storage usage`,
     `  live totals ${ago(liveUpdatedAt)} · per-student scan ${ago(placement.usage_scanned_at)}`,
     "",
     renderTable(rows),

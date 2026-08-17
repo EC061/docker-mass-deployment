@@ -75,7 +75,7 @@ describe("buildUsageReport", () => {
     expect(r.students.map((s) => s.username)).toEqual(["alice", "bob", "carol"]);
 
     const t = r.text;
-    expect(t).toContain("Lab 'bio' on node node-a — storage usage");
+    expect(t).toContain("Dr. Smith's Lab on node node-a — storage usage");
     // Freshness: live totals 2h ago, per-student scan 3h ago.
     expect(t).toContain("live totals 2h ago");
     expect(t).toContain("per-student scan 3h ago");
@@ -128,11 +128,11 @@ describe("renderUsageReportEmail", () => {
       node: "node-a",
       report: "USAGE-TABLE",
     });
-    expect(out.subject).toBe("[bio] Please review your storage usage on node-a");
+    expect(out.subject).toBe("[Dr. Smith's Lab] Please review your storage usage on node-a");
     expect(out.body).toContain("Hi Alice A.,");
     expect(out.body).toContain('marked "(you)"');
     expect(out.body).toContain("USAGE-TABLE");
-    expect(out.body).toContain("lab 'bio' on node node-a");
+    expect(out.body).toContain("Dr. Smith's Lab on node node-a");
   });
 
   it("substitutes placeholders in the PI template", () => {
@@ -142,9 +142,9 @@ describe("renderUsageReportEmail", () => {
       node: "node-a",
       report: "USAGE-TABLE",
     });
-    expect(out.subject).toBe("[bio] Lab storage usage report — node-a");
+    expect(out.subject).toBe("[Dr. Smith's Lab] Storage usage report — node-a");
     expect(out.body).toContain("Hi Dr. Smith,");
-    expect(out.body).toContain("your lab 'bio' on node node-a");
+    expect(out.body).toContain("for Dr. Smith's Lab on node node-a");
     expect(out.body).toContain("USAGE-TABLE");
   });
 
@@ -154,7 +154,7 @@ describe("renderUsageReportEmail", () => {
     settings.setSetting("usageReportStudentBody", "{lab}/{node}: {report}");
     const out = mailer.renderUsageReportEmail("student", { name: "Al", lab: "bio", node: "n1", report: "T" });
     expect(out.subject).toBe("hi Al");
-    expect(out.body).toBe("bio/n1: T");
+    expect(out.body).toBe("Dr. Smith's Lab/n1: T");
     settings.setSetting("usageReportStudentSubject", "");
     settings.setSetting("usageReportStudentBody", "");
   });

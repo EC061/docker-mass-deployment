@@ -40,7 +40,9 @@ beforeAll(async () => {
   dbmod = await import("../src/lib/db");
   settings = await import("../src/lib/settings");
   mailer = await import("../src/lib/mailer");
-  void dbmod;
+  dbmod.db()
+    .prepare("INSERT INTO labs (name, pi_name, pi_email, created_at, updated_at) VALUES ('bio', 'Jane Smith', 'pi@uga.edu', 0, 0)")
+    .run();
 });
 
 beforeEach(() => {
@@ -134,9 +136,18 @@ describe("templated emails", () => {
       host: "gpu-1", port: 2222, lab: "bio",
     });
     expect(res.sent).toBe(true);
-    expect(sent[0].subject).toBe("Your access to lab bio");
+    expect(sent[0].subject).toBe("Your access to Dr. Jane Smith's Lab");
     expect(sent[0].text).toContain("ssh alice@gpu-1 -p 2222");
     expect(sent[0].text).toContain("Password: pw123");
+  });
+
+  it("does not leak the operational lab name when PI metadata is unavailable", async () => {
+    await mailer.sendCredentialEmail({
+      to: "a@uga.edu", name: "Alice", username: "alice", password: "pw123",
+      host: "gpu-1", port: 2222, lab: "internal-dashboard-name",
+    });
+    expect(sent[0].subject).toBe("Your access to Research Lab");
+    expect(sent[0].subject).not.toContain("internal-dashboard-name");
   });
 
   it("renderTemplate substitutes known tokens and leaves unknown ones intact", () => {
@@ -151,7 +162,7 @@ describe("templated emails", () => {
       to: "a@uga.edu", name: "Alice", username: "alice", password: "pw123",
       host: "gpu-1.uga.edu", port: 2222, lab: "bio", node: "gpu-1",
     });
-    expect(sent[0].subject).toBe("Welcome Alice to bio");
+    expect(sent[0].subject).toBe("Welcome Alice to Dr. Jane Smith's Lab");
     expect(sent[0].text).toContain("User alice pw pw123 on node gpu-1 (gpu-1.uga.edu)");
     // Restore defaults so later tests see the built-in template.
     settings.setSetting("welcomeEmailSubject", "");
@@ -164,7 +175,7 @@ describe("templated emails", () => {
       usedHuman: "1.8 TB", quotaHuman: "2.0 TB",
       breakdown: [{ username: "alice", usedHuman: "1.0 TB" }],
     });
-    expect(sent[0].subject).toBe("Lab bio is at 92% of its fast quota");
+    expect(sent[0].subject).toBe("Dr. Jane Smith's Lab is at 92% of its fast quota");
     expect(sent[0].text).toContain("alice");
     expect(sent[0].text).toContain("1.0 TB");
   });
@@ -183,7 +194,7 @@ describe("templated emails", () => {
       usernames: ["alice", "prof"], fastQuota: "2 TiB", coldQuota: "3 TiB",
       studentFastQuota: "500 GiB", studentColdQuota: "shared placement quota",
     });
-    expect(sent[0].subject).toContain("Node setup complete");
+    expect(sent[0].subject).toBe("[Dr. Jane Smith's Lab] Node setup complete — GPU One");
     expect(sent[0].text).toContain("alice\n  prof");
     expect(sent[0].text).toContain("Per-user fast: 500 GiB");
 
@@ -191,7 +202,7 @@ describe("templated emails", () => {
       to: "alice@uga.edu", name: "Alice", username: "alice", lab: "bio", node: "gpu-1",
       pool: "fast", pct: 51, usedHuman: "255 GiB", quotaHuman: "500 GiB",
     });
-    expect(sent[1].subject).toContain("51% full");
+    expect(sent[1].subject).toBe("[Dr. Jane Smith's Lab] Your fast storage is 51% full");
     expect(sent[1].text).toContain("255 GiB of its 500 GiB");
   });
 
@@ -206,10 +217,10 @@ describe("templated emails", () => {
   it("gpu emails render the admin-editable template", async () => {
     configureSmtp();
     settings.setSetting("gpuWarnEmailSubject", "Heads up {username}");
-    settings.setSetting("gpuWarnEmailBody", "PID {pid} on {node} — {grace_minutes}m left");
+    settings.setSetting("gpuWarnEmailBody", "PID {pid} in {lab} on {node} — {grace_minutes}m left");
     await mailer.sendGpuWarningEmail("a@uga.edu", { username: "alice", lab: "bio", pid: 42, node: "gpu-01", graceMinutes: 15 });
     expect(sent[0].subject).toBe("Heads up alice");
-    expect(sent[0].text).toContain("PID 42 on gpu-01 — 15m left");
+    expect(sent[0].text).toContain("PID 42 in Dr. Jane Smith's Lab on gpu-01 — 15m left");
   });
 
   it("removal email distinguishes deleted vs retained data", async () => {
@@ -223,8 +234,8 @@ describe("templated emails", () => {
     settings.setSetting("removalEmailSubject", "Bye from {lab}");
     settings.setSetting("removalEmailBody", "Lab {lab}: {data_status}");
     await mailer.sendRemovalEmail("a@uga.edu", "bio", true);
-    expect(sent[0].subject).toBe("Bye from bio");
-    expect(sent[0].text).toContain("Lab bio: Your home and cold-storage data in this lab has been deleted.");
+    expect(sent[0].subject).toBe("Bye from Dr. Jane Smith's Lab");
+    expect(sent[0].text).toContain("Lab Dr. Jane Smith's Lab: Your home and cold-storage data in this lab has been deleted.");
 
     settings.setSetting("quotaEmailSubject", "{lab} {pct}% full");
     settings.setSetting("quotaEmailBody", "{used}/{quota} on {pool}\n{breakdown}");
@@ -232,7 +243,7 @@ describe("templated emails", () => {
       to: "pi@uga.edu", lab: "bio", pool: "fast", pct: 91,
       usedHuman: "1.8 TB", quotaHuman: "2.0 TB", breakdown: [{ username: "alice", usedHuman: "1.0 TB" }],
     });
-    expect(sent[1].subject).toBe("bio 91% full");
+    expect(sent[1].subject).toBe("Dr. Jane Smith's Lab 91% full");
     expect(sent[1].text).toContain("1.8 TB/2.0 TB on fast");
     expect(sent[1].text).toContain("alice");
 
