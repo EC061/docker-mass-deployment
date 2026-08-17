@@ -36,8 +36,8 @@ export const ANNOUNCEMENT_VARS: { key: string; desc: string }[] = [
   { key: "last_name", desc: "recipient's last name (may be blank)" },
   { key: "degree", desc: "recipient's standing: PhD, MS, Faculty… (may be blank)" },
   { key: "email", desc: "recipient's email address" },
-  { key: "sender", desc: "sending admin's name" },
-  { key: "sender_email", desc: "sending admin's email address" },
+  { key: "sender", desc: "configured announcement sender name" },
+  { key: "sender_email", desc: "configured announcement sender email address" },
 ];
 
 /**
