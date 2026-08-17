@@ -5,6 +5,7 @@
  */
 
 import nodemailer from "nodemailer";
+import { emailLabName } from "./email-lab-name";
 import { nameVars } from "./names";
 import { renderTemplate, stripLegacyEmailSignature } from "./template";
 import {
@@ -91,7 +92,7 @@ export async function sendTestEmail(to: string): Promise<SendResult> {
 /** Render the removal email from the admin-editable template (or its default). */
 export function renderRemovalEmail(lab: string, dataDeleted: boolean): { subject: string; body: string } {
   const vars = {
-    lab,
+    lab: emailLabName(lab),
     data_status: dataDeleted ? REMOVAL_DATA_DELETED : REMOVAL_DATA_RETAINED,
   };
   const subject = getSetting("removalEmailSubject").trim() || DEFAULT_REMOVAL_SUBJECT;
@@ -134,7 +135,7 @@ export function gpuEmailVars(opts: GpuEmailOpts): Record<string, string | number
   return {
     username: opts.username,
     pid: opts.pid ?? "",
-    lab: opts.lab ?? "",
+    lab: opts.lab ? emailLabName(opts.lab) : "",
     node: opts.node,
     grace_minutes: opts.graceMinutes ?? "",
   };
@@ -182,7 +183,7 @@ export function quotaEmailVars(info: Omit<QuotaEmail, "to">): Record<string, str
     ? info.breakdown.map((b) => `  ${b.username.padEnd(20)} ${b.usedHuman}`).join("\n")
     : "  (no per-student usage reported yet)";
   return {
-    lab: info.lab,
+    lab: emailLabName(info.lab),
     pool: info.pool,
     pct: info.pct,
     used: info.usedHuman,
@@ -229,7 +230,7 @@ export function renderStudentQuotaEmail(info: Omit<StudentQuotaEmail, "to">): { 
     }),
     degree: info.degree ?? "",
     username: info.username,
-    lab: info.lab,
+    lab: emailLabName(info.lab),
     node: info.node,
     pool: info.pool,
     pct: info.pct,
@@ -274,7 +275,7 @@ export function renderUsageReportEmail(
   const subs: Record<string, string> = {
     ...nameVars({ first_name: vars.firstName, last_name: vars.lastName, name: vars.name }),
     degree: vars.degree ?? "",
-    lab: vars.lab,
+    lab: emailLabName(vars.lab),
     node: vars.node,
     report: vars.report,
   };
@@ -311,7 +312,7 @@ export function renderPlacementCompleteEmail(
   const vars = {
     ...nameVars({ first_name: info.firstName, last_name: info.lastName, name: info.name }),
     degree: info.degree ?? "",
-    lab: info.lab,
+    lab: emailLabName(info.lab),
     node: info.node,
     usernames: info.usernames.map((username) => `  ${username}`).join("\n"),
     fast_quota: info.fastQuota,
@@ -344,7 +345,7 @@ export function welcomeEmailVars(info: CredentialEmail): Record<string, string |
     host: info.host,
     host_alias: info.hostAlias || info.host,
     port: info.port,
-    lab: info.lab,
+    lab: emailLabName(info.lab),
     node: info.node ?? info.host,
     student_id: info.studentId ?? "",
     email: info.to,
