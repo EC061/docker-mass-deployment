@@ -3,7 +3,7 @@
 # image. Students retain password-authenticated sudo. Bubblewrap is deliberately NOT setuid: it
 # runs the unprivileged user-namespace path, so the lab needs no added capabilities.
 
-FROM ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
