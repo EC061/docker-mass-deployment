@@ -131,13 +131,20 @@ export default async function SettingsPage({
                 Used for <code>{"{sender}"}</code> and <code>{"{sender_email}"}</code> in announcement
                 templates and previews. Leave either blank to use the signed-in admin&apos;s value.
               </p>
+              <p className="text-xs text-muted-foreground">
+                The name is also the display name on the From header of every outbound email, in front
+                of the delivering config&apos;s own From address — so recipients see{" "}
+                <code>Research Computing &lt;labs@uga.edu&gt;</code> instead of the address twice.
+                Automatic emails have no signed-in admin to fall back to, so leaving it blank sends
+                them with the bare address.
+              </p>
             </div>
             <div>
               <Label>Sender name</Label>
               <Input
                 name="announcementSenderName"
                 defaultValue={s.announcementSenderName}
-                placeholder="Signed-in admin"
+                placeholder="Signed-in admin (announcements only)"
               />
             </div>
             <div>

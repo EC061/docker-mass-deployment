@@ -98,6 +98,26 @@ describe("resolveAnnouncementSender", () => {
   });
 });
 
+describe("outboundEmailFrom", () => {
+  it("pairs the sender name with the first-ranked SMTP config's address", () => {
+    settings.setSetting("smtpConfigs", [
+      { id: "backup", name: "Backup", rank: 20, host: "smtp.backup", port: 465, user: "", pass: "", from: "backup@example.com", secure: true },
+      { id: "primary", name: "Primary", rank: 10, host: "smtp.primary", port: 587, user: "", pass: "", from: "lab-notification@edwardcheng.net", secure: false },
+    ]);
+    settings.setSetting("announcementSenderName", "Research Computing");
+
+    expect(settings.outboundEmailFrom()).toEqual({
+      name: "Research Computing",
+      address: "lab-notification@edwardcheng.net",
+    });
+  });
+
+  it("reports a blank address when no SMTP config can deliver", () => {
+    settings.setSetting("smtpConfigs", []);
+    expect(settings.outboundEmailFrom().address).toBe("");
+  });
+});
+
 describe("getSettings", () => {
   it("returns every key, merging stored values over defaults", () => {
     settings.setSetting("sshPortStart", 40000);

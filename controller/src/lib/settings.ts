@@ -5,6 +5,7 @@
  */
 
 import { db } from "./db";
+import { resolveEmailFrom, type EmailFrom } from "./email";
 import { enqueueTask } from "./queue";
 import { env } from "./env";
 import { decryptSecret, encryptSecret } from "./secrets";
@@ -51,7 +52,9 @@ export interface Settings {
   // Plain-text signature appended by the mailer to every outbound email.
   emailSignatureText: string;
   // Values used for {sender}/{sender_email} in announcements. Blank values fall back to the
-  // authenticated admin who sends the announcement.
+  // authenticated admin who sends the announcement. The name doubles as the display name on the
+  // From header of every outbound email (see outboundEmailFrom / mailer.fromHeader), where there is
+  // no admin to fall back to.
   announcementSenderName: string;
   announcementSenderEmail: string;
   // Welcome email sent to a student when added to a lab. Both fields support {placeholder}
@@ -470,6 +473,17 @@ export function resolveAnnouncementSender(fallback: { name: string; email: strin
     name: getSetting("announcementSenderName").trim() || fallback.name,
     email: getSetting("announcementSenderEmail").trim() || fallback.email,
   };
+}
+
+/**
+ * The From header outbound email actually carries: the address of the SMTP config that will be
+ * tried first, under the configured sender name. Mirrors the mailer exactly (no signed-in-admin
+ * fallback for the name — the mailer has no request context) so the announcement preview is
+ * truthful. A blank address means SMTP is not configured.
+ */
+export function outboundEmailFrom(): EmailFrom {
+  const config = getSmtpConfigs().find((c) => c.host && c.from);
+  return resolveEmailFrom(getSetting("announcementSenderName"), config?.from ?? "");
 }
 
 /** Return every SMTP config in failover order (lowest rank is attempted first). */

@@ -5,7 +5,7 @@ import {
   listRecipientGroups,
   recentAnnouncements,
 } from "@/lib/announcements";
-import { getSetting, isSmtpConfigured, resolveAnnouncementSender } from "@/lib/settings";
+import { getSetting, isSmtpConfigured, outboundEmailFrom, resolveAnnouncementSender } from "@/lib/settings";
 import { requireAdminPage } from "@/lib/auth";
 import { ago } from "@/lib/format";
 import { clearAnnouncementsAction, deleteAnnouncementAction, sendAnnouncementAction } from "./actions";
@@ -30,6 +30,9 @@ export default async function AnnouncementsPage({
   const templates = listAnnouncementTemplates();
   const smtpOk = isSmtpConfigured();
   const sender = resolveAnnouncementSender(admin);
+  // What recipients will see in their From column — the delivering SMTP config's own address, not
+  // the {sender_email} contact the body quotes.
+  const from = outboundEmailFrom();
   const signatureText = getSetting("emailSignatureText");
 
   return (
@@ -67,6 +70,7 @@ export default async function AnnouncementsPage({
             people={people}
             groups={groups}
             sender={sender}
+            from={from}
             signatureText={signatureText}
             action={sendAnnouncementAction}
           />

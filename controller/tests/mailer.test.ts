@@ -83,6 +83,17 @@ describe("sendMail gating", () => {
     expect(sent[0]).not.toHaveProperty("html");
   });
 
+  it("sends under the configured sender name, keeping the provider's own address", async () => {
+    configureSmtp();
+    settings.setSetting("announcementSenderName", "Research Computing");
+    try {
+      await mailer.sendMail("a@uga.edu", "Subject", "Body");
+      expect(sent[0].from).toEqual({ name: "Research Computing", address: "labs@uga.edu" });
+    } finally {
+      settings.setSetting("announcementSenderName", "");
+    }
+  });
+
   it("returns the error message when the transport throws", async () => {
     configureSmtp();
     failNext = true;

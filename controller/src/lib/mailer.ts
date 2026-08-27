@@ -5,6 +5,7 @@
  */
 
 import nodemailer from "nodemailer";
+import { resolveEmailFrom } from "./email";
 import { emailLabName } from "./email-lab-name";
 import { nameVars } from "./names";
 import { renderTemplate, stripLegacyEmailSignature } from "./template";
@@ -56,6 +57,16 @@ function transport(config: SmtpConfig) {
   });
 }
 
+/**
+ * The From this config sends under: always the provider's own address, labelled with the configured
+ * sender name so clients show "Research Computing <labs@uga.edu>" rather than the address twice.
+ * Returned as a bare string when there is no name, which is what nodemailer expects.
+ */
+function fromHeader(config: SmtpConfig): string | { name: string; address: string } {
+  const from = resolveEmailFrom(getSetting("announcementSenderName"), config.from);
+  return from.name ? from : from.address;
+}
+
 /** Build the text-only message with the universal signature appended. */
 export function emailContent(body: string): { text: string } {
   const cleanBody = stripLegacyEmailSignature(body).trimEnd();
@@ -73,7 +84,7 @@ export async function sendMail(to: string, subject: string, text: string): Promi
   const errors: string[] = [];
   for (const config of configs) {
     try {
-      await transport(config).sendMail({ from: config.from, to, subject, ...content });
+      await transport(config).sendMail({ from: fromHeader(config), to, subject, ...content });
       return { sent: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
