@@ -94,6 +94,19 @@ describe("sendMail gating", () => {
     }
   });
 
+  it("prefers the independent From display name over the sender name", async () => {
+    configureSmtp();
+    settings.setSetting("announcementSenderName", "Research Computing");
+    settings.setSetting("emailFromDisplayName", "Edward Cheng");
+    try {
+      await mailer.sendMail("a@uga.edu", "Subject", "Body");
+      expect(sent[0].from).toEqual({ name: "Edward Cheng", address: "labs@uga.edu" });
+    } finally {
+      settings.setSetting("announcementSenderName", "");
+      settings.setSetting("emailFromDisplayName", "");
+    }
+  });
+
   it("returns the error message when the transport throws", async () => {
     configureSmtp();
     failNext = true;

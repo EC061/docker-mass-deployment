@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { getSettings, getSmtpConfigs, TIB } from "@/lib/settings";
+import { getSettings, getSmtpConfigs, outboundEmailFrom, TIB } from "@/lib/settings";
+import { formatEmailFrom } from "@/lib/email";
 import { db } from "@/lib/db";
 import { fmtBytes } from "@/lib/format";
 import { logsContentBytes } from "@/lib/maintenance";
@@ -14,6 +15,7 @@ import {
   deleteSmtpSettingsAction,
   saveAlertSettingsAction,
   saveAnnouncementSenderSettingsAction,
+  saveEmailFromNameSettingsAction,
   saveGpuPolicyAction,
   saveScrubSettingsAction,
   saveSmtpSettingsAction,
@@ -48,6 +50,7 @@ export default async function SettingsPage({
   const { smtp, scrub, logs: logsMsg } = await searchParams;
   const s = getSettings();
   const smtpConfigs = getSmtpConfigs();
+  const outboundFrom = outboundEmailFrom();
   const nextSmtpRank = Math.max(0, ...smtpConfigs.map((config) => config.rank)) + 1;
   const logCount = (db().prepare("SELECT COUNT(*) AS n FROM logs").get() as { n: number }).n;
   const logBytes = logsContentBytes();
@@ -124,19 +127,38 @@ export default async function SettingsPage({
             Servers are attempted from the lowest rank to the highest. A failed delivery automatically
             falls through to the next configured server.
           </p>
+          <form action={saveEmailFromNameSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 rounded-md border p-3">
+            <div className="space-y-1">
+              <h3 className="text-sm font-semibold">From display name</h3>
+              <p className="text-xs text-muted-foreground">
+                The name shown in front of the delivering config&apos;s own From address on every
+                outbound email, so recipients see{" "}
+                <code>Edward Cheng &lt;no-reply@edwardcheng.net&gt;</code> instead of the address
+                twice. Independent of the announcement sender name below; blank reuses that name, and
+                blank there too sends the bare address.
+              </p>
+            </div>
+            <div>
+              <Label>From display name</Label>
+              <Input
+                name="emailFromDisplayName"
+                defaultValue={s.emailFromDisplayName}
+                placeholder={s.announcementSenderName || "Bare address (no display name)"}
+              />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Current From header: <code>{outboundFrom.address ? formatEmailFrom(outboundFrom) : "(no SMTP server configured)"}</code>
+              </p>
+            </div>
+            <div>
+              <Button type="submit" variant="secondary">Save From name</Button>
+            </div>
+          </form>
           <form action={saveAnnouncementSenderSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 rounded-md border p-3 sm:grid-cols-2">
             <div className="space-y-1 sm:col-span-2">
               <h3 className="text-sm font-semibold">Announcement sender variables</h3>
               <p className="text-xs text-muted-foreground">
                 Used for <code>{"{sender}"}</code> and <code>{"{sender_email}"}</code> in announcement
                 templates and previews. Leave either blank to use the signed-in admin&apos;s value.
-              </p>
-              <p className="text-xs text-muted-foreground">
-                The name is also the display name on the From header of every outbound email, in front
-                of the delivering config&apos;s own From address — so recipients see{" "}
-                <code>Research Computing &lt;labs@uga.edu&gt;</code> instead of the address twice.
-                Automatic emails have no signed-in admin to fall back to, so leaving it blank sends
-                them with the bare address.
               </p>
             </div>
             <div>

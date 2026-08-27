@@ -33,6 +33,7 @@ describe("getSetting / setSetting", () => {
     expect(settings.getSetting("usageScanHour")).toBe(0);
     expect(settings.getSetting("announcementSenderName")).toBe("");
     expect(settings.getSetting("announcementSenderEmail")).toBe("");
+    expect(settings.getSetting("emailFromDisplayName")).toBe("");
   });
 
   it("roundtrips a value through JSON", () => {
@@ -98,8 +99,26 @@ describe("resolveAnnouncementSender", () => {
   });
 });
 
+describe("emailFromName", () => {
+  it("prefers its own setting over the announcement sender name", () => {
+    settings.setSetting("announcementSenderName", "");
+    settings.setSetting("emailFromDisplayName", "");
+    expect(settings.emailFromName()).toBe("");
+
+    settings.setSetting("announcementSenderName", "Research Computing");
+    expect(settings.emailFromName()).toBe("Research Computing");
+
+    settings.setSetting("emailFromDisplayName", "Edward Cheng");
+    expect(settings.emailFromName()).toBe("Edward Cheng");
+    // The announcement variable is untouched by the From header's own name.
+    expect(settings.resolveAnnouncementSender({ name: "Admin", email: "a@uga.edu" }).name)
+      .toBe("Research Computing");
+  });
+});
+
 describe("outboundEmailFrom", () => {
-  it("pairs the sender name with the first-ranked SMTP config's address", () => {
+  it("falls back to the announcement sender name for the first-ranked config's address", () => {
+    settings.setSetting("emailFromDisplayName", "");
     settings.setSetting("smtpConfigs", [
       { id: "backup", name: "Backup", rank: 20, host: "smtp.backup", port: 465, user: "", pass: "", from: "backup@example.com", secure: true },
       { id: "primary", name: "Primary", rank: 10, host: "smtp.primary", port: 587, user: "", pass: "", from: "lab-notification@edwardcheng.net", secure: false },
@@ -109,6 +128,19 @@ describe("outboundEmailFrom", () => {
     expect(settings.outboundEmailFrom()).toEqual({
       name: "Research Computing",
       address: "lab-notification@edwardcheng.net",
+    });
+  });
+
+  it("labels the address with the independent From display name when set", () => {
+    settings.setSetting("smtpConfigs", [
+      { id: "primary", name: "Primary", rank: 10, host: "smtp.primary", port: 587, user: "", pass: "", from: "no-reply@edwardcheng.net", secure: false },
+    ]);
+    settings.setSetting("announcementSenderName", "Research Computing");
+    settings.setSetting("emailFromDisplayName", "Edward Cheng");
+
+    expect(settings.outboundEmailFrom()).toEqual({
+      name: "Edward Cheng",
+      address: "no-reply@edwardcheng.net",
     });
   });
 

@@ -33,6 +33,7 @@ import {
   REMOVAL_DATA_DELETED,
   REMOVAL_DATA_RETAINED,
   type SmtpConfig,
+  emailFromName,
   getSmtpConfigs,
   getSetting,
 } from "./settings";
@@ -59,11 +60,11 @@ function transport(config: SmtpConfig) {
 
 /**
  * The From this config sends under: always the provider's own address, labelled with the configured
- * sender name so clients show "Research Computing <labs@uga.edu>" rather than the address twice.
+ * display name so clients show "Research Computing <labs@uga.edu>" rather than the address twice.
  * Returned as a bare string when there is no name, which is what nodemailer expects.
  */
 function fromHeader(config: SmtpConfig): string | { name: string; address: string } {
-  const from = resolveEmailFrom(getSetting("announcementSenderName"), config.from);
+  const from = resolveEmailFrom(emailFromName(), config.from);
   return from.name ? from : from.address;
 }
 

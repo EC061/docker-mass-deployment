@@ -128,6 +128,14 @@ export async function saveAnnouncementSenderSettingsAction(formData: FormData) {
   revalidatePath("/announcements");
 }
 
+/** Configure the display name in front of the address on the From header of every outbound email. */
+export async function saveEmailFromNameSettingsAction(formData: FormData) {
+  await requireAdmin();
+  setSetting("emailFromDisplayName", String(formData.get("emailFromDisplayName") ?? "").trim());
+  revalidatePath("/settings");
+  revalidatePath("/announcements");
+}
+
 export async function saveAlertSettingsAction(formData: FormData) {
   await requireAdmin();
   setSetting("alertsEnabled", formData.get("alertsEnabled") === "on");
