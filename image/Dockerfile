@@ -87,6 +87,8 @@ RUN install -d -m 0755 /etc/skel/.vscode-server/data/Machine \
         > /etc/skel/.vscode-server/data/Machine/settings.json \
     && chmod 0644 /etc/skel/.vscode-server/data/Machine/settings.json
 
+# A loader, not the program: the real `labquota` ships with the agent and is published into the
+# read-only /run/labquota bind mount, so it updates on agent upgrade without an image rebuild.
 COPY labquota /usr/local/bin/labquota
 COPY entrypoint /usr/local/sbin/lab-entrypoint
 

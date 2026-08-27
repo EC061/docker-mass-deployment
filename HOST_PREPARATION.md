@@ -263,7 +263,7 @@ sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
 | `/cold-storage/<lab>` | `/cold-storage` | Per-lab cold root |
 | `/fast/<lab>/<user>` | `/home/<user>` | Student persistent fast home |
 | `/cold-storage/<lab>/<user>` | `/cold-storage/<user>` | Student cold directory |
-| agent state `labquota/<lab>` | `/run/labquota` read-only | Usage communication |
+| agent state `labquota/<lab>` | `/run/labquota` read-only | Usage communication and the `labquota` command |
 
 `/home/<user>/cold-storage` is a symlink to `/cold-storage/<user>`. No
 `/fast`, `/cold`, or `~/scratch` path exists inside the container, and no

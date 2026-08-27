@@ -36,8 +36,9 @@ def _labels(cfg: AgentConfig, lab: str) -> dict[str, str]:
 
 
 def _mounts(cfg: AgentConfig, lab: str) -> Mounts:
-    # ensure_labquota_dirs creates the root-owned status dir on the host before container start,
-    # so the read-only /run/labquota bind has a source.
+    # ensure_labquota_dirs creates the root-owned status dir on the host before container start, so
+    # the read-only /run/labquota bind has a source, and publishes the `labquota` program into it so
+    # a container started from a stale image still runs this agent's copy of the command.
     return Mounts(
         fast=zfs.get_mountpoint(lab_fast(cfg, lab)),
         cold=coldstore.lab_mount(cfg, lab),

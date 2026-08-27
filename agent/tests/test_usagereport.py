@@ -82,3 +82,21 @@ def test_labquota_snapshot_directory_is_agent_owned(tmp_path):
     path = tmp_path / "labquota" / "bio" / usagereport.USAGE_FILE
     assert json.loads(path.read_text()) == {"lab": "bio"}
     assert not str(path).startswith("/fast")
+
+
+def test_ensure_publishes_the_labquota_command_executable(tmp_path):
+    c = cfg(state_db=str(tmp_path / "state.db"))
+    usagereport.ensure_labquota_dirs(c, "bio")
+    published = tmp_path / "labquota" / "bio" / usagereport.COMMAND_FILE
+    assert published.read_text() == usagereport._command_source()
+    assert oct(published.stat().st_mode & 0o777) == "0o755"
+
+
+def test_published_command_is_restored_when_it_drifts(tmp_path):
+    """A stale copy (older agent) or a truncated one must be replaced on the next publish."""
+    c = cfg(state_db=str(tmp_path / "state.db"))
+    usagereport.ensure_labquota_dirs(c, "bio")
+    published = tmp_path / "labquota" / "bio" / usagereport.COMMAND_FILE
+    published.write_text("print('stale')\n")
+    usagereport.publish_command(c, "bio")
+    assert published.read_text() == usagereport._command_source()

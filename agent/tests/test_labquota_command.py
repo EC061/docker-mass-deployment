@@ -4,7 +4,14 @@ import subprocess
 import sys
 from pathlib import Path
 
-LABQUOTA = Path(__file__).parents[2] / "image" / "labquota"
+import pytest
+
+from lab_agent import usagereport
+from lab_agent.config import AgentConfig
+
+LABQUOTA = Path(__file__).parents[1] / "src" / "lab_agent" / "assets" / "labquota"
+# The loader baked into the lab image; it execs the copy the agent publishes at /run/labquota.
+SHIM = Path(__file__).parents[2] / "image" / "labquota"
 
 
 def run_labquota(tmp_path, snapshot, user):
@@ -90,3 +97,41 @@ def test_legacy_snapshot_without_rootfs_quota_still_renders(tmp_path):
     total_row = next(line for line in result.stdout.splitlines()
                      if line.lstrip().startswith("TOTAL"))
     assert "57.0 MiB" in total_row
+
+
+# --------------------------------------------------------------------------- image loader (shim)
+
+needs_system_python = pytest.mark.skipif(
+    not Path("/usr/bin/python3").exists(),
+    reason="the image loader execs /usr/bin/python3, as the lab image provides",
+)
+
+
+@needs_system_python
+def test_image_loader_runs_the_agent_published_command(tmp_path):
+    """End-to-end contract: the agent publishes the program, the image's loader finds and runs it."""
+    cfg = AgentConfig(controller_url="wss://c", token="t", node_name="node1",
+                      state_db=str(tmp_path / "state.db"))
+    published = Path(usagereport.ensure_labquota_dirs(cfg, "bio"))
+    (published / "usage.json").write_text(json.dumps(snapshot_fixture()), encoding="utf-8")
+
+    result = subprocess.run(
+        [str(SHIM), "--me"],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ | {"LABQUOTA_DIR": str(published), "USER": "alice"},
+    )
+    assert "alice  (you)" in result.stdout
+
+
+@needs_system_python
+def test_image_loader_explains_itself_before_the_agent_publishes(tmp_path):
+    result = subprocess.run(
+        [str(SHIM)],
+        capture_output=True,
+        text=True,
+        env=os.environ | {"LABQUOTA_DIR": str(tmp_path), "USER": "alice"},
+    )
+    assert result.returncode == 1
+    assert "isn't available yet" in result.stderr

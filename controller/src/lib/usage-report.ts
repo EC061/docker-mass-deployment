@@ -40,7 +40,7 @@ export interface UsageReport {
   students: UsageReportStudent[];
 }
 
-// Binary byte formatting (B/KiB/MiB/GiB/TiB), matching image/labquota's fmt_bytes so the emailed
+// Binary byte formatting (B/KiB/MiB/GiB/TiB), matching the agent's labquota fmt_bytes so the emailed
 // table reads identically to what students see from `labquota` inside the container. This differs
 // from lib/format.ts's fmtBytes (which labels binary sizes with decimal units KB/MB), so it is kept
 // local rather than shared.

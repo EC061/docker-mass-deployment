@@ -7,6 +7,12 @@ network channel and without the agent ever writing into a student-writable mount
 
     <state_dir>/labquota/<lab>/usage.json   (0644, root)  -> /run/labquota/usage.json  (ro)
     <state_dir>/labquota/<lab>/status.json  (0644, root)  -> /run/labquota/status.json (ro)
+    <state_dir>/labquota/<lab>/labquota     (0755, root)  -> /run/labquota/labquota    (ro)
+
+The third file is the ``labquota`` program itself. The image ships only a loader that execs
+``python3 /run/labquota/labquota``, so the command a student runs is the copy shipped with the
+*agent*: upgrading the agent updates it everywhere, with no image rebuild and no container recreate
+(which would discard each container's writable layer and its weekly apt patches).
 
 Because the directory is root-only and the bind is read-only, students can read these files but
 cannot modify, delete, or replace them with symlinks, and root never follows a student-planted link.
@@ -34,6 +40,8 @@ import json
 import os
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import lru_cache
+from importlib import resources
 from typing import Any
 
 from .config import AgentConfig
@@ -43,6 +51,8 @@ from .protocol import now_ms
 
 USAGE_FILE = "usage.json"
 STATUS_FILE = "status.json"
+# The `labquota` program itself, published next to the snapshot it reads (see ``publish_command``).
+COMMAND_FILE = "labquota"
 # A student asks for a fresh scan by touching this file in their own /home/<u> directory. Keeping
 # the marker inside the student's own quota-limited
 # dataset — instead of a shared world-writable directory — means a flood of markers only ever costs
@@ -401,25 +411,55 @@ def marker_path(cfg: AgentConfig, lab: str, user: str) -> str:
 
 
 def ensure_labquota_dirs(cfg: AgentConfig, lab: str) -> str:
-    """Create the root-owned status directory (0755 so the container can read it). Returns the base
-    path. Nothing the agent reads is student-writable: students signal a refresh from their own
-    dataset (see ``marker_path``), and the status dir is bind-mounted read-only."""
+    """Create the root-owned status directory (0755 so the container can read it) and refresh the
+    published ``labquota`` program in it. Returns the base path. Nothing the agent reads is
+    student-writable: students signal a refresh from their own dataset (see ``marker_path``), and
+    the status dir is bind-mounted read-only.
+
+    Publishing the program here (rather than baking it into the image) is what makes it updatable:
+    every caller of this function — container create, the publish loop, and the scan — leaves the
+    in-container command matching the running agent, with no rebuild and no recreate."""
     base = labquota_dir(cfg, lab)
     os.makedirs(base, exist_ok=True)
     os.chmod(base, 0o755)
+    publish_command(cfg, lab)
     return base
 
 
-def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
-    """Write JSON atomically and WITHOUT following symlinks (O_NOFOLLOW), leaving the previous file
-    intact on failure. The dir is root-only, but O_NOFOLLOW is defence-in-depth so a symlink at
-    the tmp/target path can never redirect the write."""
+@lru_cache(maxsize=1)
+def _command_source() -> str:
+    """The packaged ``labquota`` program, read once per process."""
+    return resources.files("lab_agent").joinpath("assets", COMMAND_FILE).read_text(encoding="utf-8")
+
+
+def publish_command(cfg: AgentConfig, lab: str) -> None:
+    """Publish the agent's copy of the ``labquota`` program into the lab's read-only status dir.
+
+    The image ships only a loader that execs ``python3 /run/labquota/labquota`` (see
+    ``image/labquota``), so this write is what actually updates the student-facing command. Writing
+    only on a content change keeps the frequent publish loop down to one read of a small file.
+    """
+    path = os.path.join(labquota_dir(cfg, lab), COMMAND_FILE)
+    source = _command_source()
+    try:
+        with open(path, encoding="utf-8") as fh:
+            if fh.read() == source:
+                return
+    except (OSError, ValueError):
+        pass  # missing, unreadable, or truncated — republish it
+    _atomic_write(path, source, 0o755)
+
+
+def _atomic_write(path: str, text: str, mode: int) -> None:
+    """Write a file atomically and WITHOUT following symlinks (O_NOFOLLOW), leaving the previous
+    file intact on failure. The dir is root-only, but O_NOFOLLOW is defence-in-depth so a symlink
+    at the tmp/target path can never redirect the write."""
     tmp = f"{path}.tmp"
     try:
-        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o644)
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, mode)
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh)
-        os.chmod(tmp, 0o644)
+            fh.write(text)
+        os.chmod(tmp, mode)  # an existing tmp keeps its old mode; O_CREAT's is only for new files
         os.replace(tmp, path)
     except OSError:
         # A failed write (symlink planted, disk full) keeps the last good file; drop the tmp.
@@ -428,6 +468,10 @@ def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
         except OSError:
             pass
         raise
+
+
+def _atomic_write_json(path: str, payload: dict[str, Any]) -> None:
+    _atomic_write(path, json.dumps(payload), 0o644)
 
 
 def publish_snapshot(cfg: AgentConfig, lab: str, snapshot: dict[str, Any]) -> None:

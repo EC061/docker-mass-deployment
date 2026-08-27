@@ -45,7 +45,7 @@ sudo uvx --from "$REPO" lab-agent doctor
 | `/cold-storage/<lab>` | `/cold-storage` | Per-lab cold root |
 | `/fast/<lab>/<user>` | `/home/<user>` | Student persistent fast home |
 | `/cold-storage/<lab>/<user>` | `/cold-storage/<user>` | Student cold directory |
-| agent state `labquota/<lab>` | `/run/labquota` read-only | Usage communication |
+| agent state `labquota/<lab>` | `/run/labquota` read-only | Usage communication and the `labquota` command |
 
 `/home/<user>/cold-storage` is a symlink to `/cold-storage/<user>`. No `/fast`, `/cold`, or
 `~/scratch` path exists inside the container, and no per-user datasets are created.
@@ -62,6 +62,12 @@ placements at it (or override the image per-placement in the controller UI):
 ```bash
 docker build -t ghcr.io/ec061/custom-ssh:latest image
 ```
+
+The student-facing `labquota` command is *not* baked in: the image carries only a loader
+(`image/labquota`), and the agent publishes the program itself into the read-only `/run/labquota`
+mount (`agent/src/lab_agent/assets/labquota`). Changing it therefore ships with `lab-agent upgrade`
+— no image rebuild, and no container recreate that would discard each container's writable layer
+and its weekly apt patches.
 
 The image runs OpenSSH directly as PID 1 and uses a pinned Ubuntu 24.04 base plus NVIDIA's
 `cuda-minimal-build-13-3` package. It contains `nvcc`, the basic CUDA headers/runtime, GCC/G++,
