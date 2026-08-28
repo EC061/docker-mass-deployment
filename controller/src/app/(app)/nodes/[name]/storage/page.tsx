@@ -139,6 +139,12 @@ export default async function NodeStoragePage({
           ? tier.pools.map((p: any) => typeof p === "string" ? p : p.pool)
           : [];
         const tierPools = pools.filter((p) => configuredPools.includes(p.name) || p.tiers?.includes(tierName));
+        const logicalCapacity = tier.logical_capacity_bytes ?? tierPools.reduce(
+          (sum: number, pool: any) => sum + (Number(pool.size_bytes) || 0), 0,
+        );
+        const logicalFree = tier.logical_free_bytes ?? tierPools.reduce(
+          (sum: number, pool: any) => sum + (Number(pool.free_bytes) || 0), 0,
+        );
         return (
           <Card key={tierName}>
             <CardContent className="space-y-4">
@@ -150,6 +156,9 @@ export default async function NodeStoragePage({
                   </div>
                   <p className="text-sm text-muted-foreground">
                     Backend: {tier.backend ?? "unknown"} · Logical path: {tier.mount_root ?? (tierName === "fast" ? "/fast" : "/cold-storage")}
+                  </p>
+                  <p className="text-sm text-muted-foreground">
+                    Logical backing capacity: {fmtBytes(logicalCapacity)} · Free: {fmtBytes(logicalFree)}
                   </p>
                   {tier.mergerfs && (
                     <p className="text-xs text-muted-foreground">
