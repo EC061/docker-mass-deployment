@@ -29,10 +29,14 @@ def runner(monkeypatch):
 
 
 def test_create_dataset_with_quota(runner):
+    # A NEW dataset gets its quota (and mountpoint) as -o properties at creation, so it is never
+    # even momentarily unlimited or mounted at the inherited path.
     runner.responses["zfs list -H -o name fast/labs/bio"] = CommandResult(False, [], 1, "", "missing")
-    zfs.create_dataset("fast/labs/bio", quota_bytes=2_000_000_000_000)
-    assert ["zfs", "create", "-p", "fast/labs/bio"] in runner.calls
-    assert ["zfs", "set", "quota=2000000000000", "fast/labs/bio"] in runner.calls
+    zfs.create_dataset("fast/labs/bio", quota_bytes=2_000_000_000_000, mountpoint="/fast/bio")
+    assert ["zfs", "create", "-p", "-o", "quota=2000000000000", "-o", "mountpoint=/fast/bio",
+            "fast/labs/bio"] in runner.calls
+    # No separate `zfs set quota=` window between create and quota.
+    assert not any(c[:2] == ["zfs", "set"] for c in runner.calls)
 
 
 def test_create_dataset_idempotent(runner):

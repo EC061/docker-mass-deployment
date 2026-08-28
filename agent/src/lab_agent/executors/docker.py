@@ -185,6 +185,14 @@ def container_exists(name: str) -> bool:
     return res.ok and name in res.stdout.split()
 
 
+def container_running(name: str) -> bool:
+    """Whether an existing container is currently running."""
+    res = run(
+        ["docker", "inspect", "--format", "{{.State.Running}}", name], timeout=20
+    )
+    return res.ok and res.stdout.strip().lower() == "true"
+
+
 def remove_container(name: str) -> None:
     if container_exists(name):
         res = run(["docker", "rm", "-f", name], timeout=120)
@@ -228,11 +236,20 @@ def rename_container(old: str, new: str) -> None:
 
 
 def stop_container(name: str, *, timeout: float = 60.0) -> None:
-    run(["docker", "stop", name], timeout=timeout + 30)
+    res = run(["docker", "stop", name], timeout=timeout + 30)
+    if not res.ok:
+        raise DockerError(res.logs)
 
 
 def start_container(name: str) -> None:
     res = run(["docker", "start", name], timeout=120)
+    if not res.ok:
+        raise DockerError(res.logs)
+
+
+def restart_container(name: str) -> None:
+    """Restart a running lab so Docker rebuilds its bind mounts after a mergerfs remount."""
+    res = run(["docker", "restart", name], timeout=180)
     if not res.ok:
         raise DockerError(res.logs)
 

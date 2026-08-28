@@ -1,4 +1,5 @@
 import { db } from "@/lib/db";
+import Link from "next/link";
 import { takeFlash } from "@/lib/flash";
 import { listLocalZfsNodes } from "@/lib/nodes";
 import { ConfirmButton } from "../_components/ConfirmButton";
@@ -269,6 +270,9 @@ export default async function NodesPage({
                             ))}
                           </div>
                         )}
+                        <Button asChild variant="secondary" size="sm" className="mt-2 h-7">
+                          <Link href={`/nodes/${encodeURIComponent(n.name)}/storage`}>Manage storage</Link>
+                        </Button>
                       </TableCell>
                       <TableCell className="w-40 align-top">
                         {n.cold_backend === "smb" ? (

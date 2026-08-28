@@ -31,7 +31,7 @@ class Dispatcher:
         self._handlers[action] = handler
 
     def _register_builtin(self) -> None:
-        from . import containerops, labops, maintenance, studentops
+        from . import containerops, labops, maintenance, storageops, studentops
         from .gpu import policy as gpu_policy
 
         self.register(P.A_NODE_REPORT_STATE, self._report_state)
@@ -47,6 +47,15 @@ class Dispatcher:
         self.register(P.A_STUDENT_REMOVE, studentops.remove_student)
         self.register(P.A_STUDENT_DELETE_COLD, studentops.delete_cold_student)
         self.register(P.A_GPU_POLICY_UPDATE, gpu_policy.update_policy_handler)
+        self.register(P.A_STORAGE_STATUS, storageops.status)
+        self.register(P.A_STORAGE_LIST_DEVICES, storageops.list_devices)
+        self.register(P.A_STORAGE_LIST_POOLS, storageops.list_pools)
+        self.register(P.A_STORAGE_CREATE_POOL, storageops.create_pool)
+        self.register(P.A_STORAGE_ATTACH_POOL, storageops.attach_pool)
+        self.register(P.A_STORAGE_REMOVE_POOL, storageops.remove_pool)
+        self.register(P.A_STORAGE_REBALANCE, storageops.rebalance)
+        self.register(P.A_STORAGE_MOUNT, storageops.mount)
+        self.register(P.A_STORAGE_PROVISION_LAB, storageops.provision_lab_storage)
 
     def _report_state(self, cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
         caps = detect_capabilities(cfg)

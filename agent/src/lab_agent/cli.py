@@ -6,11 +6,56 @@ import argparse
 import os
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from . import __version__
 from .config import DEFAULT_CONFIG_PATH, AgentConfig, load_config
+from .storage.model import (
+    BACKEND_MERGERFS,
+    BACKEND_SMB,
+    BACKEND_ZFS,
+    DEFAULT_COLD_MOUNT_ROOT,
+    DEFAULT_COLD_POOL,
+    DEFAULT_FAST_POOL,
+    StorageConfig,
+    StorageConfigError,
+    legacy_storage,
+)
 from .system import detect_capabilities
+
+
+def _storage_from_flags(args: argparse.Namespace) -> StorageConfig:
+    """Build a StorageConfig from the install flags.
+
+    One pool per tier keeps the plain ``zfs`` backend (no FUSE on a single-disk node). Two or more
+    switches that tier to ``mergerfs``, which is also what a later ``storage add-pool`` does — so a
+    node bootstrapped with one disk expands without being rebuilt.
+    """
+    fast_pools = args.fast_pool or [DEFAULT_FAST_POOL]
+    cold_pools = args.cold_pool or args.slow_pool or [DEFAULT_COLD_POOL]
+    cold_backend = args.cold_backend or args.slow_backend or (
+        BACKEND_MERGERFS if len(cold_pools) > 1 else BACKEND_ZFS
+    )
+    storage = legacy_storage(
+        fast_pool=fast_pools[0],
+        slow_pool=cold_pools[0],
+        slow_backend=BACKEND_SMB if cold_backend == BACKEND_SMB else BACKEND_ZFS,
+        slow_path=args.slow_path or DEFAULT_COLD_MOUNT_ROOT,
+        docker_pool=args.docker_pool,
+    )
+    fast = storage.fast.with_pools(tuple(fast_pools))
+    storage = storage.with_tier(fast)
+    if cold_backend != BACKEND_SMB:
+        if cold_backend == BACKEND_ZFS and len(cold_pools) > 1:
+            raise StorageConfigError(
+                "--cold-backend zfs supports one pool; use mergerfs for multiple pools"
+            )
+        cold = storage.cold.with_pools(tuple(cold_pools))
+        if cold_backend == BACKEND_MERGERFS:
+            cold = replace(cold, backend=BACKEND_MERGERFS).validate()
+        storage = storage.with_tier(cold)
+    return storage.validate()
 
 
 def _config_path(args: argparse.Namespace) -> Path:
@@ -32,14 +77,13 @@ def _cmd_install(args: argparse.Namespace) -> int:
     cfg = AgentConfig(controller_url=args.controller or "", token=args.token or "")
     if args.node_name:
         cfg.node_name = args.node_name
-    if args.fast_pool:
-        cfg.fast_pool = args.fast_pool
-    if args.slow_pool:
-        cfg.slow_pool = args.slow_pool
-    if args.slow_backend:
-        cfg.slow_backend = args.slow_backend
-    if args.slow_path:
-        cfg.slow_path = args.slow_path
+    # Storage flags seed the TEMPLATE's [storage.*] tables. Several --fast-pool/--cold-pool flags
+    # select the mergerfs backend for that tier automatically; one keeps the plain ZFS backend.
+    try:
+        cfg.storage = _storage_from_flags(args)
+    except StorageConfigError as exc:
+        print(f"install failed: {exc}", file=sys.stderr)
+        return 1
     if args.no_verify_tls:
         cfg.tls_verify = False
     config_path = _config_path(args)
@@ -53,7 +97,7 @@ def _cmd_install(args: argparse.Namespace) -> int:
     # The service is installed + enabled but NOT started: the operator edits the config first.
     print("\nNext steps:")
     print(f"  1. Edit the config:   sudo lab-agent edit-config   (or edit {config_path})")
-    print("       set controller_url, token, node_name, and the cold-storage (slow_*) settings")
+    print("       set controller_url, token, node_name, and the [storage.*] tier settings")
     print("  2. Start the agent:   sudo lab-agent start")
     print("  3. Verify health:     sudo lab-agent doctor")
     return 0
@@ -200,10 +244,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_install.add_argument("--token", help="per-node token from the controller UI (optional; set "
                                           "later via the config or `lab-agent set-token`)")
     p_install.add_argument("--node-name", help="override node name (default: hostname)")
-    p_install.add_argument("--fast-pool", help="fast ZFS pool name (default: fast)")
-    p_install.add_argument("--slow-pool", help="slow ZFS pool name (default: slow)")
-    p_install.add_argument("--slow-backend", choices=["zfs", "smb"],
-                           help="cold-storage backend (default: zfs)")
+    p_install.add_argument("--fast-pool", action="append",
+                           help="fast ZFS pool (repeat for several; 2+ selects mergerfs)")
+    p_install.add_argument("--cold-pool", action="append",
+                           help="cold ZFS pool (repeat for several; 2+ selects mergerfs)")
+    p_install.add_argument("--slow-pool", action="append",
+                           help=argparse.SUPPRESS)  # legacy alias for --cold-pool
+    p_install.add_argument("--cold-backend", choices=["zfs", "mergerfs", "smb"],
+                           help="cold-storage backend (default: zfs, or mergerfs for 2+ pools)")
+    p_install.add_argument("--slow-backend", choices=["zfs", "mergerfs", "smb"],
+                           help=argparse.SUPPRESS)  # legacy alias for --cold-backend
+    p_install.add_argument(
+        "--docker-pool",
+        help="ZFS pool backing Docker's data-root (default: the first fast pool)")
     p_install.add_argument("--slow-path",
                            help="cold-storage mount path for smb backend (default: /cold-storage)")
     p_install.add_argument("--no-verify-tls", action="store_true",
@@ -240,7 +293,150 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_prepare.set_defaults(func=_cmd_host_prepare)
 
+    _add_storage_parser(sub)
+
     return parser
+
+
+def _add_storage_parser(sub: argparse._SubParsersAction) -> None:
+    """`lab-agent storage ...` — the local half of what the controller's Storage UI does.
+
+    Everything here also works with the controller offline, which is the point: a node must be able
+    to bring its own storage up and be inspected without one.
+    """
+    p_storage = sub.add_parser("storage", help="inspect and manage this node's storage tiers")
+    ops = p_storage.add_subparsers(dest="storage_command", required=True)
+
+    p_status = ops.add_parser("status", help="tiers, pools, devices and per-lab branch quotas")
+    p_status.add_argument("--json", action="store_true", help="print the raw inventory as JSON")
+    p_status.set_defaults(func=_cmd_storage_status)
+
+    p_mount = ops.add_parser(
+        "mount", help="converge ZFS tier roots + per-lab mergerfs mounts (idempotent)"
+    )
+    p_mount.set_defaults(func=_cmd_storage_mount)
+
+    p_umount = ops.add_parser("unmount", help="unmount every per-lab mergerfs union")
+    p_umount.set_defaults(func=_cmd_storage_unmount)
+
+    p_devices = ops.add_parser("devices", help="list physical disks with stable by-id identity")
+    p_devices.set_defaults(func=_cmd_storage_devices)
+
+    p_add = ops.add_parser(
+        "add-pool", help="attach an EXISTING ZFS pool to a tier and extend every lab onto it"
+    )
+    p_add.add_argument("--tier", required=True, choices=["fast", "cold"])
+    p_add.add_argument("--pool", required=True, help="an existing ZFS pool on this node")
+    p_add.set_defaults(func=_cmd_storage_add_pool)
+
+    p_rebalance = ops.add_parser(
+        "rebalance", help="reshard branch quotas across pools (moves quota, never files)"
+    )
+    p_rebalance.add_argument("--tier", choices=["fast", "cold"], help="default: both tiers")
+    p_rebalance.set_defaults(func=_cmd_storage_rebalance)
+
+
+def _storage_cfg(args: argparse.Namespace) -> AgentConfig:
+    try:
+        return load_config(Path(args.config) if args.config else None)
+    except FileNotFoundError:
+        return AgentConfig(controller_url="", token="")
+
+
+def _run_storage_op(args: argparse.Namespace, handler, params: dict) -> int:
+    import json as _json
+
+    cfg = _storage_cfg(args)
+    try:
+        result, note = handler(cfg, params)
+    except Exception as exc:
+        print(f"storage operation failed: {exc}", file=sys.stderr)
+        return 1
+    if getattr(args, "json", False):
+        print(_json.dumps(result, indent=2, sort_keys=True))
+    print(note)
+    return 0
+
+
+def _cmd_storage_status(args: argparse.Namespace) -> int:
+    from . import storageops
+
+    cfg = _storage_cfg(args)
+    try:
+        report, note = storageops.status(cfg, {})
+    except Exception as exc:
+        print(f"storage status failed: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        import json as _json
+
+        print(_json.dumps(report, indent=2, sort_keys=True))
+        return 0
+    for name, tier in sorted(report["tiers"].items()):
+        print(f"{name}: backend={tier['backend']} health={tier['health']} "
+              f"path={tier['mount_root']}")
+        for pool in tier["pools"]:
+            flag = "ok" if pool["usable"] else "UNUSABLE"
+            print(f"  - {pool['pool']}: {pool['health']} ({flag}) "
+                  f"free={pool['free_bytes']} of {pool['size_bytes']}")
+        if not tier["pools"]:
+            print("  - (no local pools)")
+    docker = report["docker"]
+    print(f"docker: pool={docker['pool']} dataset={docker['dataset']} "
+          f"native_zfs={docker['on_zfs']} data_root={docker['data_root']}")
+    print(note)
+    return 0
+
+
+def _cmd_storage_mount(args: argparse.Namespace) -> int:
+    from . import storageops
+
+    return _run_storage_op(args, storageops.mount, {})
+
+
+def _cmd_storage_unmount(args: argparse.Namespace) -> int:
+    from .storage import mergerfs as mfs
+    from .storage import service
+
+    cfg = _storage_cfg(args)
+    count = 0
+    for tier in cfg.storage.tiers():
+        if not tier.uses_mergerfs:
+            continue
+        for lab in service.discover_labs(tier):
+            try:
+                mfs.unmount(tier.logical_mount(lab))
+                count += 1
+            except mfs.MergerfsError as exc:
+                print(f"could not unmount {tier.logical_mount(lab)}: {exc}", file=sys.stderr)
+    print(f"unmounted {count} union mount(s)")
+    return 0
+
+
+def _cmd_storage_devices(args: argparse.Namespace) -> int:
+    from . import storageops
+
+    cfg = _storage_cfg(args)
+    result, _note = storageops.list_devices(cfg, {})
+    for device in result["devices"]:
+        used = device["zfs_pool"] or (", ".join(device["filesystems"]) or "free")
+        print(f"{device['by_id'] or device['name']}  {device['size_bytes']} bytes  "
+              f"{device['type']}  {device['model'] or '?'}  [{used}]")
+    return 0
+
+
+def _cmd_storage_add_pool(args: argparse.Namespace) -> int:
+    from . import storageops
+
+    return _run_storage_op(
+        args, storageops.attach_pool, {"tier": args.tier, "pool": args.pool}
+    )
+
+
+def _cmd_storage_rebalance(args: argparse.Namespace) -> int:
+    from . import storageops
+
+    return _run_storage_op(args, storageops.rebalance, {"tier": args.tier} if args.tier else {})
 
 
 def main(argv: list[str] | None = None) -> int:

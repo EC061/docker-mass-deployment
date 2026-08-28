@@ -14,6 +14,7 @@ import { db } from "./db";
 import { getLab } from "./labs";
 import { listAllPlacements } from "./placements";
 import { listMembers } from "./students";
+import { parsePoolTelemetry, tierTotal } from "./storage";
 
 export interface StudentUsage {
   studentId: number;
@@ -216,28 +217,6 @@ export interface NodeUsage {
   coldQuota: number | null; // cold pool total capacity
 }
 
-interface PoolInfo {
-  name: string;
-  size: number; // total pool capacity
-  alloc: number; // allocated (used)
-  free: number;
-}
-
-/** Parse the node's `pools` telemetry JSON, keeping only well-formed entries. */
-function parsePools(raw: string | null): PoolInfo[] {
-  if (!raw) return [];
-  try {
-    const arr = JSON.parse(raw) as unknown;
-    if (!Array.isArray(arr)) return [];
-    return arr.filter(
-      (p): p is PoolInfo =>
-        !!p && typeof p === "object" && typeof (p as PoolInfo).alloc === "number" && typeof (p as PoolInfo).size === "number",
-    );
-  } catch {
-    return [];
-  }
-}
-
 export function buildNodeUsage(): NodeUsage[] {
   const rows = db()
     .prepare(
@@ -257,13 +236,10 @@ export function buildNodeUsage(): NodeUsage[] {
   }[];
 
   return rows.map((r) => {
-    const pools = parsePools(r.pools);
+    const pools = parsePoolTelemetry(r.pools);
     const isSmb = r.cold_backend === "smb";
-    // The agent reports its ZFS pools fast-first (and slow second, only on a local-ZFS node), so the
-    // fast pool is pools[0] and cold is pools[1]. An SMB node has no local cold pool — its cold lives
-    // on the linked owner node, which counts it against its own slow pool.
-    const fast = pools[0] ?? null;
-    const cold = isSmb ? null : (pools[1] ?? null);
+    const fast = tierTotal(pools, "fast", 0);
+    const cold = isSmb ? null : tierTotal(pools, "cold", 1);
     return {
       nodeId: r.id,
       name: r.name,

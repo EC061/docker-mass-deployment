@@ -1,7 +1,11 @@
 """Create exact-ID accounts and conditional per-student storage datasets.
 
-Quota-disabled placements retain the original host-owned directories. A placement with a student
-quota uses a direct child dataset for that tier, mounted at the same path.
+Quota-disabled placements retain the original host-owned directories: the student's directory is
+made once on the lab's logical mount and mergerfs (or plain ZFS) places it. A placement WITH a
+student quota promotes that directory to a real dataset per branch, so the limit is enforced by ZFS
+rather than watched — and the student's single logical quota is sharded across the branches by the
+same allocator the lab quota uses, so ``sum(branch quota) <= configured student quota`` holds there
+too.
 """
 
 from __future__ import annotations
@@ -14,14 +18,28 @@ from . import coldstore
 from .config import AgentConfig
 from .executors import coldfs, docker, users, zfs
 from .executors.base import run
-from .paths import lab_fast, user_fast, user_slow
+from .storage import service
+from .storage.model import TIER_COLD, TIER_FAST, TierConfig
+from .storage.quota import BranchState, allocate
+
+
+def _dir_bytes(path: str) -> int:
+    """Apparent size of a directory, used only as the promotion floor for a student quota."""
+    res = run(["du", "-sb", "--", path], timeout=600)
+    if not res.ok or not res.stdout.strip():
+        return 0
+    try:
+        return int(res.stdout.split()[0])
+    except (ValueError, IndexError):
+        return 0
 
 
 def _ensure_user_dataset(dataset: str, path: str, quota: int | None, uid: int, gid: int) -> None:
     """Create/promote a student directory only when quota mode is enabled.
 
-    With quota unset and no existing child dataset this intentionally does nothing, preserving the
-    original flat lab dataset. Promotion is called while the lab container is stopped by recreate.
+    With quota unset and no existing child dataset this intentionally does nothing beyond ownership,
+    preserving the original flat lab dataset. Promotion is called while the lab container is stopped
+    by recreate.
     """
     if zfs.dataset_exists(dataset):
         zfs.set_quota(dataset, quota)
@@ -37,6 +55,7 @@ def _ensure_user_dataset(dataset: str, path: str, quota: int | None, uid: int, g
     if had_data:
         os.rename(path, staged)
     try:
+        # The quota is applied at creation, so the dataset is never momentarily unlimited.
         zfs.create_dataset(dataset, quota_bytes=quota, mountpoint=path)
         if had_data:
             copied = run(["cp", "-a", f"{staged}/.", path], timeout=3600)
@@ -55,6 +74,74 @@ def _ensure_user_dataset(dataset: str, path: str, quota: int | None, uid: int, g
         raise
 
 
+def _student_allocation(
+    tier: TierConfig, lab: str, user: str, quota: int, branches: list[service.BranchObservation]
+) -> dict[str, int]:
+    """Split one student's logical tier quota across the branches that are actually present.
+
+    Same invariants as the lab-level split: never below what the branch already holds, never more in
+    total than the configured student quota, never handing a missing branch's share to a survivor.
+    """
+    missing = [obs.pool for obs in branches if not obs.present]
+    if missing:
+        # Student allocations pre-date the storage state file and are not individually persisted.
+        # Without the missing dataset mounted we cannot know its last hard quota, so reallocating
+        # any of that budget to a survivor could exceed the student's quota when the disk returns.
+        # Existing datasets keep their current enforcement; an administrator can retry once the
+        # branch is recovered or explicitly removed.
+        raise service.StorageError(
+            f"{tier.name} branch(es) {', '.join(missing)} of lab '{lab}' are unavailable; "
+            "refusing to redistribute a per-student quota while their allocation is unknown"
+        )
+
+    states: list[BranchState] = []
+    for obs in branches:
+        dataset = f"{obs.dataset}/{user}"
+        path = f"{obs.path}/{user}"
+        if not obs.present:
+            states.append(BranchState(pool=obs.pool, used=0, quota=None, pool_free=0,
+                                      available=False))
+            continue
+        if zfs.dataset_exists(dataset):
+            usage = zfs.get_usage(dataset)
+            used, current = usage.used_bytes, usage.quota_bytes
+        else:
+            used, current = (_dir_bytes(path) if os.path.isdir(path) else 0), None
+        states.append(BranchState(pool=obs.pool, used=used, quota=current,
+                                  pool_free=obs.pool_free, available=True))
+    return allocate(quota, states, min_headroom=0).quotas
+
+
+def _prepare_tier(
+    cfg: AgentConfig, tier_name: str, lab: str, username: str, uid: int, gid: int,
+    quota: int | None,
+) -> None:
+    tier = cfg.storage.tier(tier_name)
+    branches = service.observe_branches(tier, lab)
+    present = [b for b in branches if b.present]
+    if not present:
+        raise service.StorageError(
+            f"no {tier_name} branch of lab '{lab}' is mounted; refusing to create student storage"
+        )
+    if quota is None:
+        # No per-student dataset: one directory on the LOGICAL mount, so mergerfs's create policy
+        # places it and every branch stays consistent. Also converge any branch that already has a
+        # promoted dataset (a placement that turned student quotas back off).
+        logical = tier.logical_mount(lab)
+        coldfs.ensure_owned_dir(f"{logical}/{username}", uid, gid)
+        for obs in present:
+            dataset = f"{obs.dataset}/{username}"
+            if zfs.dataset_exists(dataset):
+                zfs.set_quota(dataset, None)
+        return
+    allocation = _student_allocation(tier, lab, username, quota, branches)
+    for obs in present:
+        _ensure_user_dataset(
+            f"{obs.dataset}/{username}", f"{obs.path}/{username}",
+            allocation.get(obs.pool, 0), uid, gid,
+        )
+
+
 def prepare_student_storage(cfg: AgentConfig, lab: str, username: str, uid: int, gid: int,
                             fast_quota: int | None, cold_quota: int | None) -> None:
     users.validate_username(username)
@@ -64,14 +151,11 @@ def prepare_student_storage(cfg: AgentConfig, lab: str, username: str, uid: int,
         )
         if invalid:
             raise ValueError(f"student {label} quota must be a positive integer byte count")
-    fast_root = zfs.get_mountpoint(lab_fast(cfg, lab))
-    _ensure_user_dataset(user_fast(cfg, lab, username), f"{fast_root}/{username}",
-                         fast_quota, uid, gid)
-    cold_root = coldstore.lab_mount(cfg, lab)
+    _prepare_tier(cfg, TIER_FAST, lab, username, uid, gid, fast_quota)
     if cfg.slow_is_zfs:
-        _ensure_user_dataset(user_slow(cfg, lab, username), f"{cold_root}/{username}",
-                             cold_quota, uid, gid)
+        _prepare_tier(cfg, TIER_COLD, lab, username, uid, gid, cold_quota)
     else:
+        cold_root = coldstore.lab_mount(cfg, lab)
         coldfs.ensure_owned_dir(f"{cold_root}/{username}", uid, gid)
 
 
@@ -101,17 +185,36 @@ def add_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     )
 
 
+def _delete_student_branches(cfg: AgentConfig, tier_name: str, lab: str, username: str) -> None:
+    """Remove one student's storage from EVERY branch of a tier.
+
+    Refuses while any branch is unavailable: deleting the survivors while a disk is out would leave
+    a copy behind with nothing recording that it should have gone.
+    """
+    tier = cfg.storage.tier(tier_name)
+    branches = service.observe_branches(tier, lab)
+    missing = [b.pool for b in branches if not b.pool_usable]
+    if missing:
+        raise service.StorageError(
+            f"{tier_name} branch(es) {', '.join(missing)} of lab '{lab}' are unavailable; "
+            "refusing to delete student data while part of it is unreachable"
+        )
+    for obs in branches:
+        dataset = f"{obs.dataset}/{username}"
+        if zfs.dataset_exists(dataset):
+            zfs.destroy_dataset(dataset, recursive=True)
+        else:
+            coldfs.remove_child(obs.path, username)
+
+
 def remove_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     username = params["username"]
     delete_data = bool(params.get("delete_data", False))
+    users.validate_username(username)
     users.remove_user(docker.container_name(lab, cfg.node_name), username)
     if delete_data:
-        dataset = user_fast(cfg, lab, username)
-        if zfs.dataset_exists(dataset):
-            zfs.destroy_dataset(dataset, recursive=True)
-        else:
-            coldfs.remove_child(zfs.get_mountpoint(lab_fast(cfg, lab)), username)
+        _delete_student_branches(cfg, TIER_FAST, lab, username)
     msg = f"removed student '{username}' from lab '{lab}'"
     result = {
         "lab": lab,
@@ -129,11 +232,7 @@ def delete_cold_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, 
     lab = params["lab"]
     username = params["username"]
     users.validate_username(username)
-    dataset = user_slow(cfg, lab, username)
-    if zfs.dataset_exists(dataset):
-        zfs.destroy_dataset(dataset, recursive=True)
-    else:
-        coldfs.remove_child(coldstore.lab_mount(cfg, lab), username)
+    _delete_student_branches(cfg, TIER_COLD, lab, username)
     return {"lab": lab, "username": username, "cold_deleted": True}, (
         f"deleted cold storage for '{username}' in lab '{lab}'"
     )

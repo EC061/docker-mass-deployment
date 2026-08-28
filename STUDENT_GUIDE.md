@@ -64,7 +64,8 @@ example, `~` in your shell is exactly `/home/<username>`, and `~/cold-storage` i
 `/cold-storage/<username>`.
 
 `~/cold-storage` is a shortcut to your private cold-storage directory. Both locations survive lab
-container recreation.
+container recreation. The administrator may expand the backing storage without changing either
+path; `labquota` continues to show one aggregate used/quota number for each tier.
 
 > **⚠️ Warning: lab storage is NOT reliable, backed-up storage.**
 >

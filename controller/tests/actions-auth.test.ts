@@ -30,6 +30,7 @@ describe("Server Actions reject unauthenticated callers", () => {
   let stats: typeof import("../src/app/(app)/stats/actions.js");
   let gpu: typeof import("../src/app/(app)/gpu/actions.js");
   let announcements: typeof import("../src/app/(app)/announcements/actions.js");
+  let nodes: typeof import("../src/app/(app)/nodes/actions.js");
 
   beforeAll(async () => {
     announcements = await import("../src/app/(app)/announcements/actions.js");
@@ -40,6 +41,7 @@ describe("Server Actions reject unauthenticated callers", () => {
     backups = await import("../src/app/(app)/backups/actions.js");
     stats = await import("../src/app/(app)/stats/actions.js");
     gpu = await import("../src/app/(app)/gpu/actions.js");
+    nodes = await import("../src/app/(app)/nodes/actions.js");
   });
 
   const fd = () => new FormData();
@@ -64,6 +66,12 @@ describe("Server Actions reject unauthenticated callers", () => {
       announcements.sendAnnouncementAction(fd()),
       announcements.deleteAnnouncementAction(fd()),
       announcements.clearAnnouncementsAction(),
+      nodes.refreshStorageAction(fd()),
+      nodes.reconcileStorageAction(fd()),
+      nodes.rebalanceStorageAction(fd()),
+      nodes.scrubStoragePoolAction(fd()),
+      nodes.attachStoragePoolAction(fd()),
+      nodes.createStoragePoolAction(fd()),
       students.importStudentsAction({ labId: 1, rows: [] }),
       settings.saveStorageSettingsAction(fd()),
       settings.saveUsageScanSettingsAction(fd()),

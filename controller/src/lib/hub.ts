@@ -26,7 +26,15 @@ import {
 } from "./placements";
 import { nodeStillAuthorized, verifyNodeAuth } from "./nodes";
 import { isProtocolCompatible, parseInboundFrame, PROTOCOL_VERSION } from "./protocol";
-import { ackTask, bumpAttempts, claimTask, markTaskReceived, markTaskState, retryTask } from "./queue";
+import {
+  ackTask,
+  bumpAttempts,
+  claimTask,
+  enqueueTask,
+  markTaskReceived,
+  markTaskState,
+  retryTask,
+} from "./queue";
 import { getSetting } from "./settings";
 
 interface NodeConn {
@@ -294,6 +302,27 @@ function handleResult(node: string, frame: any): void {
     } else if (frame.ok && t.action === "node.repair" && frame.result?.health) {
       db().prepare("UPDATE nodes SET capabilities = ?, last_seen = ? WHERE name = ?")
         .run(JSON.stringify(frame.result.health), Date.now(), node);
+    } else if (frame.ok && t.action === "storage.status" && frame.result) {
+      db().prepare("UPDATE nodes SET storage_inventory = ?, last_seen = ? WHERE name = ?")
+        .run(JSON.stringify(frame.result), Date.now(), node);
+    } else if (frame.ok && ["storage.list_devices", "storage.list_pools"].includes(t.action)) {
+      const row = db().prepare("SELECT storage_inventory FROM nodes WHERE name = ?").get(node) as
+        | { storage_inventory: string | null }
+        | undefined;
+      let inventory: Record<string, unknown> = {};
+      try {
+        inventory = row?.storage_inventory ? JSON.parse(row.storage_inventory) : {};
+      } catch {
+        inventory = {};
+      }
+      Object.assign(inventory, frame.result ?? {});
+      db().prepare("UPDATE nodes SET storage_inventory = ?, last_seen = ? WHERE name = ?")
+        .run(JSON.stringify(inventory), Date.now(), node);
+    } else if (frame.ok && t.action.startsWith("storage.") &&
+               !["storage.status", "storage.list_devices", "storage.list_pools"].includes(t.action)) {
+      // Mutations return operation-specific detail. Follow them with one authoritative live
+      // inventory read so the UI converges without asking the agent to publish disks every 15s.
+      enqueueTask(node, "storage.status", { devices: true }, "storage-refresh");
     } else if (labName && t.action === "lab.create") {
       markPlacementStateByLabNode(
         labName,

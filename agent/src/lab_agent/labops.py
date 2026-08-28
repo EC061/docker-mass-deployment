@@ -1,7 +1,9 @@
-"""Lab storage operations: provision/destroy a lab's ZFS datasets and adjust quotas live.
+"""Lab storage operations: provision/destroy a lab's storage and adjust quotas live.
 
-These are dispatcher handlers (signature ``(cfg, params) -> (result, logs)``). Container creation
-and student users are handled in phase 3; here we only manage storage.
+These are dispatcher handlers (signature ``(cfg, params) -> (result, logs)``). Storage is handled
+through ``storage.service``, so a tier backed by one ZFS pool and a tier backed by four pools behind
+a per-lab mergerfs union take the exact same code path — and the container mount points
+(``/fast/<lab>``, ``/cold-storage/<lab>``) are identical either way.
 """
 
 from __future__ import annotations
@@ -11,10 +13,8 @@ from typing import Any
 from . import coldstore
 from .config import AgentConfig
 from .executors import zfs
-from .paths import (
-    fast_mount,
-    lab_fast,
-)
+from .storage import service
+from .storage.model import TIER_FAST
 
 
 def _usage_dict(u: zfs.Usage) -> dict[str, Any]:
@@ -26,6 +26,13 @@ def _usage_dict(u: zfs.Usage) -> dict[str, Any]:
     }
 
 
+def _fast_usage(cfg: AgentConfig, lab: str) -> zfs.Usage:
+    """One aggregated fast-tier usage row for the lab (summed across branches)."""
+    tier = cfg.storage.fast
+    agg = service.aggregate(TIER_FAST, lab, service.observe_branches(tier, lab))
+    return zfs.Usage(tier.logical_mount(lab), agg.used_bytes, agg.quota_bytes, agg.available_bytes)
+
+
 def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     fast_quota = params.get("fast_quota_bytes")
@@ -35,17 +42,11 @@ def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 
     containerops.assert_node_ready(cfg)
 
-    # One quota-bearing dataset per tier with stable per-lab host mountpoints.
-    zfs.create_dataset(
-        lab_fast(cfg, lab), quota_bytes=fast_quota, mountpoint=fast_mount(cfg, lab)
-    )
-    coldstore.create_lab(cfg, lab, slow_quota)
-
-    # Managed labs use --userns=host, so container root owns the lab mount roots as host uid 0.
-    from .executors import coldfs
-
-    coldfs.ensure_owned_dir(zfs.get_mountpoint(lab_fast(cfg, lab)), 0, 0, mode=0o711)
-    coldfs.ensure_owned_dir(coldstore.lab_mount(cfg, lab), 0, 0, mode=0o711)
+    # One quota-bearing dataset per POOL per tier, sharing the lab's single logical quota, plus the
+    # per-lab union mount when the tier spans more than one pool. Managed labs use --userns=host, so
+    # container root owns the lab mount roots as host uid 0.
+    fast = service.provision_lab(cfg, TIER_FAST, lab, fast_quota, uid=0, gid=0, mode=0o711)
+    cold_note = coldstore.create_lab(cfg, lab, slow_quota)
 
     # Provision the shared container (no-op if Docker absent -> reported as failure upstream).
     container = containerops.ensure_container(cfg, lab, params)
@@ -53,23 +54,29 @@ def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     result = {
         "lab": lab,
         "container": container,
-        "fast": _usage_dict(zfs.get_usage(lab_fast(cfg, lab))),
+        "fast": _usage_dict(_fast_usage(cfg, lab)),
         "slow": _usage_dict(coldstore.lab_usage(cfg, lab)),
+        "fast_allocation": fast.get("allocation"),
+        "fast_mountpoint": fast.get("mountpoint"),
     }
-    return result, f"provisioned datasets + container for lab '{lab}'"
+    logs = "; ".join([f"provisioned storage + container for lab '{lab}'", cold_note,
+                      *fast.get("logs", [])])
+    return result, logs
 
 
 def set_lab_quota(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     logs = []
     if "fast_quota_bytes" in params:
-        zfs.set_quota(lab_fast(cfg, lab), params["fast_quota_bytes"])
-        logs.append(f"fast quota -> {params['fast_quota_bytes']}")
+        result = service.set_lab_quota(cfg, TIER_FAST, lab, params["fast_quota_bytes"])
+        split = ", ".join(f"{p}={q}" for p, q in sorted(result.get("allocation", {}).items()))
+        logs.append(f"fast quota -> {params['fast_quota_bytes']} ({split or 'no branch'})")
+        logs += [w for w in result.get("logs", []) if w.startswith(("PARTIAL", "configured"))]
     if "slow_quota_bytes" in params:
         logs.append(coldstore.set_lab_quota(cfg, lab, params["slow_quota_bytes"]))
     result = {
         "lab": lab,
-        "fast": _usage_dict(zfs.get_usage(lab_fast(cfg, lab))),
+        "fast": _usage_dict(_fast_usage(cfg, lab)),
         "slow": _usage_dict(coldstore.lab_usage(cfg, lab)),
     }
     return result, "; ".join(logs) or "no quota change requested"
@@ -77,13 +84,16 @@ def set_lab_quota(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 
 def destroy_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
-    # Remove the container FIRST. Its bind mounts keep the lab datasets
-    # datasets busy, so `zfs destroy -r` fails ("dataset is busy") while the container exists. The
-    # container's data lives in the datasets (not its writable layer), so removing it loses nothing
-    # the teardown isn't already destroying.
+    force = bool(params.get("force", False))
+    # Remove the container FIRST. Its bind mounts keep the lab storage busy, so unmounting the
+    # mergerfs union and `zfs destroy -r` both fail ("dataset is busy") while the container exists.
+    # The container's data lives in the datasets (not its writable layer), so removing it loses
+    # nothing the teardown isn't already destroying.
     from .executors import docker
 
     docker.remove_container(docker.container_name(lab, cfg.node_name))
-    zfs.destroy_dataset(lab_fast(cfg, lab), recursive=True)
-    coldstore.destroy_lab(cfg, lab)
-    return {"lab": lab, "destroyed": True}, f"destroyed container + datasets for lab '{lab}'"
+    logs = service.destroy_lab(cfg, TIER_FAST, lab, force=force)
+    coldstore.destroy_lab(cfg, lab, force=force)
+    return {"lab": lab, "destroyed": True, "logs": logs}, (
+        f"destroyed container + storage for lab '{lab}'"
+    )
