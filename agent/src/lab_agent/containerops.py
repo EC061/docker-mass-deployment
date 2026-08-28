@@ -11,9 +11,10 @@ from typing import Any
 
 from . import coldstore, maintenance_state, usagereport
 from .config import AgentConfig
-from .executors import docker, zfs
+from .executors import docker
 from .executors.docker import ContainerOptions, Mounts
-from .paths import lab_fast
+from .storage import service
+from .storage.model import TIER_FAST
 from .system import detect_capabilities
 
 
@@ -38,8 +39,11 @@ def _labels(cfg: AgentConfig, lab: str) -> dict[str, str]:
 def _mounts(cfg: AgentConfig, lab: str) -> Mounts:
     # ensure_labquota_dirs creates the root-owned status dir on the host before container start,
     # so the read-only /run/labquota bind has a source.
+    # Both are the LOGICAL tier paths (/fast/<lab>, /cold-storage/<lab>): a single ZFS dataset
+    # on a one-pool tier, a per-lab mergerfs union on a multi-pool one. A container never sees
+    # an individual branch.
     return Mounts(
-        fast=zfs.get_mountpoint(lab_fast(cfg, lab)),
+        fast=service.mount_lab(cfg, TIER_FAST, lab),
         cold=coldstore.lab_mount(cfg, lab),
         labquota=usagereport.ensure_labquota_dirs(cfg, lab),
         seccomp_profile=cfg.seccomp_profile,
@@ -119,7 +123,7 @@ def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, s
     from . import studentops
     fast_quota = params.get("student_fast_quota_bytes")
     cold_quota = params.get("student_cold_quota_bytes")
-    root = zfs.get_mountpoint(lab_fast(cfg, lab))
+    root = cfg.storage.fast.logical_mount(lab)
     for username in usagereport.list_lab_students(cfg, lab):
         try:
             stat = os.stat(f"{root}/{username}")

@@ -9,8 +9,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 from .config import AgentConfig
-from .executors import docker
+from .executors import docker, zfs
 from .executors.base import run
+from .storage import mergerfs as mfs
+from .storage import service
 
 
 @dataclass
@@ -44,11 +46,34 @@ class NvidiaHealth:
 
 
 @dataclass
+class TierHealth:
+    """Per-tier storage health, generalized over any number of backing pools."""
+
+    tier: str
+    backend: str
+    status: str                    # healthy | degraded | unavailable
+    mount_root: str
+    pools: list[dict] = field(default_factory=list)
+    unavailable_pools: list[str] = field(default_factory=list)
+    mergerfs_ok: bool = True       # mergerfs installed when the tier needs it
+    logical_mounts_ok: bool = True # every provisioned lab has its logical mount up
+    bad_mounts: list[str] = field(default_factory=list)
+
+
+@dataclass
 class StorageHealth:
     zfs_ok: bool
     fast_ok: bool
     cold_ok: bool
     cold_backend: str
+    # Generalized multi-pool view. fast_ok/cold_ok stay as the coarse booleans every existing
+    # consumer reads; the detail below is what the storage UI and doctor use.
+    tiers: list[TierHealth] = field(default_factory=list)
+    docker_pool: str = ""
+    docker_dataset: str = ""
+    docker_on_native_zfs: bool = False
+    quota_invariant_ok: bool = True
+    quota_violations: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -90,15 +115,6 @@ def _issue(items: list[HealthIssue], code: str, severity: str, message: str,
 
 def _pool_exists(pool: str) -> bool:
     return run(["zpool", "list", "-H", "-o", "name", pool], timeout=15).ok
-
-
-def _zfs_root_ok(dataset: str, expected_mount: str | None = None) -> bool:
-    mounted = run(["zfs", "get", "-H", "-o", "value", "mounted", dataset], timeout=15)
-    mountpoint = run(["zfs", "get", "-H", "-o", "value", "mountpoint", dataset], timeout=15)
-    if not mounted.ok or mounted.stdout.strip() != "yes" or not mountpoint.ok:
-        return False
-    path = mountpoint.stdout.strip()
-    return path == expected_mount if expected_mount else path.startswith("/")
 
 
 def _docker_userns(cfg: AgentConfig) -> bool:
@@ -404,9 +420,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     # host-prepare only puts Docker's data-root on a ZFS dataset once the pool(s) it needs exist
     # (see hostprep._zfs_pools_ready); before that, a plain install on the default backing store is
     # expected and the missing pool(s) are already flagged below via fast/cold_storage_missing.
-    zfs_pools_ready = zfs_ok and _pool_exists(cfg.fast_pool) and (
-        not cfg.slow_is_zfs or _pool_exists(cfg.slow_pool)
-    )
+    docker_pool_ready = zfs_ok and _pool_exists(cfg.storage.docker.pool)
 
     docker_ok = run(["docker", "version", "--format", "{{.Server.Version}}"], timeout=20).ok
     driver = ""
@@ -415,7 +429,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
         driver = result.stdout.strip() if result.ok else ""
     else:
         _issue(issues, "docker_unavailable", "critical", "Docker daemon is unreachable")
-    if docker_ok and zfs_pools_ready and driver not in DOCKER_DRIVERS_OK:
+    if docker_ok and docker_pool_ready and driver not in DOCKER_DRIVERS_OK:
         _issue(issues, "docker_storage_driver", "critical",
                f"Docker storage driver '{driver or 'unknown'}' is unsupported")
     if docker_ok and not _docker_root_ok(cfg):
@@ -556,26 +570,20 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
         _issue(issues, "nvidia_cdi_stale", "critical",
                "NVIDIA CDI devices are missing or stale", True)
 
-    fast_ok = (
-        _pool_exists(cfg.fast_pool)
-        and _zfs_root_ok(cfg.labs_fast_root, cfg.fast_mount_root)
-        if zfs_ok else False
-    )
-    if not fast_ok:
-        _issue(issues, "fast_storage_missing", "critical",
-               f"Fast pool '{cfg.fast_pool}' is unavailable")
+    tiers = _tier_healths(cfg, issues, zfs_ok=zfs_ok, deep=deep)
+    fast_ok = next(t.status == "healthy" for t in tiers if t.tier == "fast")
+    cold_tier = next(t for t in tiers if t.tier == "cold")
     if cfg.slow_is_zfs:
-        cold_ok = (
-            _pool_exists(cfg.slow_pool) and _zfs_root_ok(cfg.labs_slow_root, cfg.cold_mount_root)
-            if zfs_ok else False
-        )
+        cold_ok = cold_tier.status == "healthy"
     else:
         cold_ok = os.path.ismount(cfg.slow_path) and _smb_posix_ok(cfg)
-    if not cold_ok:
-        code = "cold_storage_missing" if cfg.slow_is_zfs or not os.path.ismount(cfg.slow_path) \
-            else "smb_posix_ownership"
-        _issue(issues, code, "critical",
-               f"Cold {cfg.slow_backend} storage is unavailable or lacks POSIX numeric ownership")
+        if not cold_ok:
+            code = "cold_storage_missing" if not os.path.ismount(cfg.slow_path) \
+                else "smb_posix_ownership"
+            _issue(issues, code, "critical",
+                   "Cold smb storage is unavailable or lacks POSIX numeric ownership")
+
+    docker_on_zfs, quota_ok, quota_violations = _docker_and_quota_health(cfg, issues, zfs_ok, deep)
 
     severity = {"warning": 1, "critical": 2}
     status = "healthy" if not issues else max(issues, key=lambda i: severity[i.severity]).severity
@@ -583,6 +591,147 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
         runtime=RuntimeHealth(docker_ok, driver, userns_ok, cfg.userns_user,
                               cfg.userns_start, cfg.userns_size, bwrap_ok, cuda_ok),
         nvidia=NvidiaHealth(gpu_count, nvml_ok, loaded, userspace, cdi_ok, devices),
-        storage=StorageHealth(zfs_ok, fast_ok, cold_ok, cfg.slow_backend),
+        storage=StorageHealth(
+            zfs_ok, fast_ok, cold_ok, cfg.slow_backend, tiers=tiers,
+            docker_pool=cfg.storage.docker.pool, docker_dataset=cfg.docker_dataset,
+            docker_on_native_zfs=docker_on_zfs, quota_invariant_ok=quota_ok,
+            quota_violations=quota_violations,
+        ),
         health=Health(status, issues),
     )
+
+
+def _tier_healths(
+    cfg: AgentConfig, issues: list[HealthIssue], *, zfs_ok: bool, deep: bool
+) -> list[TierHealth]:
+    """Per-tier storage validation, for any number of pools.
+
+    Checks, per tier: every configured pool is imported and ONLINE; each pool's container dataset
+    (``<pool>/labs``) is a REAL mounted ZFS filesystem at the expected path (never a leftover
+    directory); mergerfs is installed when the tier needs it; and every provisioned lab's logical
+    mount (``/fast/<lab>``, ``/cold-storage/<lab>``) is up with the branches it should have.
+    """
+    out: list[TierHealth] = []
+    for tier in cfg.storage.tiers():
+        if not tier.is_zfs_owned:
+            status, _healths = service.tier_health(tier)
+            out.append(TierHealth(tier.name, tier.backend, status, tier.cold_root))
+            continue
+        if not zfs_ok:
+            out.append(TierHealth(tier.name, tier.backend, "unavailable", tier.mount_root,
+                                  unavailable_pools=list(tier.pools)))
+            _issue(issues, f"{tier.name}_storage_missing", "critical",
+                   f"ZFS is unavailable, so the {tier.name} tier cannot be validated")
+            continue
+        status, healths = service.tier_health(tier)
+        bad = [h.pool for h in healths if not h.usable]
+        merger_ok = (not tier.uses_mergerfs) or mfs.available()
+        entry = TierHealth(
+            tier=tier.name, backend=tier.backend, status=status, mount_root=tier.mount_root,
+            pools=[h.to_dict() for h in healths], unavailable_pools=bad, mergerfs_ok=merger_ok,
+        )
+        if status == "unavailable":
+            _issue(issues, f"{tier.name}_storage_missing", "critical",
+                   f"No pool of the {tier.name} tier is available "
+                   f"({', '.join(tier.pools)}); labs on this tier cannot be provisioned")
+        elif status == "degraded":
+            _issue(issues, f"{tier.name}_storage_degraded", "critical",
+                   f"{tier.name} tier is DEGRADED: pool(s) {', '.join(bad)} are missing or not "
+                   "mounted where expected. Surviving branches stay readable; quota expansion and "
+                   "destructive operations are blocked until the pool returns or is removed.")
+        if not merger_ok:
+            _issue(issues, f"{tier.name}_mergerfs_missing", "critical",
+                   f"The {tier.name} tier uses the mergerfs backend but mergerfs is not installed; "
+                   "run `lab-agent host-prepare`", True)
+        if deep and merger_ok and status != "unavailable":
+            entry.bad_mounts = _bad_logical_mounts(tier)
+            entry.logical_mounts_ok = not entry.bad_mounts
+            if entry.bad_mounts:
+                _issue(issues, f"{tier.name}_logical_mount_missing", "critical",
+                       f"{tier.name} logical mount(s) are down: {', '.join(entry.bad_mounts)}. "
+                       "Run `lab-agent storage mount` (or restart lab-storage-mounts.service).")
+        out.append(entry)
+    return out
+
+
+def _bad_logical_mounts(tier) -> list[str]:
+    """Provisioned labs whose container-facing path is not the mount it should be."""
+    bad: list[str] = []
+    for lab in service.discover_labs(tier):
+        target = tier.logical_mount(lab)
+        if tier.uses_mergerfs:
+            if not mfs.is_mergerfs_mount(target):
+                bad.append(target)
+                continue
+            live = set(mfs.current_branches(target))
+            expected = {b.path for b in service.observe_branches(tier, lab) if b.present}
+            if live != expected:
+                details = []
+                if expected - live:
+                    details.append("missing: " + ", ".join(sorted(expected - live)))
+                if live - expected:
+                    details.append("unexpected: " + ", ".join(sorted(live - expected)))
+                bad.append(f"{target} ({'; '.join(details)})")
+        else:
+            state = zfs.mount_state(tier.branch_dataset(tier.pools[0], lab), target)
+            if not state.ok or not os.path.ismount(target):
+                bad.append(target)
+    return bad
+
+
+def _docker_and_quota_health(
+    cfg: AgentConfig, issues: list[HealthIssue], zfs_ok: bool, deep: bool
+) -> tuple[bool, bool, list[str]]:
+    """Docker must stay on NATIVE ZFS, and branch quotas must obey the per-lab invariant."""
+    docker_on_zfs = False
+    if zfs_ok:
+        docker_on_zfs = zfs.dataset_exists(cfg.docker_dataset)
+        if docker_on_zfs:
+            state = zfs.mount_state(cfg.docker_dataset, cfg.docker_data_root)
+            if not state.ok:
+                _issue(issues, "docker_dataset_mount", "critical",
+                       f"Docker dataset {cfg.docker_dataset} is not mounted at "
+                       f"{cfg.docker_data_root}")
+            for tier in cfg.storage.tiers():
+                if tier.uses_mergerfs and cfg.docker_data_root.startswith(
+                    tier.mount_root.rstrip("/") + "/"
+                ):
+                    _issue(issues, "docker_on_mergerfs", "critical",
+                           "Docker's data-root is inside a mergerfs tier; the zfs storage driver "
+                           "requires a native ZFS dataset")
+    violations: list[str] = []
+    if deep and zfs_ok:
+        violations = _quota_violations(cfg)
+        if violations:
+            _issue(issues, "storage_quota_invariant", "critical",
+                   "Branch quotas exceed the configured lab quota for: " + "; ".join(violations))
+    return docker_on_zfs, not violations, violations
+
+
+def _quota_violations(cfg: AgentConfig) -> list[str]:
+    """Labs whose branch quotas sum above their configured logical tier quota (INV-1)."""
+    from .storage.state import StorageState
+
+    state = StorageState.load(cfg.storage_state_path)
+    out: list[str] = []
+    for tier in cfg.storage.tiers():
+        if not tier.is_zfs_owned:
+            continue
+        for lab in service.discover_labs(tier):
+            record = state.lab_or_none(tier.name, lab)
+            configured = record.configured_quota_bytes if record else None
+            if configured is None:
+                continue
+            branches = service.observe_branches(tier, lab)
+            if any(b.present and b.quota is None for b in branches):
+                out.append(f"{tier.name}/{lab} has an UNLIMITED branch dataset")
+                continue
+            committed = sum(b.quota or 0 for b in branches if b.present)
+            committed += sum(
+                max(b.quota_bytes or 0, b.used_bytes or 0)
+                for b in (record.branches.values() if record else [])
+                if b.state == "missing"
+            )
+            if committed > configured:
+                out.append(f"{tier.name}/{lab} committed {committed} > configured {configured}")
+    return out

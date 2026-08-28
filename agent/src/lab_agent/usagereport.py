@@ -38,7 +38,6 @@ from typing import Any
 
 from .config import AgentConfig
 from .executors import docker, users, zfs
-from .paths import lab_fast
 from .protocol import now_ms
 
 USAGE_FILE = "usage.json"
@@ -139,53 +138,64 @@ class UsageState:
 
 @dataclass
 class LabUsage:
-    """Live ZFS usage for one lab and any quota-enabled student child datasets."""
+    """Live ZFS usage for one lab and any quota-enabled student child datasets.
+
+    Each field is ONE aggregated number per tier, already summed across every branch of that tier
+    (see ``storage.service.aggregate``). Branch-level detail is available in ``fast_detail`` /
+    ``slow_detail`` for telemetry and the storage UI, but the lab-level and student-level numbers
+    the controller and the ``labquota`` command consume are always the single logical value — a file
+    is counted once, on whichever branch holds it, and never again through the union mount.
+    """
 
     fast: zfs.Usage | None = None
     slow: zfs.Usage | None = None
     users: dict[str, dict[str, zfs.Usage]] = field(default_factory=dict)  # user -> {fast,slow}
+    fast_detail: Any | None = None  # storage.service.TierUsage
+    slow_detail: Any | None = None
 
 
-def _parse_dataset(dataset: str, root: str) -> tuple[str, str | None] | None:
-    """Map a lab root and optional direct per-student child dataset."""
-    prefix = root.rstrip("/") + "/"
-    if not dataset.startswith(prefix):
-        return None
-    rest = dataset[len(prefix):].split("/")
-    lab = rest[0]
-    if not lab:
-        return None
-    if len(rest) == 1:
-        return lab, None
-    if len(rest) == 2 and rest[1] not in {"shared", "users"} and users.USERNAME_RE.match(rest[1]):
-        return lab, rest[1]
-    return None
+# The agent's internal tier names are "fast"/"cold"; this module has always called the cold tier
+# "slow" in its dataclass fields and telemetry rows, so map once here rather than renaming the wire.
+_TIER_FIELD = {"fast": "fast", "cold": "slow"}
 
 
-def _ingest_rows(out: dict[str, LabUsage], rows: list[zfs.Usage], root: str, tier: str) -> None:
-    for u in rows:
-        parsed = _parse_dataset(u.dataset, root)
-        if parsed is None:
-            continue
-        lab, user = parsed
-        entry = out.setdefault(lab, LabUsage())
-        if user is None:
-            setattr(entry, tier, u)
-        else:
-            entry.users.setdefault(user, {})[tier] = u
+def _usage_of(agg: Any, tier_cfg: Any, lab: str) -> zfs.Usage:
+    return zfs.Usage(tier_cfg.logical_mount(lab), agg.used_bytes, agg.quota_bytes,
+                     agg.available_bytes)
 
 
 def collect_zfs_usage(cfg: AgentConfig) -> dict[str, LabUsage]:
-    """All labs' live ZFS usage from one ``zfs list -r`` per pool (cheap; no per-dataset calls)."""
+    """All labs' live ZFS usage from one ``zfs list -r`` per POOL (cheap; no per-dataset calls).
+
+    Branches are aggregated per lab and per (lab, student) before anything leaves this function, so
+    a multi-pool tier reports exactly one row per lab per tier — never one per disk.
+    """
+    from .storage import service
+
     out: dict[str, LabUsage] = {}
-    _ingest_rows(out, zfs.list_usage(cfg.labs_fast_root), cfg.labs_fast_root, "fast")
-    if cfg.slow_is_zfs:
-        _ingest_rows(out, zfs.list_usage(cfg.labs_slow_root), cfg.labs_slow_root, "slow")
+    for lab, tiers in service.collect_usage(cfg).items():
+        entry = out.setdefault(lab, LabUsage())
+        for tier_name, agg in tiers.items():
+            field_name = _TIER_FIELD[tier_name]
+            setattr(entry, field_name, _usage_of(agg, cfg.storage.tier(tier_name), lab))
+            setattr(entry, f"{field_name}_detail", agg)
+    for lab, per_user in service.collect_student_usage(cfg).items():
+        entry = out.setdefault(lab, LabUsage())
+        for user, tiers in per_user.items():
+            for tier_name, agg in tiers.items():
+                entry.users.setdefault(user, {})[_TIER_FIELD[tier_name]] = zfs.Usage(
+                    f"{cfg.storage.tier(tier_name).logical_mount(lab)}/{user}",
+                    agg.used_bytes, agg.quota_bytes, agg.available_bytes,
+                )
     return out
 
 
 def list_lab_students(cfg: AgentConfig, lab: str) -> list[str]:
-    """Enumerate provisioned students from direct children of the lab's fast mount."""
+    """Enumerate provisioned students from direct children of the lab's LOGICAL fast mount.
+
+    Reading the union (not the individual branches) is what keeps this correct on a multi-pool tier:
+    a student whose directory happens to live only on the second disk is still listed exactly once.
+    """
     try:
         entries = os.listdir(_fast_lab_mp(cfg, lab))
     except OSError:
@@ -380,7 +390,12 @@ def tier_storage(lab: str, container_usage: ContainerUsage) -> list[dict[str, An
 
 
 def _fast_lab_mp(cfg: AgentConfig, lab: str) -> str:
-    return zfs.get_mountpoint(lab_fast(cfg, lab))
+    """The lab's LOGICAL fast path — the union on a multi-pool tier, the dataset on a single one.
+
+    Student-visible scans (roster enumeration, refresh markers) always go through this single path,
+    so a file is never seen once per branch and once again through the union.
+    """
+    return cfg.storage.fast.logical_mount(lab)
 
 
 # Container path the labquota status dir is bind-mounted read-only at (see docker.build_run_args).

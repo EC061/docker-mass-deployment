@@ -83,6 +83,16 @@ describe("telemetry ingestion", () => {
     expect(gpu[0].pid).toBe(42);
   });
 
+  it("persists compact generalized tier health from the heartbeat", () => {
+    const tiers = [
+      { tier: "fast", backend: "mergerfs", health: "healthy", pools: ["fast1", "fast2"] },
+      { tier: "cold", backend: "mergerfs", health: "degraded", pools: ["cold1", "cold2"], unavailable_pools: ["cold2"] },
+    ];
+    ingest.ingestTelemetry("gpu-1", { storage_tiers: tiers, storage: [], gpu_processes: [] });
+    const row = db.db().prepare("SELECT storage_tiers FROM nodes WHERE name='gpu-1'").get() as any;
+    expect(JSON.parse(row.storage_tiers)).toEqual(tiers);
+  });
+
   it("records per-lab usage-scan time and only moves it forward", () => {
     ingest.ingestTelemetry("gpu-1", {
       storage: [],

@@ -703,6 +703,15 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
       }
     },
   },
+  {
+    // Compact tier health arrives on every heartbeat; the larger inventory (devices, branch
+    // allocations, mergerfs config) is refreshed on demand from the node Storage page.
+    id: "0028_node_storage_inventory",
+    sql: `
+    ALTER TABLE nodes ADD COLUMN storage_tiers TEXT;
+    ALTER TABLE nodes ADD COLUMN storage_inventory TEXT;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

@@ -1,19 +1,46 @@
 import json
 
+from storagehelp import make_cfg
+
 from lab_agent import usagereport
-from lab_agent.config import AgentConfig
 from lab_agent.executors.zfs import Usage
+from lab_agent.storage import service
 
 
 def cfg(**kw):
-    return AgentConfig(controller_url="wss://c", token="t", node_name="node1", **kw)
+    kw.setdefault("node_name", "node1")
+    return make_cfg(**kw)
 
 
-def test_dataset_parser_accepts_only_direct_student_children():
-    assert usagereport._parse_dataset("fast/labs/bio", "fast/labs") == ("bio", None)
-    assert usagereport._parse_dataset("fast/labs/bio/alice", "fast/labs") == ("bio", "alice")
-    assert usagereport._parse_dataset("fast/labs/bio/users/alice", "fast/labs") is None
-    assert usagereport._parse_dataset("fast/labs/bio/shared", "fast/labs") is None
+def test_dataset_parser_accepts_only_direct_student_children(monkeypatch):
+    """Lab-level and per-student rows are split; anything deeper is ignored."""
+    tier = cfg().storage.fast
+    rows = [
+        Usage("fast/labs", 0, None, None),
+        Usage("fast/labs/bio", 10, 100, 90),
+        Usage("fast/labs/bio/alice", 4, 40, 36),
+        Usage("fast/labs/bio/users/alice", 1, None, None),
+        Usage("fast/labs/bio/shared", 1, None, None),
+    ]
+    monkeypatch.setattr(service.zfs, "list_usage", lambda root: rows)
+    labs, students = service._parse_rows(tier)
+    assert set(labs) == {"bio"}
+    assert labs["bio"]["fast"].used_bytes == 10
+    assert set(students["bio"]) == {"alice"}
+    assert students["bio"]["alice"]["fast"].used_bytes == 4
+
+
+def test_multi_pool_rows_are_split_per_branch_then_aggregated(monkeypatch):
+    """One `zfs list -r` per POOL; the lab-level number is the SUM, counted once."""
+    tier = cfg(fast_pools=["fast1", "fast2"]).storage.fast
+    per_pool = {
+        "fast1/labs": [Usage("fast1/labs/bio", 300, 500, 200)],
+        "fast2/labs": [Usage("fast2/labs/bio", 100, 400, 300)],
+    }
+    monkeypatch.setattr(service.zfs, "list_usage", lambda root: per_pool[root])
+    labs, _students = service._parse_rows(tier)
+    assert set(labs["bio"]) == {"fast1", "fast2"}
+    assert sum(u.used_bytes for u in labs["bio"].values()) == 400
 
 
 def test_snapshot_uses_container_oriented_names():
@@ -67,12 +94,15 @@ def test_scan_uses_flat_container_paths(monkeypatch):
 
 
 def test_refresh_marker_is_inside_user_fast_directory(tmp_path, monkeypatch):
-    monkeypatch.setattr(usagereport.zfs, "get_mountpoint", lambda ds: str(tmp_path))
-    (tmp_path / "alice").mkdir()
-    marker = tmp_path / "alice" / usagereport.REFRESH_MARKER
+    """Student-facing paths are the LOGICAL mount, so a scan sees each file exactly once."""
+    c = cfg(fast_mount_root=str(tmp_path))
+    (tmp_path / "bio" / "alice").mkdir(parents=True)
+    marker = tmp_path / "bio" / "alice" / usagereport.REFRESH_MARKER
     marker.write_text("")
-    assert usagereport.marker_path(cfg(), "bio", "alice") == str(marker)
-    assert usagereport.newest_request(cfg(), "bio", ["alice"]) is not None
+    assert usagereport.marker_path(c, "bio", "alice") == str(marker)
+    assert usagereport.newest_request(c, "bio", ["alice"]) is not None
+    # The roster is enumerated from the same single logical path.
+    assert usagereport.list_lab_students(c, "bio") == ["alice"]
 
 
 def test_labquota_snapshot_directory_is_agent_owned(tmp_path):

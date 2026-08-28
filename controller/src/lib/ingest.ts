@@ -91,8 +91,13 @@ export function ingestTelemetry(node: string, payload: any): void {
 
   // Latest pool free space + liveness.
   db()
-    .prepare("UPDATE nodes SET pools = ?, last_seen = ? WHERE name = ?")
-    .run(JSON.stringify(payload.pools ?? []), now, node);
+    .prepare("UPDATE nodes SET pools = ?, storage_tiers = ?, last_seen = ? WHERE name = ?")
+    .run(
+      JSON.stringify(payload.pools ?? []),
+      JSON.stringify(payload.storage_tiers ?? []),
+      now,
+      node,
+    );
 
   // Node-reported cold-storage mount state: an SMB client reports whether its mount is live; a
   // local-ZFS owner reports its dataset mountpoint. Used by the Nodes page and SMB-assignment checks.

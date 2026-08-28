@@ -27,11 +27,9 @@ REPO="git+https://github.com/EC061/docker-mass-deployment.git#subdirectory=agent
 
 sudo uvx --from "$REPO" lab-agent install
 sudo uvx --from "$REPO" lab-agent edit-config
-sudo uvx --from "$REPO" lab-agent host-prepare  # installs Docker, ZFS utils, AppArmor, nvidia-container-toolkit
-# ... create zpools (hardware-specific) ...
-sudo zfs create -o mountpoint=/fast fast/labs
-sudo zfs create -o mountpoint=/cold-storage slow/labs
-sudo uvx --from "$REPO" lab-agent host-prepare  # provisions Docker data-root on ZFS
+sudo uvx --from "$REPO" lab-agent host-prepare  # Docker, ZFS, AppArmor, mergerfs when configured
+# ... create/import the independent zpools named in config, or add a disk from Node -> Storage ...
+sudo uvx --from "$REPO" lab-agent host-prepare  # Docker native-ZFS data-root + lab mount service
 # ... install + pin NVIDIA driver (GPU nodes only, see HOST_PREPARATION.md) ...
 sudo uvx --from "$REPO" lab-agent start
 sudo uvx --from "$REPO" lab-agent doctor
@@ -48,7 +46,41 @@ sudo uvx --from "$REPO" lab-agent doctor
 | agent state `labquota/<lab>` | `/run/labquota` read-only | Usage communication |
 
 `/home/<user>/cold-storage` is a symlink to `/cold-storage/<user>`. No `/fast`, `/cold`, or
-`~/scratch` path exists inside the container, and no per-user datasets are created.
+`~/scratch` path exists inside the container. Backing pool/branch paths are never exposed there.
+
+## Multi-drive storage architecture
+
+Fast lab storage and locally-owned cold storage are generic tiers. A one-pool tier keeps the legacy
+native-ZFS layout. A tier with two or more independent pools creates one quota-bearing dataset per
+lab on every pool and one mergerfs mount **per lab**:
+
+```text
+fast1/labs/labA -> /mnt/lab-storage/fast1/labs/labA --\
+                                                           mergerfs -> /fast/labA -> /home
+fast2/labs/labA -> /mnt/lab-storage/fast2/labs/labA --/
+
+cold1/labs/labA -> /mnt/lab-storage/cold1/labs/labA --\
+                                                           mergerfs -> /cold-storage/labA
+cold2/labs/labA -> /mnt/lab-storage/cold2/labs/labA --/
+```
+
+The pools are independent, not vdevs in one large zpool. Losing one disk therefore does not destroy
+the other pools; the union drops the missing branch and keeps surviving files accessible. A missing
+branch retains its last quota allocation in agent state and survivors never automatically inherit
+it. Destructive lab removal is blocked while a branch is missing.
+
+Docker is deliberately separate. Its data root remains a native ZFS dataset such as
+`fast1/docker`, using Docker's `zfs` storage driver; it is never put on mergerfs. The Docker pool may
+be the first fast pool or a dedicated pool.
+
+Hard lab quotas remain ZFS quotas. The configured logical quota is split across the lab's branch
+datasets; allocation changes shrink donors before growing receivers, never move files, never shrink
+below used data, and maintain `sum(branch quotas + missing reservations) <= configured quota`.
+
+The Nodes page links to a per-node Storage view showing devices, pool/tier membership, capacity,
+health, scrubs, mergerfs settings, Docker backing storage, and advanced branch allocations. It can
+refresh inventory, reconcile mounts, rebalance quota capacity, attach an existing pool, or initialize
+an unused stable `/dev/disk/by-id/...` device after an explicit destructive confirmation.
 
 ## Get the lab image
 

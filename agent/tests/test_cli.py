@@ -236,3 +236,136 @@ def test_doctor_synthesizes_config_when_missing(monkeypatch):
     assert cli.main(["doctor"]) == 0
     # Falls back to a placeholder config rather than crashing.
     assert seen["cfg"].controller_url == "(none)"
+
+
+# --------------------------------------------------------------------------- storage subcommands
+
+
+def _install_capture(monkeypatch):
+    import lab_agent.installer as installer
+
+    captured = {}
+
+    def fake_install(cfg, path, *, enable, ref=None):
+        captured["cfg"] = cfg
+        return {}
+
+    monkeypatch.setattr(installer, "install", fake_install)
+    return captured
+
+
+def test_install_with_one_pool_per_tier_keeps_the_plain_zfs_backend(monkeypatch):
+    captured = _install_capture(monkeypatch)
+    cli.main(["install", "--controller", "ws://c", "--token", "t",
+              "--fast-pool", "fast1", "--cold-pool", "cold1"])
+    storage = captured["cfg"].storage
+    assert storage.fast.backend == "zfs" and storage.fast.pools == ("fast1",)
+    assert storage.cold.backend == "zfs" and storage.cold.pools == ("cold1",)
+    assert storage.docker.pool == "fast1"
+
+
+def test_install_with_several_pools_selects_mergerfs(monkeypatch):
+    captured = _install_capture(monkeypatch)
+    cli.main(["install", "--controller", "ws://c", "--token", "t",
+              "--fast-pool", "fast1", "--fast-pool", "fast2",
+              "--cold-pool", "cold1", "--cold-pool", "cold2",
+              "--docker-pool", "fast1"])
+    storage = captured["cfg"].storage
+    assert storage.fast.backend == "mergerfs" and storage.fast.pools == ("fast1", "fast2")
+    assert storage.cold.backend == "mergerfs" and storage.cold.pools == ("cold1", "cold2")
+    # Docker stays on native ZFS on an explicitly chosen pool.
+    assert storage.docker.dataset == "fast1/docker"
+
+
+def test_install_can_explicitly_use_mergerfs_with_one_cold_pool():
+    parser = cli.build_parser()
+    args = parser.parse_args([
+        "install", "--cold-pool", "cold1", "--cold-backend", "mergerfs",
+    ])
+    storage = cli._storage_from_flags(args)
+    assert storage.cold.backend == "mergerfs"
+    assert storage.cold.pools == ("cold1",)
+
+
+def test_install_rejects_explicit_zfs_with_multiple_cold_pools():
+    parser = cli.build_parser()
+    args = parser.parse_args([
+        "install", "--cold-pool", "cold1", "--cold-pool", "cold2",
+        "--cold-backend", "zfs",
+    ])
+    with pytest.raises(cli.StorageConfigError, match="supports one pool"):
+        cli._storage_from_flags(args)
+
+
+def test_install_rejects_a_dangerous_pool_name(monkeypatch, capsys):
+    _install_capture(monkeypatch)
+    assert cli.main(["install", "--controller", "ws://c", "--token", "t",
+                     "--fast-pool", "fast; rm -rf /"]) == 1
+    assert "invalid ZFS pool name" in capsys.readouterr().err
+
+
+def test_legacy_slow_flags_still_work(monkeypatch):
+    captured = _install_capture(monkeypatch)
+    cli.main(["install", "--controller", "ws://c", "--token", "t",
+              "--slow-pool", "bulk", "--slow-backend", "smb", "--slow-path", "/mnt/cold"])
+    storage = captured["cfg"].storage
+    assert storage.cold.backend == "smb"
+    assert captured["cfg"].cold_root == "/mnt/cold"
+
+
+def test_storage_status_prints_each_tier(monkeypatch, capsys, tmp_path):
+    from lab_agent import storageops
+
+    monkeypatch.setattr(storageops, "status", lambda cfg, params: ({
+        "tiers": {
+            "fast": {"backend": "zfs", "health": "healthy", "mount_root": "/fast",
+                     "pools": [{"pool": "fast1", "health": "ONLINE", "usable": True,
+                                "free_bytes": 10, "size_bytes": 20}]},
+            "cold": {"backend": "mergerfs", "health": "degraded", "mount_root": "/cold-storage",
+                     "pools": [{"pool": "cold1", "health": "ONLINE", "usable": True,
+                                "free_bytes": 5, "size_bytes": 30},
+                               {"pool": "cold2", "health": "UNAVAIL", "usable": False,
+                                "free_bytes": 0, "size_bytes": 0}]},
+        },
+        "docker": {"pool": "fast1", "dataset": "docker", "on_zfs": True,
+                   "data_root": "/var/lib/docker"},
+    }, "fast: healthy; cold: degraded"))
+    assert cli.main(["--config", str(tmp_path / "none.toml"), "storage", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "cold: backend=mergerfs health=degraded" in out
+    assert "cold2: UNAVAIL (UNUSABLE)" in out
+    assert "docker: pool=fast1" in out
+
+
+def test_storage_add_pool_calls_the_attach_handler(monkeypatch, capsys, tmp_path):
+    from lab_agent import storageops
+
+    seen = {}
+
+    def fake_attach(cfg, params):
+        seen.update(params)
+        return {}, "attached"
+
+    monkeypatch.setattr(storageops, "attach_pool", fake_attach)
+    rc = cli.main(["--config", str(tmp_path / "none.toml"),
+                   "storage", "add-pool", "--tier", "cold", "--pool", "cold2"])
+    assert rc == 0
+    assert seen == {"tier": "cold", "pool": "cold2"}
+    assert "attached" in capsys.readouterr().out
+
+
+def test_storage_add_pool_rejects_an_unknown_tier(tmp_path):
+    import pytest
+
+    with pytest.raises(SystemExit):
+        cli.main(["storage", "add-pool", "--tier", "scratch", "--pool", "p"])
+
+
+def test_storage_mount_reports_failures_without_raising(monkeypatch, capsys, tmp_path):
+    from lab_agent import storageops
+
+    monkeypatch.setattr(storageops, "mount",
+                        lambda cfg, params: (_ for _ in ()).throw(RuntimeError("no pools")))
+    rc = cli.main(["--config", str(tmp_path / "none.toml"), "storage", "mount"])
+    assert rc == 1
+    assert "no pools" in capsys.readouterr().err

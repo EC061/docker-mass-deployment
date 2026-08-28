@@ -31,14 +31,34 @@ def create_dataset(
     quota_bytes: int | None = None,
     mountpoint: str | None = None,
     create_parents: bool = True,
+    properties: dict[str, str] | None = None,
 ) -> None:
-    """Create a dataset (idempotent). Optionally set a quota."""
+    """Create a dataset (idempotent). Optionally set a quota.
+
+    The quota and mountpoint are passed as ``-o`` properties at CREATE time so a new branch dataset
+    is never even momentarily unlimited, or momentarily mounted at the inherited (wrong) path. On an
+    already-existing dataset they are applied live afterwards, which is what ZFS does anyway.
+    """
+    if quota_bytes is not None and int(quota_bytes) <= 0:
+        raise ZfsError(
+            f"refusing to create {name} with a non-positive quota ({quota_bytes}): ZFS has no "
+            "zero quota, and an omitted quota would leave the dataset unlimited"
+        )
     if not dataset_exists(name):
         args = ["zfs", "create"]
         if create_parents:
             args.append("-p")
+        for key, value in sorted((properties or {}).items()):
+            args += ["-o", f"{key}={value}"]
+        if quota_bytes is not None:
+            args += ["-o", f"quota={int(quota_bytes)}"]
+        if mountpoint is not None:
+            args += ["-o", f"mountpoint={mountpoint}"]
         args.append(name)
         _checked(run(args, timeout=60))
+        return
+    for key, value in sorted((properties or {}).items()):
+        set_property(name, key, value)
     if quota_bytes is not None:
         set_quota(name, quota_bytes)
     if mountpoint is not None:
@@ -51,7 +71,17 @@ def set_property(dataset: str, key: str, value: str) -> None:
 
 
 def set_quota(dataset: str, quota_bytes: int | None) -> None:
-    """Set (or clear, when None) the quota on a dataset. Applies live."""
+    """Set (or clear, when None) the quota on a dataset. Applies live.
+
+    ZFS has no concept of a zero quota (``quota=0`` is rejected; ``none`` means unlimited), so a
+    non-positive byte count is a caller bug rather than something to pass through and have fail
+    with an opaque ZFS message.
+    """
+    if quota_bytes is not None and int(quota_bytes) <= 0:
+        raise ZfsError(
+            f"refusing to set a non-positive quota ({quota_bytes}) on {dataset}: ZFS has no zero "
+            "quota, and 'none' would mean unlimited"
+        )
     value = "none" if quota_bytes is None else str(int(quota_bytes))
     _checked(run(["zfs", "set", f"quota={value}", dataset], timeout=30))
 
@@ -110,6 +140,133 @@ def list_usage(root: str) -> list[Usage]:
 def get_mountpoint(dataset: str) -> str:
     res = _checked(run(["zfs", "get", "-H", "-o", "value", "mountpoint", dataset], timeout=20))
     return res.stdout.strip()
+
+
+@dataclass
+class MountState:
+    """Whether a dataset is a REAL, currently-mounted ZFS filesystem at the expected path.
+
+    This is the guard that stops a missing disk from turning into silent writes onto the root
+    filesystem: an empty leftover directory at ``/mnt/lab-storage/cold1/labs/labA`` looks exactly
+    like a mounted branch to ``os.path.isdir``, so a branch is only ever used when ZFS itself says
+    the dataset exists, is mounted, and is mounted where we expect it.
+    """
+
+    dataset: str
+    exists: bool
+    mounted: bool
+    mountpoint: str | None
+    expected: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        if not (self.exists and self.mounted and self.mountpoint):
+            return False
+        if self.expected is None:
+            return True
+        return self.mountpoint.rstrip("/") == self.expected.rstrip("/")
+
+    def to_dict(self) -> dict:
+        return {
+            "dataset": self.dataset,
+            "exists": self.exists,
+            "mounted": self.mounted,
+            "mountpoint": self.mountpoint,
+            "expected": self.expected,
+            "ok": self.ok,
+        }
+
+
+def mount_state(dataset: str, expected: str | None = None) -> MountState:
+    res = run(
+        ["zfs", "get", "-H", "-o", "value", "mounted,mountpoint", dataset], timeout=20
+    )
+    if not res.ok:
+        return MountState(dataset, False, False, None, expected)
+    lines = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+    mounted = len(lines) > 0 and lines[0] == "yes"
+    mountpoint = lines[1] if len(lines) > 1 else None
+    return MountState(dataset, True, mounted, mountpoint, expected)
+
+
+def mount_dataset(dataset: str) -> None:
+    """Mount a dataset, tolerating "already mounted"."""
+    res = run(["zfs", "mount", dataset], timeout=60)
+    if res.ok or "already mounted" in res.logs.lower():
+        return
+    raise ZfsError(res.logs)
+
+
+def pool_exists(pool: str) -> bool:
+    return run(["zpool", "list", "-H", "-o", "name", pool], timeout=15).ok
+
+
+@dataclass
+class PoolCapacity:
+    name: str
+    size: int
+    alloc: int
+    free: int
+    health: str
+
+    def to_dict(self) -> dict:
+        return {
+            "name": self.name,
+            "size": self.size,
+            "alloc": self.alloc,
+            "free": self.free,
+            "health": self.health,
+        }
+
+
+def pool_capacity(pool: str) -> PoolCapacity | None:
+    """Size/allocated/free/health for one pool, or None when it is not imported."""
+    res = run(
+        ["zpool", "list", "-Hp", "-o", "name,size,alloc,free,health", pool], timeout=20
+    )
+    if not res.ok or not res.stdout.strip():
+        return None
+    parts = res.stdout.split()
+    if len(parts) < 5:
+        return None
+    try:
+        return PoolCapacity(parts[0], int(parts[1]), int(parts[2]), int(parts[3]), parts[4])
+    except ValueError:
+        return None
+
+
+def list_pool_names() -> list[str]:
+    """Every imported pool on this host (used by the WebUI's pool inventory)."""
+    res = run(["zpool", "list", "-H", "-o", "name"], timeout=20)
+    if not res.ok:
+        return []
+    return [line.strip() for line in res.stdout.splitlines() if line.strip()]
+
+
+def pool_guid(pool: str) -> str | None:
+    """ZFS's stable numeric pool GUID (survives device-path changes and pool renames)."""
+    res = run(["zpool", "get", "-Hp", "-o", "value", "guid", pool], timeout=20)
+    value = res.stdout.strip() if res.ok else ""
+    return value if value.isdigit() else None
+
+
+def create_pool(
+    pool: str, devices: list[str], *, vdev_type: str = "", force: bool = False
+) -> None:
+    """Create a NEW zpool. Destructive — the caller must have validated + confirmed.
+
+    ``vdev_type`` is a validated constant ("", "mirror", "raidz1", "raidz2", "raidz3"); it is never
+    taken verbatim from the wire (see storage/pools.py).
+    """
+    args = ["zpool", "create"]
+    if force:
+        args.append("-f")
+    args += ["-o", "ashift=12", "-O", "compression=lz4", "-O", "atime=off",
+            "-O", "xattr=sa", "-O", "acltype=posixacl", "-m", "none", pool]
+    if vdev_type:
+        args.append(vdev_type)
+    args += devices
+    _checked(run(args, timeout=300))
 
 
 def destroy_dataset(name: str, *, recursive: bool = True) -> None:

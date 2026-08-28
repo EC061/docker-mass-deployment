@@ -1,13 +1,13 @@
 from types import SimpleNamespace
 
 import pytest
+from storagehelp import make_cfg
 
 from lab_agent import containerops
-from lab_agent.config import AgentConfig
 
 
 def cfg():
-    return AgentConfig(controller_url="ws://x", token="t", node_name="n")
+    return make_cfg(node_name="n")
 
 
 def healthy(gpu=True, cdi=True):
@@ -19,7 +19,8 @@ def healthy(gpu=True, cdi=True):
 
 
 def common(monkeypatch, caps=None):
-    monkeypatch.setattr(containerops.zfs, "get_mountpoint", lambda ds: "/fast/bio")
+    monkeypatch.setattr(containerops.service, "mount_lab",
+                        lambda c, tier, lab: f"/{tier}/bio")
     monkeypatch.setattr(containerops.coldstore, "lab_mount", lambda c, lab: "/cold/bio")
     monkeypatch.setattr(containerops.usagereport, "ensure_labquota_dirs",
                         lambda c, lab: "/run/agent/labquota/bio")
@@ -32,6 +33,7 @@ def common(monkeypatch, caps=None):
 def test_mount_contract(monkeypatch):
     common(monkeypatch)
     mounts = containerops._mounts(cfg(), "bio")
+    # The container always sees the LOGICAL tier path, whether it is one dataset or a union.
     assert mounts.fast == "/fast/bio"
     assert mounts.cold == "/cold/bio"
     assert mounts.labquota == "/run/agent/labquota/bio"

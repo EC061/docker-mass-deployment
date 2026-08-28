@@ -14,6 +14,7 @@ import { fmtBytes } from "./format";
 import { sendCredentialEmail, sendPlacementCompleteEmail } from "./mailer";
 import { generatePassword } from "./passwords";
 import { enqueueTask } from "./queue";
+import { parsePoolTelemetry, tierTotal } from "./storage";
 import { decryptSecret, encryptSecret } from "./secrets";
 import { getSetting } from "./settings";
 
@@ -617,16 +618,12 @@ export interface NodePoolCapacity {
  * rather than blocking quota changes on missing telemetry. */
 export function nodePoolCapacityBytes(nodeId: number): NodePoolCapacity {
   const row = db().prepare("SELECT pools FROM nodes WHERE id = ?").get(nodeId) as { pools: string | null } | undefined;
-  const sizeOf = (p: unknown): number | null =>
-    p && typeof p === "object" && typeof (p as { size?: unknown }).size === "number" ? (p as { size: number }).size : null;
   if (!row?.pools) return { fastBytes: null, coldBytes: null };
-  try {
-    const arr = JSON.parse(row.pools) as unknown;
-    if (!Array.isArray(arr)) return { fastBytes: null, coldBytes: null };
-    return { fastBytes: sizeOf(arr[0]), coldBytes: sizeOf(arr[1]) };
-  } catch {
-    return { fastBytes: null, coldBytes: null };
-  }
+  const pools = parsePoolTelemetry(row.pools);
+  return {
+    fastBytes: tierTotal(pools, "fast", 0)?.size ?? null,
+    coldBytes: tierTotal(pools, "cold", 1)?.size ?? null,
+  };
 }
 
 /** Live quota change (no recreate). Routes to lab.set_quota on the placement's node. */

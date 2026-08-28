@@ -1,7 +1,9 @@
 import json
+from dataclasses import replace
 from importlib import resources
 
 import pytest
+from storagehelp import make_cfg
 
 from lab_agent import hostprep
 from lab_agent.config import AgentConfig
@@ -104,22 +106,63 @@ def test_daemon_config_gpu_present_preserves_unrelated_exec_opts():
     assert merged["exec-opts"] == ["other=1", "native.cgroupdriver=cgroupfs"]
 
 
-def test_docker_dataset_follows_fast_pool():
-    c = AgentConfig(controller_url="ws://x", token="t", fast_pool="nvme")
-    assert c.docker_dataset == "nvme/docker"
+def test_docker_dataset_defaults_to_the_first_fast_pool():
+    assert make_cfg(fast_pools=["nvme"]).docker_dataset == "nvme/docker"
 
 
-def test_zfs_pools_ready_requires_the_slow_pool_on_the_zfs_backend(monkeypatch):
+def test_docker_pool_is_configurable_independently_of_the_fast_tier():
+    """Docker must never be pushed onto mergerfs; its pool is its own setting."""
+    c = make_cfg(fast_pools=["fast1", "fast2"], docker_pool="nvme0")
+    assert c.docker_dataset == "nvme0/docker"
+    assert c.storage.fast.uses_mergerfs is True
+    # ...and the data-root is not inside the mergerfs tier mount root.
+    assert not c.docker_data_root.startswith(c.storage.fast.mount_root + "/")
+
+
+def test_docker_pool_readiness_is_independent_of_lab_tier_pools(monkeypatch):
     monkeypatch.setattr(hostprep, "_pool_exists", lambda pool: pool == "fast")
-    assert not hostprep._zfs_pools_ready(cfg())
-    monkeypatch.setattr(hostprep, "_pool_exists", lambda pool: pool in {"fast", "slow"})
-    assert hostprep._zfs_pools_ready(cfg())
+    assert hostprep._docker_pool_ready(cfg())
 
 
-def test_zfs_pools_ready_ignores_slow_pool_on_smb_backend(monkeypatch):
+def test_missing_multi_pool_branch_does_not_block_native_docker_zfs(monkeypatch):
+    c = make_cfg(fast_pools=["fast1", "fast2"], cold_pools=["cold1"], docker_pool="fast1")
+    monkeypatch.setattr(hostprep, "_pool_exists", lambda pool: pool == "fast1")
+    assert hostprep._docker_pool_ready(c)
+
+
+def test_docker_pool_readiness_is_the_same_on_smb_backend(monkeypatch):
     monkeypatch.setattr(hostprep, "_pool_exists", lambda pool: pool == "fast")
-    smb_cfg = AgentConfig(controller_url="ws://x", token="t", slow_backend="smb")
-    assert hostprep._zfs_pools_ready(smb_cfg)
+    assert hostprep._docker_pool_ready(make_cfg(cold_backend="smb"))
+
+
+def test_mergerfs_is_installed_only_when_a_tier_needs_it(monkeypatch):
+    installed = []
+    monkeypatch.setattr(hostprep, "_missing_packages", lambda names: list(names))
+    monkeypatch.setattr(hostprep, "_apt_update", lambda: None)
+    monkeypatch.setattr(hostprep, "_apt_install", lambda pkgs: installed.extend(pkgs))
+    assert hostprep._ensure_mergerfs_if_required(cfg()) is False
+    assert installed == []
+    assert hostprep._ensure_mergerfs_if_required(make_cfg(cold_pools=["cold1", "cold2"])) is True
+    assert "mergerfs" in installed and "attr" in installed
+
+
+def test_mergerfs_install_is_idempotent(monkeypatch):
+    monkeypatch.setattr(hostprep, "_missing_packages", lambda names: [])
+    monkeypatch.setattr(hostprep, "_apt_update",
+                        lambda: pytest.fail("apt-get update ran with nothing missing"))
+    monkeypatch.setattr(hostprep, "_apt_install",
+                        lambda pkgs: pytest.fail("apt-get install ran with nothing missing"))
+    assert hostprep._ensure_mergerfs_if_required(make_cfg(cold_pools=["cold1", "cold2"])) is True
+
+
+def test_storage_unit_orders_after_zfs_and_before_docker():
+    unit = hostprep.render_storage_unit("/etc/lab-agent/config.toml", "/usr/bin/lab-agent")
+    assert "After=zfs.target zfs-mount.service local-fs.target" in unit
+    assert "Before=docker.service lab-agent.service" in unit
+    assert "ExecStart=/usr/bin/lab-agent storage mount" in unit
+    assert "ExecStop=/usr/bin/lab-agent storage unmount" in unit
+    assert "RemainAfterExit=yes" in unit
+    assert "Environment=LAB_AGENT_CONFIG=/etc/lab-agent/config.toml" in unit
 
 
 def test_prepare_docker_storage_is_a_noop_without_pools(monkeypatch):
@@ -141,7 +184,8 @@ def test_prepare_docker_storage_creates_dataset_on_empty_root(monkeypatch, tmp_p
         "zfs set quota=": (True, ""),
     })
     monkeypatch.setattr(hostprep, "run", runner)
-    c = AgentConfig(controller_url="ws://x", token="t", docker_data_root=str(root))
+    c = make_cfg()
+    c.storage = replace(c.storage, docker=replace(c.storage.docker, data_root=str(root)))
     assert hostprep._prepare_docker_storage(c) is True
     assert any(call.startswith("zfs create") for call in runner.calls)
     assert any(call.startswith("zfs set quota=1024G fast/docker") for call in runner.calls)
@@ -162,7 +206,8 @@ def test_prepare_docker_storage_migrates_existing_content_into_the_dataset(monke
         "zfs set quota=": (True, ""),
     })
     monkeypatch.setattr(hostprep, "run", runner)
-    c = AgentConfig(controller_url="ws://x", token="t", docker_data_root=str(root))
+    c = make_cfg()
+    c.storage = replace(c.storage, docker=replace(c.storage.docker, data_root=str(root)))
     assert hostprep._prepare_docker_storage(c) is True
     assert (root / "image-layer.txt").read_text() == "data"
     assert not root.with_name("docker.pre-zfs.bak").exists()
@@ -178,7 +223,8 @@ def test_prepare_docker_storage_mounts_existing_dataset(monkeypatch, tmp_path):
         "zfs set quota=": (True, ""),
     })
     monkeypatch.setattr(hostprep, "run", runner)
-    c = AgentConfig(controller_url="ws://x", token="t", docker_data_root=str(root))
+    c = make_cfg()
+    c.storage = replace(c.storage, docker=replace(c.storage.docker, data_root=str(root)))
     assert hostprep._prepare_docker_storage(c) is True
     assert any(call.startswith("zfs mount fast/docker") for call in runner.calls)
     assert not any(call.startswith("zfs create") for call in runner.calls)

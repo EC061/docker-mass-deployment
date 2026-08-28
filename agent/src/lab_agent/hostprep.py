@@ -21,6 +21,7 @@ from typing import Any
 
 from .config import AgentConfig
 from .executors.base import run
+from .storage import service as storage_service
 from .system import _nvidia_hardware_count, _pool_exists
 
 DAEMON_JSON = Path("/etc/docker/daemon.json")
@@ -28,11 +29,17 @@ SUBUID = Path("/etc/subuid")
 SUBGID = Path("/etc/subgid")
 SYSCTL_FILE = Path("/etc/sysctl.d/90-lab-codex.conf")
 APPARMOR_DEST = Path("/etc/apparmor.d/lab-codex")
+STORAGE_UNIT_PATH = Path("/etc/systemd/system/lab-storage-mounts.service")
+STORAGE_UNIT = "lab-storage-mounts.service"
 
 # Packages available from the default Ubuntu archive. ca-certificates/curl/gnupg are fetched first
 # because adding the Docker/NVIDIA apt repos below needs them.
 PREREQ_APT_PACKAGES = ("ca-certificates", "curl", "gnupg")
 CORE_APT_PACKAGES = ("zfsutils-linux", "apparmor", "apparmor-utils")
+# Installed only when a tier is configured with the mergerfs backend. `attr` provides
+# getfattr/setfattr, which is how a branch is added to a LIVE mergerfs mount (no remount, so running
+# lab containers keep their bind mount); `fuse3` provides fusermount3 for unmounting.
+MERGERFS_APT_PACKAGES = ("mergerfs", "attr", "fuse3")
 DOCKER_APT_PACKAGES = (
     "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin",
 )
@@ -239,6 +246,30 @@ def _ensure_base_packages() -> bool:
     return bool(docker_missing)
 
 
+def _ensure_mergerfs_if_required(cfg: AgentConfig) -> bool:
+    """Install mergerfs when any tier is configured with the mergerfs backend. Idempotent.
+
+    An operator should never have to install it by hand: a node whose config says a tier unions
+    several pools cannot mount that tier at all without it.
+    """
+    if not any(tier.uses_mergerfs for tier in cfg.storage.tiers()):
+        return False
+    return ensure_mergerfs_available()
+
+
+def ensure_mergerfs_available() -> bool:
+    """Install mergerfs plus its live-reconfiguration helpers, idempotently.
+
+    This is also called by the online add-pool operation: a node bootstrapped with one drive did
+    not need mergerfs on day one, but adding its second drive must not require a separate manual
+    package-install step.
+    """
+    if _missing_packages(MERGERFS_APT_PACKAGES):
+        _apt_update()
+        _apt_install(MERGERFS_APT_PACKAGES)
+    return True
+
+
 def _ensure_nvidia_toolkit_if_present(gpu_present: bool) -> None:
     """Install nvidia-container-toolkit when NVIDIA GPU hardware is present. Never touches the
     proprietary driver itself; that stays a manual, reboot-requiring operator step."""
@@ -290,13 +321,14 @@ def _install_security_assets(cfg: AgentConfig) -> None:
             raise RuntimeError(f"could not load bwrap-userns-restrict: {loaded.logs}")
 
 
-def _zfs_pools_ready(cfg: AgentConfig) -> bool:
-    """Whether the zpool(s) the Docker ZFS dataset depends on already exist. Disk topology is an
-    operator decision made outside host-prepare (see module docstring); until the pool(s) show up,
-    Docker gets a plain install on its own default backing store instead of a hard failure."""
-    if not _pool_exists(cfg.fast_pool):
-        return False
-    return not cfg.slow_is_zfs or _pool_exists(cfg.slow_pool)
+def _docker_pool_ready(cfg: AgentConfig) -> bool:
+    """Whether Docker's independently configured native-ZFS pool exists.
+
+    A missing lab-storage branch must not keep Docker on a plain filesystem when Docker's own pool
+    is healthy.  The whole point of separating ``storage.docker`` from the logical fast tier is that
+    these lifecycles are independent.
+    """
+    return _pool_exists(cfg.storage.docker.pool)
 
 
 def _create_docker_dataset(cfg: AgentConfig) -> None:
@@ -338,7 +370,7 @@ def _prepare_docker_storage(cfg: AgentConfig) -> bool:
     first appear — Docker having run a while on its plain default store — that content is migrated
     into the new dataset rather than left behind.
     """
-    if not _zfs_pools_ready(cfg):
+    if not _docker_pool_ready(cfg):
         return False
 
     run(["systemctl", "stop", "docker.socket"], timeout=60)
@@ -366,11 +398,74 @@ def _prepare_docker_storage(cfg: AgentConfig) -> bool:
     return True
 
 
+def render_storage_unit(config_path: str, exec_path: str) -> str:
+    """A systemd unit that brings the tier mounts up at boot, in the right order.
+
+    Why a oneshot service rather than generated ``.mount`` units: the set of per-lab mergerfs mounts
+    is dynamic (it changes whenever a lab is created or destroyed), and — crucially — the branch
+    list for each mount must be computed from LIVE ZFS mount state so a missing disk is dropped
+    instead of being replaced by an empty root-filesystem directory. A static unit cannot make that
+    decision; ``lab-agent storage mount`` can, and is idempotent, so re-running it converges.
+
+    Ordering: after ZFS has imported and mounted its datasets, before Docker starts (so a lab
+    container never comes up against a half-mounted tier) and before the agent.
+    """
+    return f"""[Unit]
+Description=Lab storage: ZFS tier roots and per-lab mergerfs mounts
+DefaultDependencies=no
+After=zfs.target zfs-mount.service local-fs.target
+Wants=zfs.target zfs-mount.service
+Before=docker.service lab-agent.service shutdown.target
+Conflicts=shutdown.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+Environment=LAB_AGENT_CONFIG={config_path}
+ExecStart={exec_path} storage mount
+# Unmount the unions before ZFS tears its datasets down (systemd stops us first, being After= it).
+ExecStop={exec_path} storage unmount
+TimeoutStartSec=300
+User=root
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def _install_storage_unit(cfg: AgentConfig, config_path: str) -> None:
+    """Write + enable the boot-time storage mount unit. Idempotent."""
+    from .installer import _resolve_executable
+
+    _write(STORAGE_UNIT_PATH, render_storage_unit(config_path, _resolve_executable()))
+    run(["systemctl", "daemon-reload"], timeout=60)
+    run(["systemctl", "enable", STORAGE_UNIT], timeout=60)
+
+
+def _prepare_lab_storage(cfg: AgentConfig) -> dict[str, Any]:
+    """Converge the lab tiers: per-pool container datasets + per-lab union mounts, and make the
+    whole thing survive a reboot via the systemd unit above.
+
+    Skipped (not failed) while the pools do not exist yet, exactly like the Docker dataset: disk
+    topology is an operator/WebUI decision that happens outside host-prepare.
+    """
+    config_path = str(os.environ.get("LAB_AGENT_CONFIG", "/etc/lab-agent/config.toml"))
+    _install_storage_unit(cfg, config_path)
+    try:
+        # Reconcile even when only SOME configured pools exist.  The storage service filters on
+        # actual ZFS mount state and deliberately brings mergerfs up over surviving branches; a
+        # global all-pools gate would defeat degraded operation after a disk failure.
+        return storage_service.reconcile_mounts(cfg)
+    except Exception as exc:  # never make host-prepare fail on a storage edge case
+        return {"error": str(exc)}
+
+
 def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
     """Configure one node. Re-running converges to the same files and daemon settings."""
     _require_root()
     gpu_present = _nvidia_hardware_count() > 0
     _ensure_base_packages()
+    mergerfs_installed = _ensure_mergerfs_if_required(cfg)
     _ensure_nvidia_toolkit_if_present(gpu_present)
 
     if not Path("/proc/self/ns/user").exists():
@@ -416,6 +511,7 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
     _install_security_assets(cfg)
 
     docker_on_zfs = _prepare_docker_storage(cfg)
+    storage_report = _prepare_lab_storage(cfg)
 
     current: dict[str, Any] = {}
     if DAEMON_JSON.exists():
@@ -448,7 +544,16 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
         "docker_data_root": cfg.docker_data_root,
         "docker_storage_driver": "zfs" if docker_on_zfs else "default",
         "docker_dataset": cfg.docker_dataset if docker_on_zfs else None,
+        "docker_pool": cfg.storage.docker.pool,
         "docker_quota_gb": cfg.docker_quota_gb if docker_on_zfs else None,
+        "mergerfs_installed": mergerfs_installed,
+        "storage_tiers": {
+            tier.name: {"backend": tier.backend, "pools": list(tier.pools),
+                        "mount_root": tier.mount_root}
+            for tier in cfg.storage.tiers()
+        },
+        "storage_mounts": storage_report,
+        "storage_unit": str(STORAGE_UNIT_PATH),
         "gpu_cgroupfs_workaround": gpu_present,
         "seccomp_profile": cfg.seccomp_profile,
         "apparmor_profile": cfg.apparmor_profile,

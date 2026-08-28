@@ -157,10 +157,10 @@ def render_config_template(cfg: AgentConfig) -> str:
         "#   token           this node's token from the controller UI (Nodes -> Provision)\n"
         "#   node_name       this node's identity (lowercase a-z 0-9 -, must match the UI)\n"
         "#\n"
-        "# Cold storage (slow tier):\n"
-        '#   slow_backend    "zfs" (local ZFS slow pool) or "smb" (an external CIFS/SMB mount)\n'
-        '#   slow_path       "smb" backend: active cold share mount (default /cold-storage)\n'
-        '#   cold_mount_root local-ZFS backend: lab dataset mount root (default /cold-storage)\n'
+        "# Storage:\n"
+        '#   [storage.fast]/[storage.cold] select zfs, mergerfs, or (cold only) smb\n'
+        '#   list independent pools in order; mergerfs backing paths default to /mnt/lab-storage\n'
+        '#   [storage.docker] is an independent NATIVE ZFS dataset, never mergerfs\n'
         "# (The cold-storage OWNER for an SMB client is chosen in the controller UI, not here.)\n"
     )
     # Default an empty controller_url to an obvious placeholder so the operator sees what to edit.

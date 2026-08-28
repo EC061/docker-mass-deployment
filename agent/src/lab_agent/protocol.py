@@ -40,6 +40,18 @@ A_NODE_CHECK = "node.check"
 A_NODE_REPAIR = "node.repair"
 A_NODE_REBOOT = "node.reboot"
 A_USAGE_SCAN = "usage.scan"  # per-student storage (du) scan for one lab (nightly + on-demand)
+# Storage management. Read-only inventory + the mutating operations behind the controller's
+# Node -> Storage UI. Everything destructive validates its inputs agent-side and, for pool creation,
+# additionally requires an explicit confirmation flag in the params.
+A_STORAGE_STATUS = "storage.status"
+A_STORAGE_LIST_DEVICES = "storage.list_devices"
+A_STORAGE_LIST_POOLS = "storage.list_pools"
+A_STORAGE_CREATE_POOL = "storage.create_pool"      # DESTRUCTIVE: erases the selected disks
+A_STORAGE_ATTACH_POOL = "storage.attach_pool"      # add a pool to a tier + extend every lab
+A_STORAGE_REMOVE_POOL = "storage.remove_pool"      # admin detach (distinct from "disk vanished")
+A_STORAGE_REBALANCE = "storage.rebalance"          # reshard branch quotas (moves quota, not files)
+A_STORAGE_MOUNT = "storage.mount"                  # reconcile ZFS roots + per-lab union mounts
+A_STORAGE_PROVISION_LAB = "storage.provision_lab"  # converge one lab's storage on one tier
 
 
 def now_ms() -> int:

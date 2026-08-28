@@ -1,8 +1,9 @@
 import pytest
+from storagehelp import make_cfg
 
 from lab_agent import system
-from lab_agent.config import AgentConfig
 from lab_agent.executors.base import CommandResult
+from lab_agent.executors.zfs import MountState, PoolCapacity
 
 
 @pytest.fixture(autouse=True)
@@ -14,7 +15,25 @@ def _no_host_pci_gpus(monkeypatch):
 
 
 def cfg(**kw):
-    return AgentConfig(controller_url="ws://x", token="t", **kw)
+    return make_cfg(**kw)
+
+
+@pytest.fixture(autouse=True)
+def _healthy_storage(monkeypatch):
+    """Default: every configured pool is imported+ONLINE and its <pool>/labs root is mounted.
+
+    Storage health now goes through storage.service (which shells out via the zfs executor, not
+    system.run), so tests stub that layer here and override it when they want a broken tier.
+    """
+    monkeypatch.setattr(system.service.zfs, "pool_capacity",
+                        lambda pool: PoolCapacity(pool, 1000, 400, 600, "ONLINE"))
+    monkeypatch.setattr(system.service.zfs, "mount_state",
+                        lambda ds, expected=None: MountState(ds, True, True, expected, expected))
+    monkeypatch.setattr(system.zfs, "dataset_exists", lambda ds: True)
+    monkeypatch.setattr(system.zfs, "mount_state",
+                        lambda ds, expected=None: MountState(ds, True, True, expected, expected))
+    monkeypatch.setattr(system.mfs, "available", lambda: True)
+    monkeypatch.setattr(system.service, "discover_labs", lambda tier: [])
 
 
 class Runner:
@@ -102,8 +121,150 @@ def test_missing_smb_mount_is_critical(monkeypatch):
     monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "")
     monkeypatch.setattr(system.os.path, "ismount", lambda path: False)
-    caps = system.detect_capabilities(cfg(slow_backend="smb"), deep=False)
+    caps = system.detect_capabilities(cfg(cold_backend="smb"), deep=False)
     assert any(i.code == "cold_storage_missing" for i in caps.issues)
+
+
+# ------------------------------------------------------------------ multi-pool storage health
+
+
+def _pools_online(monkeypatch, online: set[str]):
+    monkeypatch.setattr(
+        system.service.zfs, "pool_capacity",
+        lambda pool: PoolCapacity(pool, 1000, 400, 600, "ONLINE") if pool in online else None,
+    )
+    monkeypatch.setattr(
+        system.service.zfs, "mount_state",
+        lambda ds, expected=None: MountState(
+            ds, ds.split("/")[0] in online, ds.split("/")[0] in online,
+            expected if ds.split("/")[0] in online else None, expected,
+        ),
+    )
+
+
+def _base(monkeypatch):
+    monkeypatch.setattr(system, "run", healthy_runner())
+    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
+    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
+    monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
+
+
+def test_one_lost_pool_of_two_is_degraded_not_unavailable(monkeypatch):
+    _base(monkeypatch)
+    _pools_online(monkeypatch, {"cold1", "fast"})
+    caps = system.detect_capabilities(
+        cfg(cold_pools=["cold1", "cold2"], docker_pool="fast"), deep=False
+    )
+    cold = next(t for t in caps.storage.tiers if t.tier == "cold")
+    assert cold.status == "degraded"
+    assert cold.unavailable_pools == ["cold2"]
+    issue = next(i for i in caps.issues if i.code == "cold_storage_degraded")
+    assert "cold2" in issue.message
+    # Surviving branches stay usable: the tier is not reported as gone.
+    assert caps.storage.cold_ok is False and cold.status != "unavailable"
+
+
+def test_losing_every_pool_of_a_tier_is_unavailable(monkeypatch):
+    _base(monkeypatch)
+    _pools_online(monkeypatch, {"fast"})
+    caps = system.detect_capabilities(
+        cfg(cold_pools=["cold1", "cold2"], docker_pool="fast"), deep=False
+    )
+    cold = next(t for t in caps.storage.tiers if t.tier == "cold")
+    assert cold.status == "unavailable"
+    assert any(i.code == "cold_storage_missing" for i in caps.issues)
+
+
+def test_an_unmounted_pool_root_is_not_treated_as_a_usable_branch(monkeypatch):
+    """The pool is imported but <pool>/labs is not mounted: an empty directory is NOT a branch."""
+    _base(monkeypatch)
+    monkeypatch.setattr(system.service.zfs, "pool_capacity",
+                        lambda pool: PoolCapacity(pool, 1000, 400, 600, "ONLINE"))
+    monkeypatch.setattr(
+        system.service.zfs, "mount_state",
+        lambda ds, expected=None: MountState(ds, True, ds != "cold2/labs",
+                                             expected if ds != "cold2/labs" else None, expected),
+    )
+    caps = system.detect_capabilities(
+        cfg(cold_pools=["cold1", "cold2"], docker_pool="fast"), deep=False
+    )
+    cold = next(t for t in caps.storage.tiers if t.tier == "cold")
+    assert cold.unavailable_pools == ["cold2"]
+
+
+def test_missing_mergerfs_binary_is_critical_and_repairable(monkeypatch):
+    _base(monkeypatch)
+    monkeypatch.setattr(system.mfs, "available", lambda: False)
+    caps = system.detect_capabilities(cfg(cold_pools=["cold1", "cold2"]), deep=False)
+    issue = next(i for i in caps.issues if i.code == "cold_mergerfs_missing")
+    assert issue.repairable is True
+    # A single-pool zfs tier never needs mergerfs, so it raises no issue.
+    assert not any(i.code == "fast_mergerfs_missing" for i in caps.issues)
+
+
+def test_docker_must_stay_off_mergerfs(monkeypatch):
+    from dataclasses import replace
+
+    _base(monkeypatch)
+    c = cfg(fast_pools=["fast1", "fast2"], docker_pool="fast1")
+    c.storage = replace(
+        c.storage, docker=replace(c.storage.docker, data_root="/fast/docker"),
+    )
+    caps = system.detect_capabilities(c, deep=False)
+    assert any(i.code == "docker_on_mergerfs" for i in caps.issues)
+    assert caps.storage.docker_pool == "fast1"
+
+
+def test_doctor_flags_a_logical_mount_that_is_down(monkeypatch):
+    _base(monkeypatch)
+    monkeypatch.setattr(system.service, "discover_labs", lambda tier: ["bio"])
+    monkeypatch.setattr(system.mfs, "is_mergerfs_mount", lambda path: False)
+    monkeypatch.setattr(system, "_quota_violations", lambda cfg: [])
+    monkeypatch.setattr(system, "_stale_seccomp_containers", lambda cfg: [])
+    monkeypatch.setattr(system, "_stale_systempaths_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_lab_userns_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_bwrap_capability_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_apparmor_containers", lambda cfg: [])
+    monkeypatch.setattr(system, "_first_student_container", lambda: None)
+    caps = system.detect_capabilities(cfg(cold_pools=["cold1", "cold2"]), deep=True)
+    issue = next(i for i in caps.issues if i.code == "cold_logical_mount_missing")
+    assert "/cold-storage/bio" in issue.message
+
+
+def test_doctor_flags_an_unexpected_dead_branch_in_a_union(monkeypatch):
+    tier = cfg(cold_pools=["cold1", "cold2"]).storage.cold
+    expected = tier.branch_mount("cold1", "bio")
+    stale = tier.branch_mount("cold2", "bio")
+    monkeypatch.setattr(system.service, "discover_labs", lambda _tier: ["bio"])
+    monkeypatch.setattr(system.mfs, "is_mergerfs_mount", lambda path: True)
+    monkeypatch.setattr(system.mfs, "current_branches", lambda path: [expected, stale])
+    monkeypatch.setattr(
+        system.service,
+        "observe_branches",
+        lambda _tier, lab: [system.service.BranchObservation(
+            "cold1", tier.branch_dataset("cold1", lab), expected, True,
+            0, 1, 1, 100, 100, pool_usable=True,
+        )],
+    )
+    assert system._bad_logical_mounts(tier) == [
+        f"/cold-storage/bio (unexpected: {stale})"
+    ]
+
+
+def test_doctor_flags_a_branch_quota_sum_over_the_configured_quota(monkeypatch):
+    _base(monkeypatch)
+    monkeypatch.setattr(system.service, "discover_labs", lambda tier: [])
+    monkeypatch.setattr(system, "_quota_violations",
+                        lambda cfg: ["cold/bio committed 3000 > configured 2000"])
+    monkeypatch.setattr(system, "_stale_seccomp_containers", lambda cfg: [])
+    monkeypatch.setattr(system, "_stale_systempaths_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_lab_userns_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_bwrap_capability_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_apparmor_containers", lambda cfg: [])
+    monkeypatch.setattr(system, "_first_student_container", lambda: None)
+    caps = system.detect_capabilities(cfg(), deep=True)
+    assert any(i.code == "storage_quota_invariant" for i in caps.issues)
+    assert caps.storage.quota_invariant_ok is False
 
 
 def test_stale_cdi_is_critical(monkeypatch):
@@ -322,6 +483,9 @@ def test_seccomp_probe_exit_code_tracks_eperm():
     import ctypes
     import subprocess
     import sys
+
+    if sys.platform != "linux":
+        pytest.skip("the seccomp syscall probe is Linux-only")
 
     libc = ctypes.CDLL("libc.so.6", use_errno=True)
     libc.syscall(248, 0, 0, 0, 0)
