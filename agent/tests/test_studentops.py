@@ -193,3 +193,40 @@ def test_student_quota_is_not_redistributed_while_a_branch_is_missing(monkeypatc
             "lab": "bio", "username": "alice", "password": "pw",
             "uid": 10042, "gid": 10042, "student_fast_quota_bytes": 1 * TB,
         })
+
+
+def test_a_branch_with_no_room_is_skipped_not_crashed_on(monkeypatch):
+    """A zero allocation is a legitimate allocator result, not an error.
+
+    When a student's logical quota is already fully committed to the data on one branch, the
+    allocator pins every branch at its floor — which is 0 for an empty one. ZFS has no zero quota,
+    so handing that straight to create_dataset used to fail the whole student.add.
+    """
+    patch_storage(monkeypatch, fast_pools=("fast1", "fast2"))
+    created = []
+    monkeypatch.setattr(studentops.zfs, "create_dataset",
+                        lambda name, **kw: created.append((name, kw["quota_bytes"])))
+    monkeypatch.setattr(studentops.zfs, "dataset_exists",
+                        lambda ds: ds == "fast1/labs/bio/alice")
+    # alice already fills her whole 1 TB on fast1, so fast2 has nothing left to be given.
+    monkeypatch.setattr(studentops.zfs, "get_usage",
+                        lambda ds: zfs.Usage(ds, 1 * TB, 1 * TB, 0))
+    monkeypatch.setattr(studentops.zfs, "set_quota", lambda ds, q: None)
+    studentops.add_student(cfg(fast_pools=["fast1", "fast2"]), {
+        "lab": "bio", "username": "alice", "password": "pw", "uid": 10042, "gid": 10042,
+        "student_fast_quota_bytes": 1 * TB,
+    })
+    assert created == []  # fast2 is skipped rather than created with quota=0
+
+
+def test_a_student_is_refused_when_no_branch_has_room(monkeypatch):
+    """Skipping every branch would silently give the student no storage at all."""
+    patch_storage(monkeypatch, fast_pools=("fast1",))
+    monkeypatch.setattr(studentops.zfs, "dataset_exists", lambda ds: False)
+    monkeypatch.setattr(studentops, "_student_allocation",
+                        lambda tier, lab, user, quota, branches: {"fast1": 0})
+    with pytest.raises(service.StorageError, match="free capacity"):
+        studentops.add_student(cfg(fast_pools=["fast1"]), {
+            "lab": "bio", "username": "alice", "password": "pw", "uid": 10042, "gid": 10042,
+            "student_fast_quota_bytes": 1 * TB,
+        })

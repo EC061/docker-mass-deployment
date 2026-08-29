@@ -722,14 +722,26 @@ def attach_pool(
 
     # 1. Promotion: move the existing single-pool datasets out of the container-visible path so the
     #    mergerfs union can take it over. `zfs set mountpoint` remounts in place — no data moves.
+    moved: list[str] = []
     if promoted:
-        logs += _promote_to_mergerfs(tier, new_tier, existing_labs)
+        promote_logs, moved = _promote_to_mergerfs(tier, new_tier, existing_labs)
+        logs += promote_logs
         restart_needed = list(existing_labs)
 
-    # 2. The new pool's container dataset.
-    zfs.create_dataset(new_tier.pool_root_dataset(pool),
-                       mountpoint=new_tier.pool_root_mount(pool))
-    zfs.mount_dataset(new_tier.pool_root_dataset(pool))
+    # 2. The new pool's container dataset. Everything from here on is per-lab and fails soft, so
+    #    this is the last step that can strand a promoted tier: if it fails, put the datasets back
+    #    where the (still unwritten) config says they are rather than leaving the container-visible
+    #    paths pointing at empty root-filesystem directories.
+    try:
+        zfs.create_dataset(new_tier.pool_root_dataset(pool),
+                           mountpoint=new_tier.pool_root_mount(pool))
+        zfs.mount_dataset(new_tier.pool_root_dataset(pool))
+    except Exception as exc:
+        failed = _demote_from_mergerfs(tier, new_tier, existing_labs, moved) if promoted else []
+        detail = f"; MANUAL RECOVERY NEEDED: {'; '.join(failed)}" if failed else ""
+        raise StorageError(
+            f"could not create the container dataset for pool '{pool}': {exc}{detail}"
+        ) from exc
     logs.append(f"created {new_tier.pool_root_dataset(pool)}")
 
     healths = tier_health(new_tier)[1]
@@ -774,28 +786,72 @@ def attach_pool(
     }
 
 
-def _promote_to_mergerfs(old: TierConfig, new: TierConfig, labs: list[str]) -> list[str]:
+def _promote_to_mergerfs(
+    old: TierConfig, new: TierConfig, labs: list[str],
+) -> tuple[list[str], list[str]]:
     """Move a single-pool tier's datasets under ``branch_root`` so mergerfs can own the mount root.
 
     Changing a ZFS ``mountpoint`` unmounts and remounts the dataset at the new path; the data is
     untouched. Any container bind-mounted at the old path keeps pointing at the old (now detached)
     inode, which is why the caller reports these labs as needing a restart.
+
+    All-or-nothing: the caller only commits the new topology to the config once this returns, so a
+    partial move would leave the container-visible paths and the config disagreeing. Anything
+    already moved when a later dataset refuses to remount is put back first.
     """
     logs: list[str] = []
     pool = old.pools[0]
-    root = new.pool_root_dataset(pool)
-    if zfs.dataset_exists(root):
-        zfs.set_property(root, "mountpoint", new.pool_root_mount(pool))
-        logs.append(
-            f"moved {root} to {new.pool_root_mount(pool)} "
-            "(data unchanged; mergerfs now owns the tier mount root)"
+    moved: list[str] = []
+    try:
+        root = new.pool_root_dataset(pool)
+        if zfs.dataset_exists(root):
+            zfs.set_property(root, "mountpoint", new.pool_root_mount(pool))
+            moved.append(root)
+            logs.append(
+                f"moved {root} to {new.pool_root_mount(pool)} "
+                "(data unchanged; mergerfs now owns the tier mount root)"
+            )
+        for lab in labs:
+            dataset = new.branch_dataset(pool, lab)
+            if zfs.dataset_exists(dataset):
+                zfs.set_property(dataset, "mountpoint", new.branch_mount(pool, lab))
+                moved.append(dataset)
+                logs.append(f"moved {dataset} to {new.branch_mount(pool, lab)}")
+    except Exception as exc:
+        failed = _demote_from_mergerfs(old, new, labs, moved)
+        detail = (
+            "; ".join(failed) if failed
+            else "the datasets already moved were restored to their original mountpoints"
         )
+        raise StorageError(
+            f"could not promote the {old.name} tier to mergerfs: {exc} ({detail})"
+        ) from exc
+    return logs, moved
+
+
+def _demote_from_mergerfs(
+    old: TierConfig, new: TierConfig, labs: list[str], moved: list[str],
+) -> list[str]:
+    """Undo :func:`_promote_to_mergerfs` for ``moved``, returning the datasets that would not move.
+
+    Best effort by design: a dataset that refuses to remount is reported rather than raised on, so
+    one stuck lab cannot stop the others from being restored. A non-empty return means the node is
+    genuinely half-promoted and needs an admin.
+    """
+    pool = old.pools[0]
+    originals = {new.pool_root_dataset(pool): old.pool_root_mount(pool)}
     for lab in labs:
-        dataset = new.branch_dataset(pool, lab)
-        if zfs.dataset_exists(dataset):
-            zfs.set_property(dataset, "mountpoint", new.branch_mount(pool, lab))
-            logs.append(f"moved {dataset} to {new.branch_mount(pool, lab)}")
-    return logs
+        originals[new.branch_dataset(pool, lab)] = old.branch_mount(pool, lab)
+    failed: list[str] = []
+    for dataset in reversed(moved):
+        target = originals.get(dataset)
+        if target is None:  # pragma: no cover - `moved` only ever holds keys of `originals`
+            continue
+        try:
+            zfs.set_property(dataset, "mountpoint", target)
+        except zfs.ZfsError as exc:
+            failed.append(f"{dataset} could not be restored to {target}: {exc}")
+    return failed
 
 
 def _extend_lab_onto(

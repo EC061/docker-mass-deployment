@@ -130,13 +130,15 @@ def attach_pool(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     from .executors import docker
 
     stopped: list[str] = []
-    if not old_tier.uses_mergerfs:
-        for lab in service.discover_labs(old_tier):
-            name = docker.container_name(lab, cfg.node_name)
-            if docker.container_running(name):
-                docker.stop_container(name)
-                stopped.append(lab)
     try:
+        # Inside the try: stopping is itself fallible, and a failure on the third lab must not
+        # leave the first two down with nothing to bring them back up.
+        if not old_tier.uses_mergerfs:
+            for lab in service.discover_labs(old_tier):
+                name = docker.container_name(lab, cfg.node_name)
+                if docker.container_running(name):
+                    docker.stop_container(name)
+                    stopped.append(lab)
         result = service.attach_pool(cfg, tier, pool)
     except Exception:
         for lab in stopped:
@@ -251,13 +253,50 @@ def remove_pool(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     state.mark_pool_removed(pool, now_ms=int(time.time() * 1000))
     state.save()
     written = _persist(cfg)
-    # Rebuild the unions without the removed branch.
+    # Rebuild the unions without the removed branch. Where the branch could not be dropped live the
+    # union was remounted, so the running container still holds the OLD mount in its namespace --
+    # and would keep writing through the branch we just detached until it is restarted.
     report = service.reconcile_mounts(cfg)
+    restarted, restart_errors = _restart_remounted_labs(cfg, report)
+    msg = f"detached pool '{pool}' from the {tier_name} tier; its quota reservation is released"
+    if restarted:
+        msg += f"; restarted containers: {', '.join(restarted)}"
+    if restart_errors:
+        msg += "; POOL DETACHED but container restart failed: " + "; ".join(restart_errors)
     return (
         {"tier": tier_name, "pool": pool, "pools": list(remaining), "mounts": report,
-         "config_written": written},
-        f"detached pool '{pool}' from the {tier_name} tier; its quota reservation is released",
+         "config_written": written, "containers_restarted": restarted,
+         "container_restart_errors": restart_errors},
+        msg,
     )
+
+
+def _restart_remounted_labs(
+    cfg: AgentConfig, report: dict[str, Any],
+) -> tuple[list[str], list[str]]:
+    """Restart the running containers of every lab ``reconcile_mounts`` had to remount.
+
+    A live branch add/remove is invisible to an already-running container, but the remount fallback
+    replaces the mount entirely; only a restart makes the container's namespace see it.
+    """
+    from .executors import docker
+
+    labs = sorted({
+        entry["lab"] for entry in report.get("degraded", [])
+        if entry.get("restart_required") and entry.get("lab")
+    })
+    restarted: list[str] = []
+    errors: list[str] = []
+    for lab in labs:
+        name = docker.container_name(lab, cfg.node_name)
+        if not docker.container_running(name):
+            continue
+        try:
+            docker.restart_container(name)
+            restarted.append(lab)
+        except docker.DockerError as exc:
+            errors.append(f"{lab}: {exc}")
+    return restarted, errors
 
 
 def scrub(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:

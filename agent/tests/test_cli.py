@@ -354,6 +354,30 @@ def test_storage_add_pool_calls_the_attach_handler(monkeypatch, capsys, tmp_path
     assert "attached" in capsys.readouterr().out
 
 
+def test_storage_remove_pool_requires_explicit_confirmation(monkeypatch, capsys, tmp_path):
+    """Detaching is the documented recovery for a lost disk, so it must be reachable offline —
+    exactly when the controller cannot be relied on to drive it."""
+    from lab_agent import storageops
+
+    seen = {}
+
+    def fake_remove(cfg, params):
+        seen.update(params)
+        return {}, "detached"
+
+    monkeypatch.setattr(storageops, "remove_pool", fake_remove)
+    rc = cli.main(["--config", str(tmp_path / "none.toml"),
+                   "storage", "remove-pool", "--tier", "cold", "--pool", "cold2"])
+    assert rc == 0
+    assert seen == {"tier": "cold", "pool": "cold2", "confirm": False}
+
+    rc = cli.main(["--config", str(tmp_path / "none.toml"), "storage", "remove-pool",
+                   "--tier", "cold", "--pool", "cold2", "--confirm"])
+    assert rc == 0
+    assert seen["confirm"] is True
+    assert "detached" in capsys.readouterr().out
+
+
 def test_storage_add_pool_rejects_an_unknown_tier(tmp_path):
     import pytest
 

@@ -31,8 +31,9 @@ data_root = "/var/lib/docker"
 quota_gb = 1024
 ```
 
-Use `lab-agent storage status --json`, `storage devices`, `storage mount`, `storage add-pool`, and
-`storage rebalance` for controller-independent inspection/recovery. Pool/tier topology is local and
+Use `lab-agent storage status --json`, `storage devices`, `storage mount`, `storage unmount`,
+`storage add-pool`, `storage remove-pool`, and `storage rebalance` for controller-independent
+inspection/recovery. Pool/tier topology is local and
 safety-critical at boot; the controller drives changes and per-lab quotas, and hardware health is
 always discovered read-only. See `HOST_PREPARATION.md` for expansion and degraded recovery.
 
