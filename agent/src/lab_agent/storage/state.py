@@ -47,11 +47,16 @@ class BranchRecord:
 class LabTierRecord:
     configured_quota_bytes: int | None = None
     branches: dict[str, BranchRecord] = field(default_factory=dict)
+    # Whether the last rebalance found this lab over-committed (more bytes already on disk than the
+    # configured quota allows). Persisted so a SCHEDULED rebalance can report the transition once
+    # instead of repeating an unchanged, admin-actionable condition on every run.
+    over_committed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "configured_quota_bytes": self.configured_quota_bytes,
             "branches": {p: b.to_dict() for p, b in sorted(self.branches.items())},
+            "over_committed": self.over_committed,
         }
 
 
@@ -117,6 +122,7 @@ class StorageState:
                 state.labs.setdefault(tier, {})[lab] = LabTierRecord(
                     configured_quota_bytes=record.get("configured_quota_bytes"),
                     branches=branches,
+                    over_committed=bool(record.get("over_committed", False)),
                 )
         return state
 

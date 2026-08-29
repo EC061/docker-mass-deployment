@@ -137,7 +137,15 @@ export async function reconcileStorageAction(formData: FormData) {
 export async function rebalanceStorageAction(formData: FormData) {
   const actor = (await requireAdmin()).email;
   const { name, tier } = storageTarget(formData);
-  enqueueTask(name, "storage.rebalance", tier ? { tier } : {}, actor);
+  // min_delta_bytes 0: an admin clicking the button asked for an exact re-slice. The deadband in
+  // Settings exists to keep the SCHEDULED pass quiet, and applying it here would let a click appear
+  // to do nothing.
+  enqueueTask(
+    name,
+    "storage.rebalance",
+    tier ? { tier, min_delta_bytes: 0 } : { min_delta_bytes: 0 },
+    actor,
+  );
   storageRedirect(name, `${tier ?? "All"} quota rebalance queued`);
 }
 

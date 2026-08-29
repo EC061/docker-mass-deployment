@@ -187,15 +187,46 @@ def attach_pool(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 
 
 def rebalance(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
-    """Recompute + reapply branch quota splits. Moves quota, never files."""
+    """Recompute + reapply branch quota splits. Moves quota, never files.
+
+    ``min_delta_bytes`` is a deadband: a lab whose branch targets all moved by less than it is left
+    alone and reported as unchanged. The controller sends its configured value on SCHEDULED runs so
+    an hourly pass does not rewrite (and log) every quota over sub-gigabyte drift in pool free
+    space; a hand-triggered rebalance sends 0, meaning "re-slice exactly, I asked for this".
+
+    The note deliberately summarises rather than listing every lab. Over-commit is a standing
+    condition only an admin can clear, so it names the labs that JUST became over-committed and
+    counts the ones that already were.
+    """
     tiers = [_tier(params)] if params.get("tier") else [t.name for t in cfg.storage.tiers()]
     labs = params.get("labs")
     if labs is not None and (not isinstance(labs, list)
                              or not all(isinstance(x, str) for x in labs)):
         raise StorageConfigError("labs must be a list of lab names")
-    results = [service.rebalance(cfg, name, labs) for name in tiers]
-    changed = sum(len(r.get("labs", [])) for r in results)
-    return {"tiers": results}, f"rebalanced quota allocations for {changed} lab(s)"
+    min_delta = params.get("min_delta_bytes", 0)
+    if isinstance(min_delta, bool) or not isinstance(min_delta, int) or min_delta < 0:
+        raise StorageConfigError("min_delta_bytes must be a non-negative integer")
+    results = [service.rebalance(cfg, name, labs, min_delta=min_delta) for name in tiers]
+
+    entries = [lab for r in results for lab in r.get("labs", [])]
+    changed = [e for e in entries if e.get("ok") and e.get("changed")]
+    failed = [e for e in entries if not e.get("ok")]
+    newly_over = sorted(
+        e["lab"] for e in entries if e.get("over_committed") and e.get("over_committed_changed")
+    )
+    still_over = sum(
+        1 for e in entries if e.get("over_committed") and not e.get("over_committed_changed")
+    )
+    note = f"rebalanced {len(changed)} of {len(entries)} lab(s)"
+    if len(entries) - len(changed) - len(failed) > 0:
+        note += f"; {len(entries) - len(changed) - len(failed)} already balanced"
+    if newly_over:
+        note += "; NEWLY over-committed: " + ", ".join(newly_over)
+    if still_over:
+        note += f"; {still_over} lab(s) still over-committed"
+    if failed:
+        note += "; FAILED: " + ", ".join(sorted(e["lab"] for e in failed))
+    return {"tiers": results}, note
 
 
 def mount(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:

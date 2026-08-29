@@ -241,6 +241,45 @@ export function scheduleScrubs(now = Date.now()): string[] {
   return scheduled;
 }
 
+/**
+ * Enqueue a storage quota rebalance to every online ZFS-capable node whose last scheduled rebalance
+ * is older than the configured interval. Returns the nodes a rebalance was scheduled for.
+ *
+ * No hour-of-day gate, unlike scrubs: a rebalance only rewrites ZFS quota properties (it never moves
+ * a file), so there is no off-peak window worth waiting for. The deadband goes with the task so the
+ * agent leaves a lab alone when its share moved by less than the admin cares about — that is what
+ * keeps a frequent schedule from filling the log with sub-gigabyte churn.
+ *
+ * Single-drive nodes are still worth rebalancing: the split is a no-op there, but the pass also
+ * re-caps any branch that somehow ended up without a quota.
+ */
+export function scheduleRebalances(now = Date.now()): string[] {
+  if (!getSetting("rebalanceEnabled")) return [];
+  // The ticker is hourly, so anything below 1 hour would just mean "every tick"; clamp rather than
+  // let a 0 turn the interval check into a no-op that re-enqueues on every pass.
+  const intervalMs = Math.max(1, getSetting("rebalanceIntervalHours")) * 3600 * 1000;
+  const minDeltaBytes = Math.max(0, Math.round(getSetting("rebalanceMinDeltaGb") * 1024 ** 3));
+  const nodes = db()
+    .prepare("SELECT name, last_rebalance, capabilities FROM nodes WHERE online = 1")
+    .all() as { name: string; last_rebalance: number | null; capabilities: string | null }[];
+  const scheduled: string[] = [];
+  for (const n of nodes) {
+    let caps: { zfs?: boolean } = {};
+    try {
+      caps = n.capabilities ? JSON.parse(n.capabilities) : {};
+    } catch {
+      caps = {};
+    }
+    if (!caps.zfs) continue; // no ZFS -> no branch quotas to re-split (e.g. SMB-only cold storage)
+    if (n.last_rebalance && now - n.last_rebalance < intervalMs) continue;
+    // No `tier` -> both tiers.
+    enqueueTask(n.name, "storage.rebalance", { min_delta_bytes: minDeltaBytes }, "rebalance-scheduler");
+    db().prepare("UPDATE nodes SET last_rebalance = ? WHERE name = ?").run(now, n.name);
+    scheduled.push(n.name);
+  }
+  return scheduled;
+}
+
 // Re-fire guard for the nightly usage scan: long enough not to fire twice in one night's hour
 // window, short enough that day-to-day drift in when the hourly ticker lands never skips a night.
 const USAGE_SCAN_MIN_GAP_MS = 20 * 3600 * 1000;
@@ -285,13 +324,17 @@ export function scheduleUsageScans(now = Date.now()): string[] {
   return scheduled;
 }
 
-/** Start an hourly ticker: prune old data, run scheduled backups, and kick off due scrubs + scans. */
+/**
+ * Start an hourly ticker: prune old data, run scheduled backups, and kick off due scrubs, scans and
+ * storage rebalances.
+ */
 export function startMaintenance(): NodeJS.Timeout {
   pruneOldData();
   const tick = () => {
     pruneOldData();
     scheduleScrubs();
     scheduleUsageScans();
+    scheduleRebalances();
     // backupAll persists the last-run timestamp, so the schedule survives restarts and the next slot
     // is computed off durable state rather than an in-memory counter.
     if (backupDue()) void backupAll();
