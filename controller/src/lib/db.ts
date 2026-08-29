@@ -712,6 +712,15 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
     ALTER TABLE nodes ADD COLUMN storage_inventory TEXT;
     `,
   },
+  {
+    // Last time the controller enqueued a scheduled storage.rebalance for this node (mirrors
+    // nodes.last_scrub). Manual rebalances from the node Storage page do NOT touch it, so clicking
+    // the button never shifts the schedule.
+    id: "0029_node_last_rebalance",
+    sql: `
+    ALTER TABLE nodes ADD COLUMN last_rebalance INTEGER;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

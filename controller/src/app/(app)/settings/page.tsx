@@ -17,6 +17,7 @@ import {
   saveAnnouncementSenderSettingsAction,
   saveEmailFromNameSettingsAction,
   saveGpuPolicyAction,
+  saveRebalanceSettingsAction,
   saveScrubSettingsAction,
   saveSmtpSettingsAction,
   saveStorageSettingsAction,
@@ -433,6 +434,41 @@ export default async function SettingsPage({
             <Button type="submit" variant="secondary">
               Scrub now
             </Button>
+          </form>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h2 className="text-base font-semibold">Storage quota rebalance</h2>
+          <p className="text-xs text-muted-foreground">
+            On nodes whose fast or cold tier spans several drives, each lab&apos;s quota is split
+            across those drives in proportion to how much free space each one has — so a drive that
+            also holds Docker&apos;s data-root is given a smaller share. Rebalancing only rewrites
+            ZFS quotas; no file is ever moved, so it is cheap enough to run hourly. You can also
+            rebalance a single node at any time from its Storage page.
+          </p>
+          <form action={saveRebalanceSettingsAction} className="grid max-w-xl grid-cols-1 gap-3 sm:grid-cols-2">
+            <label className="flex items-center gap-2 text-sm sm:col-span-2">
+              <input type="checkbox" name="rebalanceEnabled" defaultChecked={s.rebalanceEnabled} className="accent-primary" />
+              Enable scheduled rebalance
+            </label>
+            <div>
+              <Label>Rebalance every (hours)</Label>
+              <Input name="rebalanceIntervalHours" type="number" min={1} defaultValue={s.rebalanceIntervalHours} />
+              <p className="mt-1 text-xs text-muted-foreground">Minimum 1 — the scheduler ticks hourly.</p>
+            </div>
+            <div>
+              <Label>Ignore changes smaller than (GB)</Label>
+              <Input name="rebalanceMinDeltaGb" type="number" min={0} step={0.5} defaultValue={s.rebalanceMinDeltaGb} />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Free space drifts constantly. Without this, every run would rewrite and log every
+                quota over a trivial change. 0 applies every recomputed split exactly.
+              </p>
+            </div>
+            <div className="sm:col-span-2">
+              <Button type="submit">Save rebalance</Button>
+            </div>
           </form>
         </CardContent>
       </Card>

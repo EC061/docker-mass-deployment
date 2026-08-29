@@ -203,6 +203,21 @@ export async function saveScrubSettingsAction(formData: FormData) {
   revalidatePath("/settings");
 }
 
+export async function saveRebalanceSettingsAction(formData: FormData) {
+  await requireAdmin();
+  setSetting("rebalanceEnabled", formData.get("rebalanceEnabled") === "on");
+  // The maintenance ticker is hourly, so anything under 1 hour cannot be honoured.
+  const hours = Number(formData.get("rebalanceIntervalHours"));
+  setSetting(
+    "rebalanceIntervalHours",
+    Number.isFinite(hours) && hours >= 1 ? Math.trunc(hours) : 24,
+  );
+  // 0 is meaningful (apply every recomputed split exactly), so don't fall back on a falsy value.
+  const delta = Number(formData.get("rebalanceMinDeltaGb"));
+  setSetting("rebalanceMinDeltaGb", Number.isFinite(delta) && delta >= 0 ? delta : 1);
+  revalidatePath("/settings");
+}
+
 export async function scrubNowAction() {
   const actor = (await requireAdmin()).email;
   const { db } = await import("@/lib/db");

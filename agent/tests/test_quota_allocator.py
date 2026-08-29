@@ -280,6 +280,34 @@ def test_unchanged_quotas_produce_no_step():
     assert plan_steps(allocation, {"a": 1000, "b": 1000}, {"a": "p/a", "b": "p/b"}) == []
 
 
+def test_deadband_drops_a_plan_whose_every_move_is_trivial():
+    """Pool free space drifts constantly; an hourly pass must not rewrite quotas over noise."""
+    allocation = Allocation(quotas={"a": 1000 * GB, "b": 1002 * GB})
+    current = {"a": 1000 * GB + 4, "b": 1002 * GB - 7}
+    assert plan_steps(allocation, current, {"a": "p/a", "b": "p/b"}, min_delta=GB) == []
+    # Without a deadband the same drift is applied, which is the noise being suppressed.
+    assert len(plan_steps(allocation, current, {"a": "p/a", "b": "p/b"})) == 2
+
+
+def test_deadband_is_all_or_nothing_so_a_real_move_carries_its_sibling():
+    """A partial apply would leave the branches un-proportional AND break INV-1 via a skipped shrink."""
+    allocation = Allocation(quotas={"a": 500 * GB, "b": 1500 * GB})
+    steps = plan_steps(
+        allocation, {"a": 500 * GB + 16, "b": 900 * GB}, {"a": "p/a", "b": "p/b"},
+        min_delta=GB,
+    )
+    # "b" moves 600 GB so the plan runs; "a"'s 16-byte shrink rides along rather than being dropped.
+    assert [s.pool for s in steps] == ["a", "b"]
+    assert sum(s.target for s in steps) == 2000 * GB
+
+
+def test_deadband_never_suppresses_capping_an_unlimited_dataset():
+    """An absent quota is unbounded, not a small change — it must be capped whatever the deadband."""
+    allocation = Allocation(quotas={"a": 1000 * GB})
+    steps = plan_steps(allocation, {"a": None}, {"a": "p/a"}, min_delta=1024 * TB)
+    assert [s.pool for s in steps] == ["a"] and steps[0].is_shrink
+
+
 def test_steps_skip_branches_without_a_dataset():
     allocation = Allocation(quotas={"a": 10, "gone": 20})
     steps = plan_steps(allocation, {"a": 1}, {"a": "p/a"})

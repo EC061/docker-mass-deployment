@@ -380,6 +380,8 @@ def apply_allocation(
     lab: str,
     allocation: Allocation,
     branches: list[BranchObservation],
+    *,
+    min_delta: int = 0,
 ) -> list[str]:
     """Apply target quotas in an order that never over-commits, rolling back a failed shrink.
 
@@ -387,11 +389,14 @@ def apply_allocation(
     undo the shrinks already applied and abort, because the following grows would then push the sum
     past the configured quota. If a *grow* fails the invariant still holds (we only ever grow into
     budget the shrinks already freed), so the partial result is reported rather than unwound.
+
+    ``min_delta`` is the deadband described in ``quota.plan_steps``: below it this lab's quotas are
+    left exactly as they are and no log line is produced.
     """
     observed = {b.pool: b for b in branches if b.present}
     current = {pool: obs.quota for pool, obs in observed.items()}
     datasets = {pool: obs.dataset for pool, obs in observed.items()}
-    steps = plan_steps(allocation, current, datasets)
+    steps = plan_steps(allocation, current, datasets, min_delta=min_delta)
     logs: list[str] = []
     applied: list[tuple[str, int | None]] = []
     for step in steps:
@@ -985,12 +990,26 @@ def discover_labs(tier: TierConfig) -> list[str]:
 # --------------------------------------------------------------------------- rebalance / reconcile
 
 
-def rebalance(cfg: AgentConfig, tier_name: str, labs: list[str] | None = None) -> dict[str, Any]:
+def rebalance(
+    cfg: AgentConfig,
+    tier_name: str,
+    labs: list[str] | None = None,
+    *,
+    min_delta: int = 0,
+) -> dict[str, Any]:
     """Recompute + reapply every lab's branch quota split on a tier.
 
     Moves QUOTA, never files: changing a ZFS quota is instant and free, while relocating data is
     neither. New writes land on the branch with the most free space, so capacity rebalances itself
     over time.
+
+    ``min_delta`` is the deadband (see ``quota.plan_steps``). A lab whose targets all moved by less
+    than it comes back ``changed: False`` with empty logs, which is what makes this cheap enough to
+    put on an hourly schedule without drowning the log.
+
+    Each lab also reports ``over_committed_changed``: whether its over-commit status differs from
+    the last run. An unchanged over-commit is a standing condition only an admin can clear, so the
+    caller can report the transition once rather than on every scheduled pass.
     """
     tier = cfg.storage.tier(tier_name)
     if not tier.is_zfs_owned:
@@ -1010,14 +1029,23 @@ def rebalance(cfg: AgentConfig, tier_name: str, labs: list[str] | None = None) -
             results.append({"lab": lab, "ok": False,
                             "error": "no configured tier quota recorded for this lab"})
             continue
+        was_over = record.over_committed if record else False
         try:
             allocation = plan_allocation(tier, lab, configured, branches, state)
-            logs = apply_allocation(tier, lab, allocation, branches)
-            _record(state, tier, lab, configured, observe_branches(tier, lab, health=healths))
+            logs = apply_allocation(tier, lab, allocation, branches, min_delta=min_delta)
+            # Re-observe only when something actually changed; an untouched lab's numbers are
+            # already in `branches`, and re-reading them would double this loop's ZFS calls.
+            _record(
+                state, tier, lab, configured,
+                observe_branches(tier, lab, health=healths) if logs else branches,
+            )
+            state.lab(tier.name, lab).over_committed = allocation.over_committed
             results.append({
                 "lab": lab, "ok": True, "allocation": dict(allocation.quotas),
                 "reserved_bytes": allocation.reserved,
+                "changed": bool(logs),
                 "over_committed": allocation.over_committed,
+                "over_committed_changed": allocation.over_committed != was_over,
                 "warnings": list(allocation.warnings), "logs": logs,
             })
         except (StorageError, zfs.ZfsError) as exc:

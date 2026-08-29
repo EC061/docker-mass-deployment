@@ -148,6 +148,17 @@ export interface Settings {
   scrubIntervalDays: number; // scrub each node at most this often
   scrubHour: number; // hour of day (0-23, in scrubTimezone) at which scrubs may start
   scrubTimezone: string; // IANA tz name (e.g. "America/New_York") the scrub hour is evaluated in
+  // Scheduled multi-drive quota rebalance. The agent re-splits each lab's tier quota across its ZFS
+  // branches in proportion to each pool's FREE space, so a drive that also holds Docker's data-root
+  // is handed less. This only rewrites ZFS quota properties — no file is ever moved — so it is cheap
+  // enough to run hourly. Unlike scrubs there is no hour-of-day gate: there is no off-peak to wait
+  // for. Manual rebalances from a node's Storage page are unaffected by all of this.
+  rebalanceEnabled: boolean;
+  rebalanceIntervalHours: number; // hours between scheduled runs; the ticker is hourly, so min 1
+  // Deadband. Pool free space drifts constantly, so without this every scheduled run would rewrite
+  // (and log) every branch quota over a sub-gigabyte change. A lab is skipped unless at least one of
+  // its branch quotas would move by this much. Manual rebalances always send 0 (re-slice exactly).
+  rebalanceMinDeltaGb: number;
 }
 
 /** Placeholders the welcome-email template understands, shown to the admin in the settings UI. */
@@ -416,6 +427,9 @@ export const DEFAULT_SETTINGS: Settings = {
   scrubIntervalDays: 30,
   scrubHour: 2,
   scrubTimezone: "UTC",
+  rebalanceEnabled: false,
+  rebalanceIntervalHours: 24,
+  rebalanceMinDeltaGb: 1,
 };
 
 export function isWebdavConfigured(): boolean {

@@ -345,6 +345,11 @@ def _add_storage_parser(sub: argparse._SubParsersAction) -> None:
         "rebalance", help="reshard branch quotas across pools (moves quota, never files)"
     )
     p_rebalance.add_argument("--tier", choices=["fast", "cold"], help="default: both tiers")
+    p_rebalance.add_argument(
+        "--min-delta-gb", type=float, default=0.0,
+        help="skip a lab whose branch quotas would all move by less than this (default: 0, "
+             "meaning re-slice exactly). The controller's scheduled rebalance sends its own value.",
+    )
     p_rebalance.set_defaults(func=_cmd_storage_rebalance)
 
 
@@ -457,7 +462,10 @@ def _cmd_storage_remove_pool(args: argparse.Namespace) -> int:
 def _cmd_storage_rebalance(args: argparse.Namespace) -> int:
     from . import storageops
 
-    return _run_storage_op(args, storageops.rebalance, {"tier": args.tier} if args.tier else {})
+    params: dict = {"tier": args.tier} if args.tier else {}
+    if args.min_delta_gb:
+        params["min_delta_bytes"] = int(args.min_delta_gb * 1024 ** 3)
+    return _run_storage_op(args, storageops.rebalance, params)
 
 
 def main(argv: list[str] | None = None) -> int:

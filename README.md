@@ -89,6 +89,14 @@ an unused stable `/dev/disk/by-id/...` device after an explicit destructive conf
 pool is deliberately not a UI button — it is `lab-agent storage remove-pool` on the node, described
 under "Degraded operation and recovery" in `HOST_PREPARATION.md`.
 
+Because the split follows each pool's free space, a drive that also carries Docker's data-root is
+handed a smaller share — but only as that data-root actually grows, since the shares are recomputed
+from live free space rather than from provisioned quotas. Settings → Storage quota rebalance turns
+that recomputation into a schedule (off by default) that runs on every online ZFS node. Rebalancing
+only rewrites ZFS quota properties, so an hourly interval is affordable; the accompanying "ignore
+changes smaller than" deadband stops constant drift in free space from rewriting and logging every
+quota on every pass. The per-node button always re-slices exactly, ignoring the deadband.
+
 ## Get the lab image
 
 The default image is `ghcr.io/ec061/custom-ssh:latest`, built and pushed by the `Build lab image`

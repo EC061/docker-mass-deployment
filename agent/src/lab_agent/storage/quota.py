@@ -273,18 +273,37 @@ class QuotaStep:
 
 
 def plan_steps(
-    allocation: Allocation, current: dict[str, int | None], datasets: dict[str, str]
+    allocation: Allocation,
+    current: dict[str, int | None],
+    datasets: dict[str, str],
+    *,
+    min_delta: int = 0,
 ) -> list[QuotaStep]:
     """Order the quota changes so the committed total NEVER transiently exceeds the configured one.
 
     Shrinks (which free budget) run first, then grows (which spend it). A dataset with no quota at
     all counts as a shrink so an accidentally-unlimited dataset is capped before anything grows.
+
+    ``min_delta`` is a deadband. The proportional split is a function of each pool's FREE space, so
+    any write anywhere on a pool — by another lab, or by Docker's data-root sharing the disk —
+    nudges every target by a few bytes. Without a deadband a scheduled rebalance rewrites every
+    branch quota on every run and buries the changes that matter in sub-gigabyte noise.
+
+    The deadband is deliberately ALL-OR-NOTHING per lab: if no branch moved by at least
+    ``min_delta`` the whole plan is dropped, otherwise every step is applied. Skipping individual
+    steps would leave one branch at its new target and its sibling at the old one, which both breaks
+    INV-1 (a skipped shrink is budget the grows then spend) and defeats a proportional split.
     """
     steps = [
         QuotaStep(pool=pool, dataset=datasets[pool], current=current.get(pool), target=target)
         for pool, target in allocation.quotas.items()
         if pool in datasets and current.get(pool) != target
     ]
+    # An unlimited dataset is never within the deadband: uncapped is unbounded, not small.
+    if min_delta > 0 and not any(
+        s.current is None or abs(s.target - s.current) >= min_delta for s in steps
+    ):
+        return []
     shrinks = sorted((s for s in steps if s.is_shrink), key=lambda s: s.pool)
     grows = sorted((s for s in steps if not s.is_shrink), key=lambda s: s.pool)
     return [*shrinks, *grows]
