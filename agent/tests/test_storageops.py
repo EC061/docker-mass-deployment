@@ -103,6 +103,45 @@ def test_creating_a_pool_on_a_free_disk_succeeds(monkeypatch):
     assert created["force"] is False
 
 
+def test_a_disk_named_by_an_alias_still_resolves_to_its_inventory_entry(monkeypatch, tmp_path):
+    """The inventory records ONE by-id link, but a disk has several aliases plus a by-path one.
+
+    Matching the recorded string alone rejected every other spelling of the same disk with a
+    misleading "not a whole disk" — and skipped the in-use check with it.
+    """
+    dev = tmp_path / "sdb"
+    dev.write_text("")
+    alias = tmp_path / "by-path-alias"
+    alias.symlink_to(dev)
+    monkeypatch.setattr(poolinv.zfs, "pool_exists", lambda p: False)
+    monkeypatch.setattr(poolinv, "list_block_devices", lambda: [
+        poolinv.BlockDevice("sdb", "/dev/disk/by-id/ata-PREFERRED", "M", "S", 8 * TB, True,
+                            "sata", False, True, ["ext4"], None, 1),
+    ])
+    monkeypatch.setattr(poolinv.zfs, "create_pool",
+                        lambda *a, **k: pytest.fail("wiped a disk that was in use"))
+    monkeypatch.setattr(poolinv, "validate_device", lambda d: d)
+    monkeypatch.setattr(poolinv.os.path, "realpath",
+                        lambda path: "/dev/sdb" if path == str(alias) else path)
+    # Resolves to the same disk, so the in-use guard fires instead of "not a whole disk".
+    with pytest.raises(StorageConfigError, match="already in use"):
+        poolinv.create_pool("cold2", [str(alias)])
+
+
+def test_two_aliases_for_one_disk_are_rejected(monkeypatch):
+    monkeypatch.setattr(poolinv.zfs, "pool_exists", lambda p: False)
+    monkeypatch.setattr(poolinv, "list_block_devices", lambda: [
+        poolinv.BlockDevice("sdb", "/dev/disk/by-id/ata-X", "M", "S", 8 * TB, True, "sata",
+                            False, False, [], None, 0),
+    ])
+    monkeypatch.setattr(poolinv.os.path, "realpath", lambda path: "/dev/sdb")
+    monkeypatch.setattr(poolinv.zfs, "create_pool",
+                        lambda *a, **k: pytest.fail("built a pool from one disk listed twice"))
+    with pytest.raises(StorageConfigError, match="same disk"):
+        poolinv.create_pool("cold2", ["/dev/disk/by-id/ata-X",
+                                      "/dev/disk/by-path/pci-0000:00:17.0-ata-1"])
+
+
 def test_creating_a_pool_that_already_exists_is_refused(monkeypatch):
     monkeypatch.setattr(poolinv.zfs, "pool_exists", lambda p: True)
     with pytest.raises(StorageConfigError, match="already exists"):
@@ -266,3 +305,69 @@ def test_status_shows_which_tiers_each_pool_backs(monkeypatch, tmp_path):
     tiers = {p["name"]: p["tiers"] for p in report["pools"]}
     assert tiers["cold1"] == ["cold"]
     assert tiers["fast"] == ["fast", "docker"]
+
+
+def test_a_failed_stop_restarts_the_containers_already_stopped(tmp_path, monkeypatch):
+    """Stopping is fallible too: lab C failing must not leave labs A and B down for good."""
+    fake = install(monkeypatch, FakeZfs())
+    fake.add_pool("fast", 4 * TB)
+    fake.add_pool("cold1", 8 * TB)
+    fake.add_pool("cold2", 8 * TB)
+    c = cfg(tmp_path, cold_pools=["cold1"], docker_pool="fast")
+    for lab in ("labA", "labB", "labC"):
+        service.provision_lab(c, "cold", lab, 1 * TB)
+
+    from lab_agent.executors import docker
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr("lab_agent.hostprep.ensure_mergerfs_available", lambda: None)
+    monkeypatch.setattr(docker, "container_running", lambda name: True)
+
+    def stop(name):
+        if name.startswith("labC-"):
+            raise docker.DockerError("container is unresponsive")
+        calls.append(("stop", name))
+
+    monkeypatch.setattr(docker, "stop_container", stop)
+    monkeypatch.setattr(docker, "start_container", lambda name: calls.append(("start", name)))
+
+    with pytest.raises(docker.DockerError):
+        storageops.attach_pool(c, {"tier": "cold", "pool": "cold2"})
+
+    node = c.node_name
+    assert calls == [
+        ("stop", f"labA-{node}"), ("stop", f"labB-{node}"),
+        ("start", f"labA-{node}"), ("start", f"labB-{node}"),
+    ]
+
+
+def test_removing_a_pool_restarts_the_labs_it_had_to_remount(tmp_path, monkeypatch):
+    """A remount is invisible to a running container: it keeps writing through the old union —
+    including the branch that was just detached — until it is restarted."""
+    fake = install(monkeypatch, FakeZfs())
+    fake.add_pool("fast", 4 * TB)
+    fake.add_pool("cold1", 8 * TB)
+    fake.add_pool("cold2", 8 * TB)
+    c = cfg(tmp_path, cold_pools=["cold1", "cold2"], docker_pool="fast")
+    service.provision_lab(c, "cold", "labA", 2 * TB)
+
+    from lab_agent.executors import docker
+
+    # Force the live-drop of the detached branch to fail, so reconcile_mounts falls back to a
+    # remount and flags the lab as needing a restart.
+    from lab_agent.executors.base import CommandResult
+
+    monkeypatch.setattr(
+        service.mfs, "remove_branch_live",
+        lambda mountpoint, branch: CommandResult(
+            False, ["setfattr"], 1, "", "operation not supported"),
+    )
+    restarted: list[str] = []
+    monkeypatch.setattr(docker, "container_running", lambda name: True)
+    monkeypatch.setattr(docker, "restart_container", lambda name: restarted.append(name))
+
+    result, msg = storageops.remove_pool(c, {"tier": "cold", "pool": "cold2", "confirm": True})
+
+    assert restarted == [f"labA-{c.node_name}"]
+    assert result["containers_restarted"] == ["labA"]
+    assert "restarted containers: labA" in msg

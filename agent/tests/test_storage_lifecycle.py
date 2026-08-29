@@ -458,3 +458,59 @@ def test_degraded_usage_reports_the_missing_branch(monkeypatch, tmp_path):
     assert usage.missing_pools == ["cold1"]
     assert usage.used_bytes == 500 * GB          # only what is actually reachable
     assert usage.reserved_bytes > 0              # ...and the lost branch's quota is held back
+
+
+# --------------------------------------------------------------------------- failed attach
+
+
+def test_a_failed_attach_puts_the_promoted_datasets_back(monkeypatch, tmp_path):
+    """A half-promoted tier is the one outcome worse than a refused attach.
+
+    Promotion moves the container-visible path out from under the lab, but the new topology is only
+    written to the config on the success path. If the step after promotion fails, the datasets must
+    go back where the (unchanged) config says they are — otherwise the caller restarts containers
+    onto an empty root-filesystem /cold-storage/labA.
+    """
+    fake, c = one_cold_drive(monkeypatch, tmp_path)
+    service.provision_lab(c, "cold", "labA", 2 * TB)
+    fake.add_pool("cold2", 8 * TB)
+
+    real_create = fake.create_dataset
+
+    def refuse_the_new_pool_root(name, **kw):
+        if name == "cold2/labs":
+            raise service.zfs.ZfsError("cold2 is suspended")
+        return real_create(name, **kw)
+
+    monkeypatch.setattr(service.zfs, "create_dataset", refuse_the_new_pool_root)
+
+    with pytest.raises(service.StorageError, match="container dataset"):
+        service.attach_pool(c, "cold", "cold2")
+
+    assert c.storage.cold.pools == ("cold1",)
+    assert c.storage.cold.backend == "zfs"
+    assert fake.datasets["cold1/labs/labA"].mountpoint == "/cold-storage/labA"
+    assert fake.datasets["cold1/labs"].mountpoint == "/cold-storage"
+
+
+def test_a_promotion_that_fails_midway_restores_the_labs_it_already_moved(monkeypatch, tmp_path):
+    fake, c = one_cold_drive(monkeypatch, tmp_path)
+    for lab in ("labA", "labB", "labC"):
+        service.provision_lab(c, "cold", lab, 1 * TB)
+    fake.add_pool("cold2", 8 * TB)
+
+    real_set = fake.set_property
+
+    def refuse_the_third_lab(name, key, value):
+        if name == "cold1/labs/labC" and key == "mountpoint":
+            raise service.zfs.ZfsError("dataset is busy")
+        return real_set(name, key, value)
+
+    monkeypatch.setattr(service.zfs, "set_property", refuse_the_third_lab)
+
+    with pytest.raises(service.StorageError, match="could not promote"):
+        service.attach_pool(c, "cold", "cold2")
+
+    assert c.storage.cold.pools == ("cold1",)
+    for lab in ("labA", "labB", "labC"):
+        assert fake.datasets[f"cold1/labs/{lab}"].mountpoint == f"/cold-storage/{lab}"

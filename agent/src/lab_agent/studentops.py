@@ -135,10 +135,24 @@ def _prepare_tier(
                 zfs.set_quota(dataset, None)
         return
     allocation = _student_allocation(tier, lab, username, quota, branches)
+    skipped: list[str] = []
     for obs in present:
+        target = allocation.get(obs.pool, 0)
+        if target <= 0:
+            # No positive quota is backable here: either the pool has no free space, or the
+            # student's logical quota is already fully committed to the data on their other
+            # branches. ZFS has no zero quota, so passing this through would raise. Mirror the
+            # lab-level rule in storage.service.apply_allocation instead: never create an
+            # unbounded dataset, and leave an existing one at whatever finite quota it holds.
+            skipped.append(obs.pool)
+            continue
         _ensure_user_dataset(
-            f"{obs.dataset}/{username}", f"{obs.path}/{username}",
-            allocation.get(obs.pool, 0), uid, gid,
+            f"{obs.dataset}/{username}", f"{obs.path}/{username}", target, uid, gid,
+        )
+    if len(skipped) == len(present):
+        raise service.StorageError(
+            f"cannot give '{username}' {tier_name} storage in lab '{lab}': no branch "
+            f"({', '.join(skipped)}) has the free capacity to back a positive quota"
         )
 
 

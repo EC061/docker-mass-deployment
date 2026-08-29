@@ -329,6 +329,18 @@ def _add_storage_parser(sub: argparse._SubParsersAction) -> None:
     p_add.add_argument("--pool", required=True, help="an existing ZFS pool on this node")
     p_add.set_defaults(func=_cmd_storage_add_pool)
 
+    p_remove = ops.add_parser(
+        "remove-pool",
+        help="detach a pool from a tier (admin decision; destroys no dataset)",
+    )
+    p_remove.add_argument("--tier", required=True, choices=["fast", "cold"])
+    p_remove.add_argument("--pool", required=True, help="a pool currently backing that tier")
+    p_remove.add_argument(
+        "--confirm", action="store_true",
+        help="accept that any files still on the pool leave the logical tier",
+    )
+    p_remove.set_defaults(func=_cmd_storage_remove_pool)
+
     p_rebalance = ops.add_parser(
         "rebalance", help="reshard branch quotas across pools (moves quota, never files)"
     )
@@ -430,6 +442,15 @@ def _cmd_storage_add_pool(args: argparse.Namespace) -> int:
 
     return _run_storage_op(
         args, storageops.attach_pool, {"tier": args.tier, "pool": args.pool}
+    )
+
+
+def _cmd_storage_remove_pool(args: argparse.Namespace) -> int:
+    from . import storageops
+
+    return _run_storage_op(
+        args, storageops.remove_pool,
+        {"tier": args.tier, "pool": args.pool, "confirm": bool(args.confirm)},
     )
 
 

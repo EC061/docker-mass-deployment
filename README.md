@@ -77,10 +77,17 @@ Hard lab quotas remain ZFS quotas. The configured logical quota is split across 
 datasets; allocation changes shrink donors before growing receivers, never move files, never shrink
 below used data, and maintain `sum(branch quotas + missing reservations) <= configured quota`.
 
+Per-student quotas, when set, work the same way one level down: the student's directory is promoted
+to a dataset on every branch and their quota is sharded across those datasets under the same
+invariants. A branch with no capacity left to back a positive quota is skipped, not created
+unbounded.
+
 The Nodes page links to a per-node Storage view showing devices, pool/tier membership, capacity,
 health, scrubs, mergerfs settings, Docker backing storage, and advanced branch allocations. It can
 refresh inventory, reconcile mounts, rebalance quota capacity, attach an existing pool, or initialize
-an unused stable `/dev/disk/by-id/...` device after an explicit destructive confirmation.
+an unused stable `/dev/disk/by-id/...` device after an explicit destructive confirmation. Detaching a
+pool is deliberately not a UI button — it is `lab-agent storage remove-pool` on the node, described
+under "Degraded operation and recovery" in `HOST_PREPARATION.md`.
 
 ## Get the lab image
 

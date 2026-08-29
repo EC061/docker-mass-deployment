@@ -156,7 +156,11 @@ is also available as `sudo lab-agent storage mount`.
 Preferred controller workflow:
 
 1. Open **Nodes -> node -> Manage storage** and refresh inventory.
-2. Under Fast or Cold, choose an unused stable `/dev/disk/by-id/...` disk.
+2. Under Fast or Cold, choose an unused stable `/dev/disk/by-id/...` disk. A
+   `/dev/disk/by-path/...` path is accepted too, and so is any of a disk's other by-id aliases —
+   they are all resolved to the same physical device before the in-use check runs. Kernel names
+   like `/dev/sdb` are rejected outright because they are not stable across reboots. The same list
+   is available locally with `sudo lab-agent storage devices`.
 3. Enter a new pool name (`fast2`, `cold2`, and so on).
 4. Read and accept the destructive warning.
 5. The agent creates an independent zpool, attaches it to the tier, installs mergerfs if this is the
@@ -171,10 +175,17 @@ later pools normally attach live without a container restart.
 An already-created pool can be attached locally while the controller is unavailable:
 
 ```bash
+sudo lab-agent storage devices                          # pick a disk by stable identity
 sudo lab-agent storage add-pool --tier cold --pool cold2
 sudo lab-agent storage rebalance --tier cold
 sudo lab-agent storage status --json
 ```
+
+If attaching fails partway, it is refused rather than half-applied: a tier being promoted from one
+pool to mergerfs puts its dataset mountpoints back where the config still says they are, so the
+containers restart onto their real data instead of an empty root-filesystem directory. Rerun the
+command once the underlying cause is fixed. Should a rollback itself fail, the error says
+`MANUAL RECOVERY NEEDED` and names the datasets to move back by hand with `zfs set mountpoint=...`.
 
 The topology change is written to `/etc/lab-agent/config.toml`, because local bootstrap storage is
 authoritative at boot. Per-lab quotas remain controller-authoritative; device/pool health is always
@@ -188,10 +199,23 @@ does not expand survivor quotas into the missing allocation, and blocks lab dest
 branches are gone, the logical mount is deliberately left down so writes cannot fall through to the
 root filesystem.
 
-Restore/import the same pool and run `lab-agent storage mount`; its branches are attached live. An
-administrator may explicitly detach a lost pool only after accepting that its files will no longer
-be part of the logical tier. Automated drain/data rebalance and failed-disk replacement copying are
-not implemented yet; recover data at the branch dataset level or restore from an external copy.
+Restore/import the same pool and run `lab-agent storage mount`; its branches are attached live.
+
+A pool that is not coming back is detached explicitly, which is a different act from "the disk
+vanished": it releases the quota its branches were reserving so the survivors can grow into it.
+
+```bash
+sudo lab-agent storage remove-pool --tier cold --pool cold2 --confirm
+sudo lab-agent storage rebalance --tier cold
+```
+
+No dataset is destroyed — only tier membership changes. `--confirm` is required whenever the pool is
+still imported and holding lab data, because those files stop being reachable through the logical
+mount; without it the command refuses and names the labs that would be affected. Any lab whose union
+had to be remounted rather than updated live has its container restarted automatically, so nothing
+keeps writing through the branch that was just detached. Automated drain/data rebalance and
+failed-disk replacement copying are not implemented yet; recover data at the branch dataset level or
+restore from an external copy.
 
 Cold-storage SMB clients do none of this management. The owner exports its unchanged logical
 `/cold-storage` tree, while clients keep mounting that share and never scrub or quota the owner's
@@ -359,8 +383,18 @@ sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
 | agent state `labquota/<lab>` | `/run/labquota` read-only | Usage communication |
 
 `/home/<user>/cold-storage` is a symlink to `/cold-storage/<user>`. No
-`/fast`, `/cold`, or `~/scratch` path exists inside the container, and no
-per-user datasets are created.
+`/fast`, `/cold`, or `~/scratch` path exists inside the container, and
+backing pool/branch paths are never exposed there.
+
+A student directory is a plain directory unless the controller sets a
+per-student quota for that tier. When it does, the agent promotes the
+directory to its own ZFS dataset (`<pool>/labs/<lab>/<user>`) on every
+branch of the tier, carrying any existing data across, and shards the
+student's quota over those datasets the same way a lab quota is sharded.
+Clearing the per-student quota sets those datasets back to unlimited; the
+lab-level quota is always the real ceiling. A branch that has no capacity
+left to back a positive quota is skipped rather than created unbounded, so
+a student's data only ever lands on branches that are actually enforcing.
 
 ## Subordinate ID mapping
 
@@ -393,3 +427,23 @@ sudo lab-agent doctor
 Then export one test pool, run `storage mount` and confirm the missing branch is absent from the
 xattr while surviving files remain readable. Re-import it and confirm the branch returns. Always use
 disposable data for destructive pool-creation testing.
+
+Also exercise the paths that only exist on a real host, because the unit tests reach them through
+mocks:
+
+```bash
+# One-pool -> two-pool promotion with a live container: paths and quota must survive it.
+sudo lab-agent storage add-pool --tier cold --pool cold2
+docker exec LAB-NODE ls /cold-storage            # same path, same files
+sudo zfs get -r quota cold1/labs cold2/labs      # sum unchanged, NOT doubled
+
+# Per-student quota sharding, including a student whose data already fills one branch.
+sudo zfs get -r used,quota cold1/labs/LAB cold2/labs/LAB
+
+# Detach and confirm the affected containers were restarted onto the new union.
+sudo lab-agent storage remove-pool --tier cold --pool cold2 --confirm
+findmnt -t fuse.mergerfs
+```
+
+The promotion is the one step that briefly stops containers, so run it against a lab with a live
+session and confirm the session's files are intact afterwards.

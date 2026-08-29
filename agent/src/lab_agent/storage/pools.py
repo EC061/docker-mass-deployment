@@ -319,14 +319,29 @@ def create_pool(
     if vdev == "mirror" and len(paths) < 2:
         raise StorageConfigError("mirror needs at least 2 devices")
 
-    inventory = {d.by_id: d for d in list_block_devices() if d.by_id}
+    # A disk usually has several stable aliases (multiple by-id links plus a by-path one) and the
+    # inventory only records the preferred by-id. Matching that string alone would reject every
+    # other spelling of the same disk -- including the by-path form validate_device explicitly
+    # allows -- and skip the in-use check below with it. So fall back to resolving the caller's
+    # path to its kernel device, which is what every alias ultimately points at.
+    inventory = list_block_devices()
+    by_link = {d.by_id: d for d in inventory if d.by_id}
+    by_kernel = {d.name: d for d in inventory if d.name}
+    seen: dict[str, str] = {}
     for path in paths:
         real = os.path.realpath(path)
-        device = inventory.get(path)
+        device = by_link.get(path)
+        if device is None and real.startswith("/dev/"):
+            device = by_kernel.get(os.path.basename(real))
         if device is None:
             raise StorageConfigError(
                 f"'{path}' is not a whole disk on this node (resolved to {real})"
             )
+        if device.name in seen:
+            raise StorageConfigError(
+                f"'{path}' and '{seen[device.name]}' are two names for the same disk ({real})"
+            )
+        seen[device.name] = path
         if device.in_use and not force:
             detail = device.zfs_pool or ", ".join(device.filesystems) or "existing partitions"
             raise StorageConfigError(
