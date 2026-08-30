@@ -72,3 +72,5 @@ node_modules/
 *.db
 *.db-wal
 *.db-shm
+# Playwright MCP session artifacts
+.playwright-mcp/
