@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { db } from "@/lib/db";
+import { fmtBytes } from "@/lib/format";
 import { parseJsonObject, parsePoolTelemetry } from "@/lib/storage";
 import {
   attachStoragePoolAction,
@@ -35,18 +36,6 @@ interface TaskRow {
   state: string;
   error: string | null;
   created_at: number;
-}
-
-function fmtBytes(value: number | null | undefined): string {
-  if (value == null || !Number.isFinite(value)) return "—";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
-  let n = value;
-  let unit = 0;
-  while (n >= 1024 && unit < units.length - 1) {
-    n /= 1024;
-    unit++;
-  }
-  return `${n.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
 
 function statusVariant(status: string | undefined): "ok" | "warn" | "err" {

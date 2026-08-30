@@ -42,8 +42,8 @@ export interface UsageReport {
 
 // Binary byte formatting (B/KiB/MiB/GiB/TiB), matching image/labquota's fmt_bytes so the emailed
 // table reads identically to what students see from `labquota` inside the container. This differs
-// from lib/format.ts's fmtBytes (which labels binary sizes with decimal units KB/MB), so it is kept
-// local rather than shared.
+// from lib/format.ts's fmtBytes only in rounding and in stopping at TiB, so it is kept local
+// rather than shared.
 function fmtBytes(n: number | null | undefined): string {
   if (n === null || n === undefined) return "—";
   let v = n;

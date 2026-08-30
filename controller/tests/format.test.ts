@@ -13,22 +13,34 @@ describe("fmtBytes", () => {
     expect(fmtBytes(1023)).toBe("1023 B");
   });
 
-  it("steps through units at 1024 boundaries", () => {
-    expect(fmtBytes(1024)).toBe("1.0 KB");
-    expect(fmtBytes(1536)).toBe("1.5 KB");
-    expect(fmtBytes(1024 ** 2)).toBe("1.0 MB");
-    expect(fmtBytes(1024 ** 3)).toBe("1.0 GB");
-    expect(fmtBytes(2 * 1024 ** 4)).toBe("2.0 TB");
-    expect(fmtBytes(1024 ** 5)).toBe("1.0 PB");
+  it("labels binary units as binary and steps at 1024 boundaries", () => {
+    expect(fmtBytes(1024)).toBe("1.0 KiB");
+    expect(fmtBytes(1536)).toBe("1.5 KiB");
+    expect(fmtBytes(1024 ** 2)).toBe("1.0 MiB");
+    expect(fmtBytes(1024 ** 3)).toBe("1.0 GiB");
+    expect(fmtBytes(2 * 1024 ** 4)).toBe("2.0 TiB");
+    expect(fmtBytes(1024 ** 5)).toBe("1.0 PiB");
+  });
+
+  it("does not skip a unit", () => {
+    // Regression: the node storage page carried its own copy of this ladder with "MiB" missing, so
+    // every size from 1 MiB up rendered 1024x too large -- a 7.25 TiB pool showed as "7.3 PiB".
+    expect(fmtBytes(1024 ** 2)).toBe("1.0 MiB");
+    expect(fmtBytes(7.25 * 1024 ** 4)).toBe("7.3 TiB");
   });
 
   it("drops the decimal once the value reaches 100 in a unit", () => {
-    expect(fmtBytes(100 * 1024)).toBe("100 KB");
-    expect(fmtBytes(150 * 1024)).toBe("150 KB");
+    expect(fmtBytes(100 * 1024)).toBe("100 KiB");
+    expect(fmtBytes(150 * 1024)).toBe("150 KiB");
   });
 
-  it("clamps to the largest unit (PB)", () => {
-    expect(fmtBytes(5000 * 1024 ** 5)).toBe("5000 PB");
+  it("clamps to the largest unit (PiB)", () => {
+    expect(fmtBytes(5000 * 1024 ** 5)).toBe("5000 PiB");
+  });
+
+  it("renders an em-dash for non-finite values", () => {
+    expect(fmtBytes(Number.NaN)).toBe("—");
+    expect(fmtBytes(Number.POSITIVE_INFINITY)).toBe("—");
   });
 });
 
