@@ -91,12 +91,21 @@ def verify_ssh_login(container: str, username: str, password: str) -> CommandRes
     """Prove the initial credential through sshd, not merely through passwd/account inspection.
 
     SSH_ASKPASS supplies the password without putting it in argv or requiring sshpass. The helper
-    file lives only inside the container's /run tmpfs and is removed by the trap on every exit.
+    lives in a private root-owned directory inside the container and is removed by the trap on
+    every exit.
+
+    It deliberately does NOT live under /run: containerops mounts /run as a tmpfs, and Docker
+    applies `noexec` to tmpfs mounts unless told otherwise, so ssh could never exec the helper
+    there ("ssh_askpass: exec(...): Permission denied") and every credential verification failed.
+    /var/tmp is on the container rootfs and is executable; the 0700 directory keeps the password
+    unreadable to the lab's users for the moment it exists.
     """
     validate_username(username)
     script = f"""set -eu
-askpass=$(mktemp /run/lab-agent-askpass.XXXXXX)
-trap 'rm -f "$askpass"' EXIT
+askdir=$(mktemp -d /var/tmp/lab-agent-askpass.XXXXXX)
+chmod 0700 "$askdir"
+askpass="$askdir/askpass"
+trap 'rm -rf "$askdir"' EXIT
 cat >"$askpass" <<'ASKPASS'
 #!/bin/sh
 printf '%s\\n' {_shell_quote(password)}
