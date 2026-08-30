@@ -39,7 +39,7 @@ interface TaskRow {
 
 function fmtBytes(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "—";
-  const units = ["B", "KiB", "GiB", "TiB", "PiB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"];
   let n = value;
   let unit = 0;
   while (n >= 1024 && unit < units.length - 1) {
