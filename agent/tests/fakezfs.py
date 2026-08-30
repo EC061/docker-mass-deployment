@@ -112,16 +112,35 @@ class FakeZfs:
             raise zfs.ZfsError(f"size is less than current used space ({ds.used})")
         ds.quota = quota
 
+    def unmount(self, name: str) -> None:
+        """Idempotent, like `zfs unmount` on an already-unmounted dataset."""
+        ds = self.datasets.get(name)
+        if ds is not None:
+            ds.mounted = False
+
     def set_property(self, name: str, key: str, value: str) -> None:
         ds = self.datasets.get(name)
         if ds is None:
             raise zfs.ZfsError(f"no such dataset {name}")
         if key == "mountpoint":
-            # ZFS remounts in place; the data does not move.
             old = ds.mountpoint
+            # `zfs set mountpoint` unmounts before it remounts, and ZFS refuses to unmount a
+            # dataset while a child dataset is still MOUNTED underneath it. Modelling this is what
+            # makes the promotion ordering testable at all.
+            if old:
+                for other in self.datasets.values():
+                    if (other is not ds and other.mounted and other.mountpoint
+                            and other.mountpoint.startswith(old + "/")):
+                        raise zfs.ZfsError(
+                            f"cannot unmount '{old}': pool or dataset is busy"
+                        )
             ds.mountpoint = value
+            ds.mounted = True
+            # Unmounted descendants follow the parent to its new path, as an inherited mountpoint
+            # would; mounted ones can never get here (they raise above).
             for child in self.datasets.values():
-                if child.mountpoint and old and child.mountpoint.startswith(old + "/"):
+                if child is not ds and child.mountpoint and old \
+                        and child.mountpoint.startswith(old + "/"):
                     child.mountpoint = value + child.mountpoint[len(old):]
         elif key == "quota":
             ds.quota = None if value == "none" else int(value)
@@ -208,6 +227,7 @@ def install(monkeypatch, fake: FakeZfs) -> FakeZfs:
         monkeypatch.setattr(module, "mount_dataset", fake.mount_dataset)
         monkeypatch.setattr(module, "set_quota", fake.set_quota)
         monkeypatch.setattr(module, "set_property", fake.set_property)
+        monkeypatch.setattr(module, "unmount", fake.unmount)
         monkeypatch.setattr(module, "get_usage", fake.get_usage)
         monkeypatch.setattr(module, "list_usage", fake.list_usage)
         monkeypatch.setattr(module, "destroy_dataset", fake.destroy_dataset)
