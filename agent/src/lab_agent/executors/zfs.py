@@ -61,7 +61,11 @@ def create_dataset(
         set_property(name, key, value)
     if quota_bytes is not None:
         set_quota(name, quota_bytes)
-    if mountpoint is not None:
+    if mountpoint is not None and get_mountpoint(name) != mountpoint:
+        # Only re-assert a mountpoint that actually differs. `zfs set mountpoint` unmounts and
+        # remounts the dataset, so re-applying the value it already has fails with "cannot
+        # unmount ...: pool or dataset is busy" as soon as a child dataset is mounted beneath it
+        # — which is exactly the state a tier root is in from the second lab onwards.
         set_property(name, "mountpoint", mountpoint)
 
 

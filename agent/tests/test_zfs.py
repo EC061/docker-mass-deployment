@@ -39,6 +39,27 @@ def test_create_dataset_with_quota(runner):
     assert not any(c[:2] == ["zfs", "set"] for c in runner.calls)
 
 
+def test_create_dataset_does_not_remount_an_already_correct_mountpoint(runner):
+    # Regression: `zfs set mountpoint` unmounts and remounts, which fails with "pool or dataset is
+    # busy" once a child dataset is mounted under the tier root. Provisioning the SECOND lab on a
+    # multi-pool tier re-asserts the tier root's (already correct) mountpoint, so a blind `zfs set`
+    # there broke every lab after the first.
+    runner.responses["zfs list -H -o name fast1/labs"] = CommandResult(True, [], 0, "fast1/labs\n", "")
+    runner.responses["zfs get -H -o value mountpoint fast1/labs"] = CommandResult(
+        True, [], 0, "/mnt/lab-storage/fast1/labs\n", ""
+    )
+    zfs.create_dataset("fast1/labs", mountpoint="/mnt/lab-storage/fast1/labs")
+    assert not any(c[:2] == ["zfs", "set"] and c[2].startswith("mountpoint=") for c in runner.calls)
+
+
+def test_create_dataset_moves_a_genuinely_different_mountpoint(runner):
+    # The converse: a real change must still be applied.
+    runner.responses["zfs list -H -o name fast1/labs"] = CommandResult(True, [], 0, "fast1/labs\n", "")
+    runner.responses["zfs get -H -o value mountpoint fast1/labs"] = CommandResult(True, [], 0, "/old\n", "")
+    zfs.create_dataset("fast1/labs", mountpoint="/mnt/lab-storage/fast1/labs")
+    assert ["zfs", "set", "mountpoint=/mnt/lab-storage/fast1/labs", "fast1/labs"] in runner.calls
+
+
 def test_create_dataset_idempotent(runner):
     # Dataset already exists -> no `zfs create`, but quota still applied.
     runner.responses["zfs list -H -o name fast/labs/bio"] = CommandResult(True, [], 0, "fast/labs/bio\n", "")
