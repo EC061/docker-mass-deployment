@@ -171,3 +171,32 @@ def test_destroy_lab_removes_container_before_datasets(monkeypatch, tmp_path):
     labops.destroy_lab(_cfg(state_db=str(tmp_path / "state.db")), {"lab": "bio"})
     assert order[0] == "rm:bio-n1"
     assert any(o.startswith("destroy:") for o in order[1:])
+
+
+def test_destroy_lab_touches_nothing_when_only_the_COLD_tier_is_degraded(monkeypatch, tmp_path):
+    """The pre-flight must cover every tier, not just the one destroyed first.
+
+    Teardown order is container -> fast -> cold, and each tier only checked its own branches. With a
+    healthy fast tier and a missing cold disk, the container and EVERY student home were destroyed
+    and the operation then reported "refusing to destroy the surviving branches while data may still
+    exist on the missing disk(s)" — a message that says nothing was destroyed. Reproduced on `geass`:
+    `t-bravo`'s container and its 30 GiB of fast data were gone, only the cold datasets survived.
+    """
+    import pytest
+
+    _c, _q, destroyed, _ = _patch_storage(
+        monkeypatch, tmp_path,
+        pools={"fast": (10 * TB, 9 * TB)},  # the COLD pool "slow" is GONE; fast is fine
+        mounted={"fast/labs", "fast/labs/bio"},
+    )
+    from lab_agent.executors import docker
+
+    removed: list[str] = []
+    monkeypatch.setattr(docker, "remove_container", lambda name: removed.append(name))
+    cfg = _cfg(state_db=str(tmp_path / "state.db"))
+
+    with pytest.raises(service.StorageError, match="unavailable"):
+        labops.destroy_lab(cfg, {"lab": "bio"})
+
+    assert destroyed == [], "a cold-tier outage must not cost the fast tier"
+    assert removed == [], "the container must survive a refused destroy"

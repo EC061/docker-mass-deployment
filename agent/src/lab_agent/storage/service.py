@@ -641,6 +641,32 @@ def set_lab_quota(
     }
 
 
+def assert_destroyable(
+    cfg: AgentConfig, tier_name: str, lab: str, *, force: bool = False
+) -> None:
+    """Raise if this tier of ``lab`` cannot be safely destroyed because a branch is missing.
+
+    Separate from :func:`destroy_lab` so a caller tearing down SEVERAL tiers can check them ALL
+    before destroying ANY of them. `labops.destroy_lab` removes the container and destroys the fast
+    tier before it ever reaches the cold tier, so a cold-only outage used to wipe the container and
+    every student home and *then* report "refusing to destroy the surviving branches" — leaving the
+    lab half-deleted behind a message that says nothing was.
+    """
+    lab = validate_lab_name(lab)
+    tier = cfg.storage.tier(tier_name)
+    if not tier.is_zfs_owned or force:
+        return
+    # A branch is "missing" only when its POOL is unavailable. A dataset that simply does not exist
+    # on a healthy pool is nothing to protect.
+    missing = [b.pool for b in observe_branches(tier, lab) if not b.pool_usable]
+    if missing:
+        raise StorageError(
+            f"branch(es) {', '.join(missing)} of '{lab}' are unavailable; refusing to destroy the "
+            "surviving branches while data may still exist on the missing disk(s). "
+            "Restore the pool, or remove it from the tier first."
+        )
+
+
 def destroy_lab(cfg: AgentConfig, tier_name: str, lab: str, *, force: bool = False) -> list[str]:
     """Unmount the lab's union and destroy its branch datasets.
 
@@ -652,17 +678,9 @@ def destroy_lab(cfg: AgentConfig, tier_name: str, lab: str, *, force: bool = Fal
     tier = cfg.storage.tier(tier_name)
     if not tier.is_zfs_owned:
         return [f"{tier_name} tier is backend '{tier.backend}'; the owner destroys the data"]
+    assert_destroyable(cfg, tier_name, lab, force=force)
     state = _state(cfg)
     branches = observe_branches(tier, lab)
-    # A branch is "missing" only when its POOL is unavailable. A dataset that simply does not exist
-    # on a healthy pool is nothing to protect.
-    missing = [b.pool for b in branches if not b.pool_usable]
-    if missing and not force:
-        raise StorageError(
-            f"branch(es) {', '.join(missing)} of '{lab}' are unavailable; refusing to destroy the "
-            "surviving branches while data may still exist on the missing disk(s). "
-            "Restore the pool, or remove it from the tier first."
-        )
     logs: list[str] = []
     if tier.uses_mergerfs:
         mfs.unmount(tier.logical_mount(lab))

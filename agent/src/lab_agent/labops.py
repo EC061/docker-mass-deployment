@@ -14,7 +14,7 @@ from . import coldstore
 from .config import AgentConfig
 from .executors import zfs
 from .storage import service
-from .storage.model import TIER_FAST
+from .storage.model import TIER_COLD, TIER_FAST
 
 
 def _usage_dict(u: zfs.Usage) -> dict[str, Any]:
@@ -90,6 +90,13 @@ def destroy_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     # The container's data lives in the datasets (not its writable layer), so removing it loses
     # nothing the teardown isn't already destroying.
     from .executors import docker
+
+    # Pre-flight EVERY tier before touching anything. Destruction is ordered container -> fast ->
+    # cold, so a missing cold branch discovered at the last step would otherwise have already cost
+    # the container and every student home while reporting that it refused to destroy anything.
+    service.assert_destroyable(cfg, TIER_FAST, lab, force=force)
+    if cfg.slow_is_zfs:
+        service.assert_destroyable(cfg, TIER_COLD, lab, force=force)
 
     docker.remove_container(docker.container_name(lab, cfg.node_name))
     logs = service.destroy_lab(cfg, TIER_FAST, lab, force=force)
