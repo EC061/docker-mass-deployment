@@ -169,8 +169,8 @@ export const WELCOME_EMAIL_VARS: { key: string; desc: string }[] = [
   { key: "degree", desc: "standing from the roster: PhD, MS, Faculty… (may be blank)" },
   { key: "username", desc: "login username" },
   { key: "password", desc: "generated initial password" },
-  { key: "host", desc: "SSH host (node name)" },
-  { key: "host_alias", desc: "node alias (falls back to node name)" },
+  { key: "host", desc: "raw node name — usually NOT resolvable; prefer host_alias" },
+  { key: "host_alias", desc: "node alias students connect to (falls back to node name)" },
   { key: "port", desc: "SSH port" },
   { key: "lab", desc: "email lab name derived from the PI (for example, Dr. Jane Smith's Lab)" },
   { key: "node", desc: "node name the lab runs on" },
@@ -184,7 +184,7 @@ export const DEFAULT_WELCOME_BODY = `Hello {name},
 
 You have been added to {lab} on {node}. Connect over SSH:
 
-    ssh {username}@{host} -p {port}
+    ssh {username}@{host_alias} -p {port}
 
   Username: {username}
   Password: {password}

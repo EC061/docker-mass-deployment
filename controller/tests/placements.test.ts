@@ -60,6 +60,23 @@ const grant = (labId: number, nodeId: number, extra: Record<string, unknown> = {
     ...extra,
   });
 
+const memberRow = (placementId: number, username: string) =>
+  dbmod.db()
+    .prepare(
+      `SELECT pm.state, pm.last_error, pm.credential_secret FROM placement_members pm
+       JOIN students ON students.id = pm.student_id
+       WHERE pm.placement_id = ? AND students.username = ?`,
+    )
+    .get(placementId, username) as { state: string; last_error: string | null; credential_secret: string | null };
+
+const setMemberState = (placementId: number, username: string, state: string, error: string | null = null) =>
+  dbmod.db()
+    .prepare(
+      `UPDATE placement_members SET state = ?, last_error = ?
+       WHERE placement_id = ? AND student_id = (SELECT id FROM students WHERE username = ?)`,
+    )
+    .run(state, error, placementId, username);
+
 describe("createPlacement", () => {
   it("keeps student quota mode disabled unless explicitly supplied", async () => {
     const lab = newLab("no-student-quota");
@@ -209,6 +226,77 @@ describe("retryPlacement", () => {
       "admin",
     );
     expect(() => placements.retryPlacement(p.id, "admin")).toThrow(/Only a failed placement/);
+  });
+
+  it("also re-dispatches student.add for members the failure stranded", async () => {
+    // Regression: lab.create rebuilds storage and the container but never re-runs student.add, so a
+    // member stuck in `failed` stayed stuck across every retry. The only remedy was to remove the
+    // placement and re-grant it, which destroys the lab's storage on that node.
+    const lab = newLab("retry-strands-members");
+    await students.addStudentToLab(lab.id, { username: "stuck" }, "admin");
+    await students.addStudentToLab(lab.id, { username: "fine" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    setMemberState(p.id, "stuck", "failed");
+    setMemberState(p.id, "fine", "active");
+    placements.markPlacementState(p.id, "failed", "temporary create failure");
+    enqueueTask.mockClear();
+
+    placements.retryPlacement(p.id, "admin");
+
+    const adds = enqueueTask.mock.calls.filter((c) => c[1] === "student.add");
+    expect(adds.map((c) => (c[2] as any).username)).toEqual(["stuck"]);
+    // lab.create must be queued before the member re-adds: the node drains its queue in order.
+    const kinds = enqueueTask.mock.calls.map((c) => c[1]);
+    expect(kinds.indexOf("lab.create")).toBeLessThan(kinds.indexOf("student.add"));
+  });
+});
+
+describe("retryPlacementMembers", () => {
+  it("re-queues only the members that never reached active, with a fresh credential", async () => {
+    const lab = newLab("retry-members");
+    await students.addStudentToLab(lab.id, { username: "broke" }, "admin");
+    await students.addStudentToLab(lab.id, { username: "works" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    setMemberState(p.id, "broke", "failed", "ssh_askpass: Permission denied");
+    setMemberState(p.id, "works", "active");
+    const before = memberRow(p.id, "works").credential_secret;
+    enqueueTask.mockClear();
+
+    expect(placements.retryPlacementMembers(p.id, "admin")).toBe(1);
+
+    const adds = enqueueTask.mock.calls.filter((c) => c[1] === "student.add");
+    expect(adds.map((c) => (c[2] as any).username)).toEqual(["broke"]);
+    const retried = memberRow(p.id, "broke");
+    expect(retried.state).toBe("provisioning");
+    expect(retried.last_error).toBeNull();
+    // The active member is left completely alone -- its password may already be in use.
+    const untouched = memberRow(p.id, "works");
+    expect(untouched.state).toBe("active");
+    expect(untouched.credential_secret).toBe(before);
+  });
+
+  it("refuses when there is nothing to retry, or the placement is being removed", async () => {
+    const lab = newLab("retry-members-noop");
+    await students.addStudentToLab(lab.id, { username: "done" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    setMemberState(p.id, "done", "active");
+    expect(() => placements.retryPlacementMembers(p.id, "admin")).toThrow(/already active/);
+
+    setMemberState(p.id, "done", "failed");
+    placements.destroyPlacement(p.id, "admin");
+    expect(() => placements.retryPlacementMembers(p.id, "admin")).toThrow(/being removed/);
+  });
+});
+
+describe("placement node alias", () => {
+  it("carries the node alias so the UI can show a host that actually resolves", async () => {
+    // NODE_NAME_RE forbids dots, so `node_name` can never be an FQDN; only the alias is reachable.
+    const lab = newLab("alias-lab");
+    const p = await grant(lab.id, nodeB);
+    expect(placements.getPlacement(p.id)!.node_alias).toBeNull();
+    dbmod.db().prepare("UPDATE nodes SET alias = ? WHERE id = ?").run("node-b.cs.uga.edu", nodeB);
+    expect(placements.getPlacement(p.id)!.node_alias).toBe("node-b.cs.uga.edu");
+    dbmod.db().prepare("UPDATE nodes SET alias = NULL WHERE id = ?").run(nodeB);
   });
 });
 

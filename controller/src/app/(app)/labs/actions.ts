@@ -24,6 +24,7 @@ import {
   nextSshPortForNode,
   recreatePlacement,
   retryPlacement,
+  retryPlacementMembers,
   updatePlacementQuota,
 } from "@/lib/placements";
 import { QUOTA_UNIT_BYTES, type QuotaUnit } from "@/lib/format";
@@ -276,6 +277,26 @@ export async function retryPlacementAction(formData: FormData) {
   revalidatePath(`/labs/${placement!.lab_id}`);
   revalidatePath(`/labs/${placement!.lab_id}/placements/${placementId}`);
   const fid = putFlash("Placement retry queued with its existing storage and container settings.");
+  redirect(`/labs/${placement!.lab_id}/placements/${placementId}?saved=${fid}`);
+}
+
+export async function retryPlacementMembersAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const placement = getPlacement(placementId);
+  if (!placement) redirect("/labs");
+  let queued = 0;
+  try {
+    queued = retryPlacementMembers(placementId, who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not retry these members");
+    redirect(`/labs/${placement!.lab_id}/placements/${placementId}?error=${fid}`);
+  }
+  revalidatePath(`/labs/${placement!.lab_id}`);
+  revalidatePath(`/labs/${placement!.lab_id}/placements/${placementId}`);
+  const fid = putFlash(
+    `Re-queued ${queued} member${queued === 1 ? "" : "s"} with a fresh password; each gets a new welcome email on success.`,
+  );
   redirect(`/labs/${placement!.lab_id}/placements/${placementId}?saved=${fid}`);
 }
 
