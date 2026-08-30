@@ -23,6 +23,7 @@ import {
   removePlacementAction,
   revealPlacementCredentialAction,
   retryPlacementAction,
+  retryPlacementMembersAction,
   setPlacementQuotaAction,
 } from "../../../actions";
 
@@ -116,8 +117,14 @@ export default async function PlacementPage({
   const quotaTask = latestTask(placement, "lab.set_quota");
   const quotaState = taskLabel(quotaTask);
   const recreateState = taskLabel(latestTask(placement, "container.recreate"));
+  const destroyTask = latestTask(placement, "lab.destroy");
+  // A `deleting` placement whose lab.destroy FAILED is not "queued" — it is stuck, and nothing else
+  // in the UI can move it: granting node access reports the lab is already placed everywhere. Offer
+  // the removal again so it can be retried once the underlying cause (a missing pool, say) is fixed.
+  const removalStuck = placement.state === "deleting" && destroyTask?.state === "failed";
+  const stalledMembers = members.filter((member) => member.state !== "active").length;
   const opts = containerOptionsOf(placement);
-  const host = placement.node_name;
+  const host = placement.node_alias?.trim() || placement.node_name;
   const canEdit = placement.state !== "deleting";
   const capacity = nodePoolCapacityBytes(placement.node_id);
   const fastDefault = bytesToQuotaInput(placement.fast_quota_bytes);
@@ -147,6 +154,16 @@ export default async function PlacementPage({
           <CardContent className="space-y-1">
             <p className="text-sm">One-time password for <b>{username}</b>:</p>
             <code className="inline-block rounded bg-muted px-2 py-1 font-mono text-sm">{revealedCredential}</code>
+          </CardContent>
+        </Card>
+      ) : null}
+      {removalStuck ? (
+        <Card className="border-destructive/50">
+          <CardContent>
+            <p className="text-sm text-destructive">
+              Removal failed on the node and this placement is stuck in <b>deleting</b>. Fix the cause
+              below, then use <b>Retry removal</b>.{destroyTask?.error ? ` — ${destroyTask.error}` : ""}
+            </p>
           </CardContent>
         </Card>
       ) : null}
@@ -277,7 +294,17 @@ export default async function PlacementPage({
 
       <Card>
         <CardContent>
-          <h2 className="mb-3 text-base font-semibold">Placement roster ({members.length})</h2>
+          <div className="mb-3 flex flex-wrap items-center gap-3">
+            <h2 className="text-base font-semibold">Placement roster ({members.length})</h2>
+            {stalledMembers > 0 && placement.state !== "deleting" ? (
+              <form action={retryPlacementMembersAction}>
+                <input type="hidden" name="placementId" value={placement.id} />
+                <Button type="submit" variant="secondary" size="sm">
+                  Retry {stalledMembers} unfinished member{stalledMembers === 1 ? "" : "s"}
+                </Button>
+              </form>
+            ) : null}
+          </div>
           {members.length === 0 ? <p className="text-sm text-muted-foreground">No students in this placement.</p> : (
             <Table>
               <TableHeader><TableRow><TableHead>Username</TableHead><TableHead>Name</TableHead><TableHead>Status</TableHead><TableHead>Error</TableHead><TableHead>Credential</TableHead></TableRow></TableHeader>
@@ -317,10 +344,10 @@ export default async function PlacementPage({
             <input type="hidden" name="placementId" value={placement.id} />
             <ConfirmButton
               variant="destructive"
-              disabled={placement.state === "deleting"}
+              disabled={placement.state === "deleting" && !removalStuck}
               confirm={`Remove ${placement.lab_name} from ${placement.node_name}? The container and this placement's node-local data are destroyed. Owner cold storage cannot be removed while SMB clients depend on it.`}
             >
-              {placement.state === "deleting" ? "Removal queued" : "Remove access"}
+              {removalStuck ? "Retry removal" : placement.state === "deleting" ? "Removal queued" : "Remove access"}
             </ConfirmButton>
           </form>
           {!placement.online && (

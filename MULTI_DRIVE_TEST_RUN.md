@@ -195,9 +195,15 @@ missing**, so every value ≥ 1 MiB is labelled one unit too high. The 7.25 TiB 
 This is the page §0.4 of the plan tells the operator to size lab quotas from. `lib/format.ts`
 `fmtBytes` is correct; only this local duplicate is wrong.
 
-**Fix:** add the missing `MiB`.
+**Fixed**, and the root cause with it. There were **three** hand-copied byte ladders
+(`lib/format.ts`, `nodes/page.tsx`, `nodes/[name]/storage/page.tsx`); the two duplicates are gone
+and every page now imports the one in `lib/format.ts`, which grew a regression test for the skipped
+unit. That shared formatter also divided by 1024 while labelling the result `KB`/`MB`/`GB`, so the
+same byte count read as "1.0 GB" on the labs pages and "1.0 GiB" on the storage page. It now uses
+binary labels throughout, matching ZFS, mergerfs and `labquota`; the quota-input units moved with it
+(`MB`/`GB`/`TB` → `MiB`/`GiB`/`TiB` — the byte values were already binary, only the labels lied).
 
-# OPERATIONAL FINDINGS (no code change made)
+# OPERATIONAL FINDINGS
 
 ## FIND-1 🟠 Failed placement members can never be retried from the UI
 When `lab.create` fails, the placement page offers **Retry provisioning**. When the placement is
@@ -207,6 +213,12 @@ members, leaving them stranded on the old error. The PI row is *protected*, so i
 removed and re-added. The only remedy is **Remove access + re-grant**, which destroys the lab's
 storage on that node. Recommend a per-member retry, or having placement retry re-dispatch
 `student.add` for members not in `active`.
+
+**Fixed.** `retryPlacement` now re-dispatches `student.add` for every member that did not reach
+`active` (queued after the `lab.create`, which the node's FIFO guarantees runs first), and the
+roster gained a **"Retry N unfinished members"** button for the case where the placement itself is
+`active`. Members already `active` are untouched — their password may be in use. Two regression
+tests, both verified failing against the old code.
 
 ## FIND-2 🟠 Removing a placement leaves orphan mountpoint directories
 After **Remove access** for both labs, datasets, containers and unions were all correctly gone, but
@@ -224,6 +236,11 @@ runtime xattr and omits `use_ino` (removed in 2.35). Upgraded to upstream **2.42
 The placement page prints `ssh -p 50001 <user>@geass`. `geass` is not resolvable; only the alias
 `geass.cs.uga.edu` is. The *welcome email* correctly uses `{host_alias}` (already customised), so
 students are fine — but an admin copying the command off the placement page gets a dead host.
+
+**Fixed.** `Placement` now carries `node_alias`, and the placement page prefers it. The *shipped*
+`DEFAULT_WELCOME_BODY` had the same defect — it used `{host}` — so out of the box every student
+received an unconnectable command on any node whose name is not resolvable, which is every node
+(`NODE_NAME_RE` forbids dots). It now uses `{host_alias}`, which falls back to the node name.
 
 # EVIDENCE — Phase 4 branch split (the plan's core assertion) ✅
 
@@ -642,6 +659,11 @@ cleanly once `cold2` was back — every `t-bravo` dataset, its container and its
 from all four pools — so the underlying teardown is sound; it is the retry path that is missing.
 Recommend re-enabling the removal action whenever a placement is `deleting` but its last task failed.
 
+**Fixed.** The placement page now looks up the latest `lab.destroy` task: when the placement is
+`deleting` and that task **failed**, the button re-enables as **"Retry removal"** and a banner shows
+the agent's error. `destroyPlacement` was already safe to re-run, so this is a UI-only change (and
+therefore the one fix here with no automated test — there is no RSC page-test harness in the repo).
+
 # EVIDENCE — Phase 8.3 / scheduled rebalance ⚠️ PARTIAL
 
 Settings saved and verified persisted: `rebalanceEnabled=true`, interval **1 h**, deadband **1 GB**.
@@ -695,4 +717,11 @@ Phase 6.5 (exact re-slice applies, deadband suppresses, per-lab sums preserved),
 | BUG-5 | 🔴 | Cold-tier promotion fails with labs present; the naive fix silently shadows all data | ✅ + tests |
 | BUG-6 | 🔴 | A "refused" destroy still wipes the container and all fast storage | ✅ + test |
 
-Agent suite **494 passed / 5 skipped**; controller **345 passed**, typecheck, lint and build clean.
+| ID | Sev | What | Fixed here |
+|---|---|---|---|
+| FIND-1 | 🟠 | Failed placement members can never be retried from the UI | ✅ + tests |
+| FIND-4 | 🟡 | Admin pages (and the default welcome email) show an unresolvable host | ✅ + test |
+| FIND-11 | 🟠 | A failed destroy strands the placement in `deleting` with no UI recovery | ✅ (UI only) |
+| FIND-2, 3, 5–10 | 🟡🟠 | See above — host/agent/plan issues, no controller change made | ❌ documented |
+
+Agent suite **494 passed / 5 skipped**; controller **351 passed**, typecheck, lint and build clean.

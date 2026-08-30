@@ -77,6 +77,10 @@ export interface Placement {
   lab_name: string;
   node_id: number;
   node_name: string;
+  /** Node alias, when set. This — not `node_name` — is what actually resolves over the network:
+   * NODE_NAME_RE forbids dots, so a node's name can never be an FQDN. Anything that shows an SSH
+   * command to a human must prefer it. */
+  node_alias: string | null;
   online: number;
   fast_quota_bytes: number;
   cold_quota_bytes: number | null; // NULL on SMB-client placements (owner manages cold)
@@ -99,7 +103,8 @@ export interface Placement {
 }
 
 const PLACEMENT_SELECT = `
-  SELECT p.*, labs.name AS lab_name, nodes.name AS node_name, nodes.online AS online,
+  SELECT p.*, labs.name AS lab_name, nodes.name AS node_name, nodes.alias AS node_alias,
+         nodes.online AS online,
          nodes.cold_backend AS node_cold_backend, nodes.cold_owner_node_id AS node_cold_owner_node_id,
          owner.name AS cold_owner_name, nodes.cold_ready AS node_cold_ready
   FROM lab_placements p
@@ -670,12 +675,20 @@ export function updatePlacementQuota(
  * back. The agent's task queue is a single-consumer FIFO per node, so tasks enqueued here after
  * container.recreate are guaranteed to run against the new container, not the old one.
  */
-function reprovisionPlacementMembers(placement: Placement, actor?: string): void {
+function reprovisionPlacementMembers(
+  placement: Placement,
+  actor?: string,
+  opts: { onlyUnfinished?: boolean } = {},
+): number {
+  // `onlyUnfinished` is for RETRIES: a member that is already `active` has a live account and a
+  // password the student may have changed, so re-adding it would rotate a working credential for
+  // no reason. A container.recreate, by contrast, wipes every account and must re-add them all.
   const members = db()
     .prepare(
       `SELECT pm.id AS member_id, students.username AS username, students.linux_uid AS linux_uid
        FROM placement_members pm JOIN students ON students.id = pm.student_id
-       WHERE pm.placement_id = ? ORDER BY students.username`,
+       WHERE pm.placement_id = ?${opts.onlyUnfinished ? " AND pm.state <> 'active'" : ""}
+       ORDER BY students.username`,
     )
     .all(placement.id) as { member_id: number; username: string; linux_uid: number }[];
   const now = Date.now();
@@ -703,6 +716,25 @@ function reprovisionPlacementMembers(placement: Placement, actor?: string): void
       actor,
     );
   }
+  return members.length;
+}
+
+/**
+ * Re-dispatch `student.add` for every member of a placement that did not reach `active`.
+ *
+ * Without this a member whose `student.add` failed is stranded: the placement itself is `active`,
+ * so "Retry provisioning" is not offered, and the PI row is protected from removal, so the only
+ * remedy was to remove the whole placement and re-grant it — destroying the lab's storage on that
+ * node to fix one account.
+ */
+export function retryPlacementMembers(placementId: number, actor?: string): number {
+  const p = getPlacement(placementId);
+  if (!p) throw new Error("Unknown placement");
+  if (p.state === "deleting") throw new Error("This placement is being removed");
+  const queued = reprovisionPlacementMembers(p, actor, { onlyUnfinished: true });
+  if (queued === 0) throw new Error("Every member of this placement is already active");
+  audit(actor, "placement.retry_members", `${p.lab_name}@${p.node_name}`, `${queued} member(s)`);
+  return queued;
 }
 
 /** Recreate the container with a (possibly changed) image / container options. Preserves data. */
@@ -781,6 +813,10 @@ export function retryPlacement(placementId: number, actor?: string): void {
     .prepare("UPDATE lab_placements SET state = 'provisioning', last_error = NULL, updated_at = ? WHERE id = ?")
     .run(Date.now(), placementId);
   enqueuePlacementCreate(p, actor);
+  // lab.create only rebuilds the lab's storage and container; it never re-runs student.add. Members
+  // stranded by the original failure stayed stranded across every retry until this was added. The
+  // node's task queue is a single-consumer FIFO, so these land after the lab.create above.
+  reprovisionPlacementMembers(p, actor, { onlyUnfinished: true });
   audit(actor, "placement.retry", `${p.lab_name}@${p.node_name}`);
 }
 
