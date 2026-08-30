@@ -1,6 +1,7 @@
 import { db } from "@/lib/db";
 import Link from "next/link";
 import { takeFlash } from "@/lib/flash";
+import { fmtBytes } from "@/lib/format";
 import { listLocalZfsNodes } from "@/lib/nodes";
 import { ConfirmButton } from "../_components/ConfirmButton";
 import { ColdStorageForm } from "./_components/ColdStorageForm";
@@ -67,17 +68,6 @@ function scrubSummary(raw: string | null): { text: string; bad: boolean } {
     })
     .join(", ");
   return { text, bad };
-}
-
-function fmtBytes(n: number): string {
-  const units = ["B", "KB", "MB", "GB", "TB", "PB"];
-  let v = n;
-  let i = 0;
-  while (v >= 1024 && i < units.length - 1) {
-    v /= 1024;
-    i++;
-  }
-  return `${v.toFixed(1)} ${units[i]}`;
 }
 
 function ago(ts: number | null): string {

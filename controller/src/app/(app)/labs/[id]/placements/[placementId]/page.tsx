@@ -203,9 +203,9 @@ export default async function PlacementPage({
                   className="flex-1"
                 />
                 <Select name="fastUnit" defaultValue={fastDefault.unit} disabled={!canEdit} className="w-20">
-                  <option value="MB">MB</option>
-                  <option value="GB">GB</option>
-                  <option value="TB">TB</option>
+                  <option value="MiB">MiB</option>
+                  <option value="GiB">GiB</option>
+                  <option value="TiB">TiB</option>
                 </Select>
               </div>
               <QuotaStatus desired={placement.fast_quota_bytes} usage={fastUsage} capBytes={capacity.fastBytes} />
@@ -229,9 +229,9 @@ export default async function PlacementPage({
                       className="flex-1"
                     />
                     <Select name="coldUnit" defaultValue={coldDefault.unit} disabled={!canEdit} className="w-20">
-                      <option value="MB">MB</option>
-                      <option value="GB">GB</option>
-                      <option value="TB">TB</option>
+                      <option value="MiB">MiB</option>
+                      <option value="GiB">GiB</option>
+                      <option value="TiB">TiB</option>
                     </Select>
                   </div>
                   <QuotaStatus desired={placement.cold_quota_bytes} usage={coldUsage} capBytes={capacity.coldBytes} />

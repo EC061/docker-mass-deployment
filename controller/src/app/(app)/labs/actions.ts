@@ -47,12 +47,12 @@ function tbToBytes(value: FormDataEntryValue | null, label: string): number {
 
 const MAX_QUOTA_BYTES = 100_000 * TIB;
 
-/** Amount+unit quota input (used by the live-quota form, which lets admins pick MB/GB/TB and any
- * decimal amount instead of being pinned to whole-TB steps). */
+/** Amount+unit quota input (used by the live-quota form, which lets admins pick MiB/GiB/TiB and any
+ * decimal amount instead of being pinned to whole-TiB steps). */
 function amountToBytes(amount: FormDataEntryValue | null, unit: FormDataEntryValue | null, label: string): number {
   const n = Number(amount);
   const perUnit = QUOTA_UNIT_BYTES[String(unit) as QuotaUnit];
-  if (!perUnit) throw new Error(`${label} quota unit must be MB, GB, or TB`);
+  if (!perUnit) throw new Error(`${label} quota unit must be MiB, GiB, or TiB`);
   if (!Number.isFinite(n) || n <= 0) {
     throw new Error(`${label} quota must be a positive number`);
   }
