@@ -67,3 +67,17 @@ def test_verify_ssh_login_uses_password_auth_without_secret_in_argv(monkeypatch)
     assert "PreferredAuthentications=password" in script
     assert "alice@127.0.0.1" in script
     assert "initial-secret" in script
+
+
+def test_verify_ssh_login_askpass_is_not_on_the_noexec_run_tmpfs(monkeypatch):
+    # Regression: containerops mounts /run as a tmpfs and Docker adds `noexec` to tmpfs mounts, so
+    # an askpass helper written under /run could never be exec'd ("ssh_askpass: exec(...):
+    # Permission denied") and EVERY credential verification failed. It must live on the container
+    # rootfs instead, in a private 0700 directory.
+    cap = Capture()
+    monkeypatch.setattr(users, "exec_in", cap)
+    users.verify_ssh_login("lab-bio", "alice", "initial-secret")
+    _, _, script = cap.calls[0]
+    assert "/run/lab-agent-askpass" not in script
+    assert "/var/tmp/lab-agent-askpass" in script
+    assert 'chmod 0700 "$askdir"' in script
