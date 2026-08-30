@@ -514,3 +514,81 @@ def test_a_promotion_that_fails_midway_restores_the_labs_it_already_moved(monkey
     assert c.storage.cold.pools == ("cold1",)
     for lab in ("labA", "labB", "labC"):
         assert fake.datasets[f"cold1/labs/{lab}"].mountpoint == f"/cold-storage/{lab}"
+
+
+def test_promotion_unmounts_labs_then_moves_the_root_then_the_labs(monkeypatch, tmp_path):
+    """The only ordering that both succeeds AND leaves the data reachable.
+
+    Observed on `geass` with two provisioned labs:
+
+    * root first  -> `cannot unmount '/cold-storage': pool or dataset is busy`; the whole
+      promotion rolls back and the tier stays single-pool forever.
+    * labs first  -> succeeds, but the root then mounts ON TOP of the labs' new mountpoints and
+      shadows them: `zfs list` still shows the data, every file disappears from the branch
+      directory and from the mergerfs union above it.
+
+    So: unmount the labs, move the root, then move the labs so each remounts nested underneath it.
+    """
+    fake, c = one_cold_drive(monkeypatch, tmp_path)
+    for lab in ("labA", "labB"):
+        service.provision_lab(c, "cold", lab, 1 * TB)
+    fake.add_pool("cold2", 8 * TB)
+
+    calls: list[tuple[str, str]] = []
+    real_set, real_unmount = fake.set_property, fake.unmount
+
+    def rec_set(name, key, value):
+        if key == "mountpoint":
+            calls.append(("move", name))
+        return real_set(name, key, value)
+
+    def rec_unmount(name):
+        calls.append(("unmount", name))
+        return real_unmount(name)
+
+    monkeypatch.setattr(service.zfs, "set_property", rec_set)
+    monkeypatch.setattr(service.zfs, "unmount", rec_unmount)
+    service.attach_pool(c, "cold", "cold2")
+
+    root_move = calls.index(("move", "cold1/labs"))
+    for lab in ("labA", "labB"):
+        ds = f"cold1/labs/{lab}"
+        assert calls.index(("unmount", ds)) < root_move, (
+            f"{ds} must be unmounted before the root moves; got {calls}"
+        )
+        assert root_move < calls.index(("move", ds)), (
+            f"the root must move before {ds}, else it shadows it; got {calls}"
+        )
+
+    # End state: everything under branch_root, still mounted, data reachable.
+    assert fake.datasets["cold1/labs"].mountpoint == "/mnt/lab-storage/cold1/labs"
+    for lab in ("labA", "labB"):
+        ds = fake.datasets[f"cold1/labs/{lab}"]
+        assert ds.mountpoint == f"/mnt/lab-storage/cold1/labs/{lab}"
+        assert ds.mounted
+
+
+def test_rollback_restores_the_root_before_the_labs(monkeypatch, tmp_path):
+    """The undo path has the same nesting constraint, in both halves."""
+    fake, c = one_cold_drive(monkeypatch, tmp_path)
+    for lab in ("labA", "labB"):
+        service.provision_lab(c, "cold", lab, 1 * TB)
+    fake.add_pool("cold2", 8 * TB)
+
+    real_create = fake.create_dataset
+
+    def refuse_the_new_pool_root(name, **kw):
+        if name == "cold2/labs":
+            raise service.zfs.ZfsError("cold2 is suspended")
+        return real_create(name, **kw)
+
+    monkeypatch.setattr(service.zfs, "create_dataset", refuse_the_new_pool_root)
+    with pytest.raises(service.StorageError):
+        service.attach_pool(c, "cold", "cold2")
+
+    assert c.storage.cold.backend == "zfs"
+    assert fake.datasets["cold1/labs"].mountpoint == "/cold-storage"
+    for lab in ("labA", "labB"):
+        ds = fake.datasets[f"cold1/labs/{lab}"]
+        assert ds.mountpoint == f"/cold-storage/{lab}", "rollback must restore the original path"
+        assert ds.mounted, "a restored dataset must be mounted again, not left detached"

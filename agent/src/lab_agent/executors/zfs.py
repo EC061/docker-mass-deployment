@@ -74,6 +74,18 @@ def set_property(dataset: str, key: str, value: str) -> None:
     _checked(run(["zfs", "set", f"{key}={value}", dataset], timeout=30))
 
 
+def unmount(dataset: str) -> None:
+    """Unmount a dataset. Idempotent: already-unmounted is success, not an error.
+
+    Needed before moving a parent's mountpoint: ZFS cannot unmount a dataset while a child dataset
+    is still mounted underneath it, and `zfs set mountpoint` always unmounts first.
+    """
+    res = run(["zfs", "unmount", dataset], timeout=30)
+    if res.ok or "not currently mounted" in f"{res.stdout}{res.stderr}":
+        return
+    _checked(res)
+
+
 def set_quota(dataset: str, quota_bytes: int | None) -> None:
     """Set (or clear, when None) the quota on a dataset. Applies live.
 

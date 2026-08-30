@@ -808,6 +808,26 @@ def _promote_to_mergerfs(
     pool = old.pools[0]
     moved: list[str] = []
     try:
+        # Order matters twice over, and both halves are load-bearing:
+        #
+        # 1. UNMOUNT the per-lab datasets first. `zfs set mountpoint` unmounts before it remounts,
+        #    and ZFS refuses to unmount a dataset while a child is still mounted underneath it, so
+        #    moving the root with labs mounted fails with
+        #    "cannot unmount '<mount_root>': pool or dataset is busy".
+        # 2. Move the ROOT before the children. Moving the children first also clears (1), but the
+        #    root then mounts *on top of* the children's new mountpoints and shadows them: the
+        #    datasets keep their data, `zfs list` still shows it, and every file silently vanishes
+        #    from the branch directory and from the mergerfs union above it.
+        #
+        # So: unmount children -> move root -> move children (each remounting nested under the
+        # root's new mount).
+        branches = [
+            (lab, new.branch_dataset(pool, lab))
+            for lab in labs
+            if zfs.dataset_exists(new.branch_dataset(pool, lab))
+        ]
+        for _, dataset in branches:
+            zfs.unmount(dataset)
         root = new.pool_root_dataset(pool)
         if zfs.dataset_exists(root):
             zfs.set_property(root, "mountpoint", new.pool_root_mount(pool))
@@ -816,12 +836,10 @@ def _promote_to_mergerfs(
                 f"moved {root} to {new.pool_root_mount(pool)} "
                 "(data unchanged; mergerfs now owns the tier mount root)"
             )
-        for lab in labs:
-            dataset = new.branch_dataset(pool, lab)
-            if zfs.dataset_exists(dataset):
-                zfs.set_property(dataset, "mountpoint", new.branch_mount(pool, lab))
-                moved.append(dataset)
-                logs.append(f"moved {dataset} to {new.branch_mount(pool, lab)}")
+        for lab, dataset in branches:
+            zfs.set_property(dataset, "mountpoint", new.branch_mount(pool, lab))
+            moved.append(dataset)
+            logs.append(f"moved {dataset} to {new.branch_mount(pool, lab)}")
     except Exception as exc:
         failed = _demote_from_mergerfs(old, new, labs, moved)
         detail = (
@@ -848,7 +866,16 @@ def _demote_from_mergerfs(
     for lab in labs:
         originals[new.branch_dataset(pool, lab)] = old.branch_mount(pool, lab)
     failed: list[str] = []
-    for dataset in reversed(moved):
+    # Same nesting constraint as the forward move, and `reversed(moved)` satisfies neither half of
+    # it: unmount the deepest datasets first so the tier root is free to be unmounted, then restore
+    # shallowest-first so each child remounts *under* the restored root instead of being shadowed
+    # by it.
+    for dataset in sorted(moved, key=lambda name: name.count("/"), reverse=True):
+        try:
+            zfs.unmount(dataset)
+        except zfs.ZfsError:  # best effort: a stuck child must not stop the rest being restored
+            pass
+    for dataset in sorted(moved, key=lambda name: name.count("/")):
         target = originals.get(dataset)
         if target is None:  # pragma: no cover - `moved` only ever holds keys of `originals`
             continue
