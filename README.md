@@ -1,14 +1,16 @@
-# Lab Manager: standard Docker security and NVIDIA CDI
+# Lab Manager: runc, CUDA development, and bubblewrap
 
-This repository runs one standard Docker container per lab. There is no container engine inside a
+This repository runs one standard `runc` container per lab. There is no container engine inside a
 lab, no host engine socket, and no privileged mode. Students retain full password-authenticated
-`sudo` inside the lab. Managed labs do not override Docker's runtime, namespace, capability,
-seccomp, AppArmor, or protected-system-path defaults.
+`sudo` inside the lab. Managed labs use Docker's per-container host user namespace because a
+daemon-remapped parent namespace locks the inherited mounts that nested bubblewrap must modify.
 
 The lab image starts from Ubuntu 24.04 and installs NVIDIA's minimal CUDA 13.3 build packages. It
 includes `nvcc`, the CUDA runtime and headers needed for basic CUDA applications, standard C/C++
-build tooling, and Python; it does not install the full CUDA library suite, Node.js, npm, or Codex.
-On GPU nodes every managed lab receives every GPU through native CDI device injection.
+build tooling, Python, and distribution `/usr/bin/bwrap`; it does not install the full CUDA library
+suite, Node.js, npm, or Codex. The outer container uses a dedicated seccomp profile and runs
+confined by the `lab-codex` AppArmor profile, with **no added capabilities** and a plain
+(non-setuid) `/usr/bin/bwrap`.
 
 ## Host preparation
 
@@ -23,15 +25,22 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 
 REPO="git+https://github.com/EC061/docker-mass-deployment.git#subdirectory=agent"
 
-sudo uvx --from "$REPO" lab-agent install
-sudo uvx --from "$REPO" lab-agent edit-config
-sudo uvx --from "$REPO" lab-agent host-prepare  # Docker, ZFS, mergerfs, and CDI when applicable
+sudo uvx --from "$REPO" lab-agent install       # installs to /usr/local/bin + /opt/lab-agent
+sudo lab-agent edit-config
+sudo lab-agent host-prepare  # Docker, ZFS, AppArmor, mergerfs when configured
 # ... create/import the independent zpools named in config, or add a disk from Node -> Storage ...
-sudo uvx --from "$REPO" lab-agent host-prepare  # Docker native-ZFS data-root + lab mount service
+sudo lab-agent host-prepare  # Docker native-ZFS data-root + lab mount service
 # ... install + pin NVIDIA driver (GPU nodes only, see HOST_PREPARATION.md) ...
-sudo uvx --from "$REPO" lab-agent start
-sudo uvx --from "$REPO" lab-agent doctor
+sudo lab-agent start
+sudo lab-agent doctor
 ```
+
+Only the first command needs the `uvx --from "$REPO"` prefix. `install` is
+system-wide — the launcher lands in `/usr/local/bin`, the venv in
+`/opt/lab-agent`, and `uv`/`uvx` are copied to `/usr/local/bin` as well — so
+afterwards `lab-agent` resolves for root, for `sudo`, and for every ordinary
+account on the node. `sudo lab-agent upgrade` moves a node to the newest agent
+(and migrates a node still on the old per-user layout).
 
 ## Persistent layout
 
@@ -110,7 +119,7 @@ docker build -t ghcr.io/ec061/custom-ssh:latest image
 
 The image runs OpenSSH directly as PID 1 and uses a pinned Ubuntu 24.04 base plus NVIDIA's
 `cuda-minimal-build-13-3` package. It contains `nvcc`, the basic CUDA headers/runtime, GCC/G++,
-CMake, Ninja, pkg-config, Python (as both `python` and `python3`), sudo, Git, ripgrep,
+CMake, Ninja, pkg-config, Python (as both `python` and `python3`), sudo, bubblewrap, Git, ripgrep,
 curl, and proc tools. Large optional CUDA math libraries, profilers, documentation, and samples are
 excluded. It intentionally contains no Node.js, npm, Codex, systemd, Docker packages, daemon
 configuration, socket, or inner NVIDIA container runtime.
@@ -123,22 +132,34 @@ sudo lab-agent doctor
 ```
 
 The final doctor check needs a running lab with at least one provisioned student because it executes
-the CUDA smoke test as that ordinary user. A lab is not healthy until this command passes inside
-its container:
+the real namespace and Codex smoke tests as that ordinary user. A lab is not healthy until these
+commands pass inside its outer container:
 
 ```bash
+bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"
 nvcc --version
 ```
 
-Docker supplies its normal `docker-default` AppArmor profile, default seccomp policy, default
-capability set, and the usual masked/read-only system paths. Doctor flags any managed lab with a
-custom `SecurityOpt`, a non-default AppArmor profile, or added privileged capabilities and requires
-recreation.
+Doctor executes that exact bwrap smoke test and `nvcc --version` as a provisioned ordinary student.
 
-GPU hosts install the latest `nvidia-container-toolkit-base` from NVIDIA's stable repository. The
-packaged `nvidia-cdi-refresh.path` and `.service` units maintain `/var/run/cdi/nvidia.yaml`; lab
-containers request `--device nvidia.com/gpu=all`. The legacy NVIDIA runtime and OCI hook are not
-installed or selected.
+Bubblewrap runs its **unprivileged** path: `/usr/bin/bwrap` is plain `0755`, the container adds no
+capabilities, and bwrap creates a user namespace first, gaining its setup capabilities inside that
+namespace where they have no authority over the host. Three container settings make that work, all
+fixed at creation time:
+
+- `--security-opt seccomp=<lab-codex-seccomp.json>` — Docker's default policy masks every
+  `CLONE_NEW*` flag off `clone(2)` for containers without `CAP_SYS_ADMIN`, and that is the only
+  thing that blocks unprivileged user namespaces on a current engine.
+- `--security-opt apparmor=lab-codex` — labs must stay **confined**. Under Ubuntu's
+  `kernel.apparmor_restrict_unprivileged_userns` an *unconfined* task cannot write its own
+  `/proc/self/uid_map`, so `apparmor=unconfined` breaks bwrap outright. The profile's
+  `lab-codex//lab-codex-bwrap` child grants the mount, `pivot_root`, and `userns` permissions the
+  sandbox needs; the parent profile denies mounting.
+- `--security-opt systempaths=unconfined` — removes runc's `/proc` overmounts, without which the
+  kernel rejects the fresh procfs a nested PID namespace requires.
+
+Doctor flags any lab that is unconfined, still carries the legacy `SYS_ADMIN`/`NET_ADMIN`/
+`SYS_PTRACE` capabilities, or whose `bwrap` is setuid, and requires recreation for each.
 
 Also verify `nvidia-smi`, CUDA compilation, network namespace isolation, and that container root
 cannot modify a host sentinel outside `/home` and `/cold-storage`.
@@ -151,8 +172,9 @@ ownership.
 
 The Nodes page exposes:
 
-- **Check**: refresh structured Docker security, CUDA, NVIDIA, CDI, ZFS and SMB health;
-- **Repair**: refresh CDI and restart affected lab containers;
+- **Check**: refresh structured Docker/userns, bubblewrap/Codex, NVIDIA, CDI, ZFS and SMB health;
+- **Repair**: reload AppArmor, refresh security-profile permissions, regenerate CDI, and restart
+  affected lab containers;
 - **Reboot**: schedule a reboot, which is the supported response to an NVML kernel/userspace mismatch.
 
 Cold quotas, aggregate cold usage, scrubs, and quota alerts are authoritative only on the local-ZFS
@@ -161,7 +183,7 @@ never sums that duplicate view. Student deletion removes accounts and node-local
 every placement first, then queues one cold cleanup on each owning node.
 
 Unknown DKMS, Secure Boot, Fabric Manager, and kernel failures remain critical for operator repair.
-Missing storage and Docker UID/security failures block lab creation. CDI/MIG changes refresh CDI and
+Missing storage and Docker/userns failures block lab creation. CDI/MIG changes regenerate CDI and
 restart affected labs; kernel module replacement is never attempted live.
 
 ## Verification
@@ -179,4 +201,4 @@ npm run build
 ```
 
 Host-only integration checks must run on a real Ubuntu node; macOS can run the static/unit suite but
-cannot validate AppArmor, seccomp, ZFS, CDI, or NVML.
+cannot validate AppArmor, ZFS, Docker user namespaces, CDI, NVML, or nested Linux namespaces.
