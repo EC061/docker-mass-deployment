@@ -11,7 +11,6 @@ Only ZFS pools are scrubbed. A node whose cold storage is an SMB mount has no sl
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from .config import AgentConfig
@@ -28,28 +27,14 @@ def run_check(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 def run_repair(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     """Only perform explicitly safe, repeatable repairs; unknown kernel failures remain critical."""
     repaired: list[str] = []
-    apparmor = Path("/etc/apparmor.d/lab-codex")
-    seccomp = Path(cfg.seccomp_profile)
-    if seccomp.exists():
-        seccomp.chmod(0o644)
-        repaired.append("seccomp_permissions_repaired")
-    if apparmor.exists():
-        apparmor.chmod(0o644)
-        result = run(["apparmor_parser", "-r", str(apparmor)], timeout=30)
-        if result.ok:
-            repaired.append("apparmor_reloaded")
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}"
     ], timeout=20)
     containers = listed.stdout.splitlines() if listed.ok else []
-    # /usr/bin/bwrap needs no mode repair: it is plain 0755 in the image and takes the unprivileged
-    # user-namespace path. Restoring a setuid bit here would break it (see build_run_args).
     if run(["nvidia-ctk", "--version"], timeout=10).ok:
-        generated = run([
-            "nvidia-ctk", "cdi", "generate", "--output=/etc/cdi/nvidia.yaml"
-        ], timeout=60)
-        if generated.ok:
-            repaired.append("cdi_regenerated")
+        refreshed = run(["systemctl", "restart", "nvidia-cdi-refresh.service"], timeout=60)
+        if refreshed.ok:
+            repaired.append("cdi_refreshed")
             for name in containers:
                 if run(["docker", "restart", name], timeout=120).ok:
                     repaired.append(f"container_restarted:{name}")

@@ -11,7 +11,6 @@ TB = 1024 ** 4
 
 def cfg(**kw):
     kw.setdefault("node_name", "n1")
-    kw.setdefault("userns_start", 231072)
     return make_cfg(**kw)
 
 

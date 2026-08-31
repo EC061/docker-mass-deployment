@@ -56,11 +56,9 @@ def healthy_runner():
         "zfs version": (True, "zfs-2.2"),
         "docker version": (True, "27"),
         "docker info --format {{.Driver}}": (True, "zfs"),
-        "docker info --format {{.DockerRootDir}}": (True, "/var/lib/docker/231072.231072"),
+        "docker info --format {{.DockerRootDir}}": (True, "/var/lib/docker"),
         "docker info --format {{json .SecurityOptions}}":
             (True, '["name=seccomp,profile=default","name=apparmor"]'),
-        "sysctl -n kernel.unprivileged_userns_clone": (True, "1"),
-        "sysctl -n user.max_user_namespaces": (True, "16384"),
         "nvidia-smi -L": (True, "GPU 0: A100"),
         "nvidia-smi --query-gpu=driver_version": (True, "570.1"),
         "nvidia-ctk cdi list": (True, "nvidia.com/gpu=all\nnvidia.com/gpu=0"),
@@ -75,26 +73,21 @@ def healthy_runner():
 
 def test_structured_healthy_capabilities(monkeypatch):
     monkeypatch.setattr(system, "run", healthy_runner())
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
     caps = system.detect_capabilities(cfg(), deep=False)
-    assert caps.runtime.docker_ok and caps.runtime.userns_ok and caps.runtime.bwrap_ok
+    assert caps.runtime.docker_ok and caps.runtime.userns_ok
+    assert caps.runtime.default_security_ok
     assert caps.nvidia.gpu_count == 1 and caps.nvidia.cdi_ok
     assert caps.health.status == "healthy"
-    assert caps.to_dict()["runtime"]["userns_user"] == "labdockremap"
-    assert caps.to_dict()["runtime"]["userns_start"] == 231072
 
 
 def test_userns_remap_still_enabled_blocks_health(monkeypatch):
-    # A remapped daemon breaks setuid passwd/sudo under --userns=host, so it must be flagged
-    # critical until host-prepare removes the remap and placements are recreated.
+    # A remapped daemon changes the numeric owners seen through bind mounts.
     runner = healthy_runner()
     runner.responses["docker info --format {{json .SecurityOptions}}"] = (
-        True, '["name=seccomp","name=userns:user=labdockremap"]'
+        True, '["name=seccomp","name=apparmor","name=userns:user=labdockremap"]'
     )
     monkeypatch.setattr(system, "run", runner)
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
     caps = system.detect_capabilities(cfg(), deep=False)
     assert caps.health.status == "critical"
@@ -106,8 +99,6 @@ def test_nvml_mismatch_requires_reboot(monkeypatch):
     runner.responses["nvidia-smi -L"] = (False, "")
     runner.responses["nvidia-smi --query-gpu=driver_version"] = (False, "")
     monkeypatch.setattr(system, "run", runner)
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
     caps = system.detect_capabilities(cfg(), deep=False)
     issue = next(i for i in caps.issues if i.code == "nvml_driver_mismatch")
@@ -117,8 +108,6 @@ def test_nvml_mismatch_requires_reboot(monkeypatch):
 def test_missing_smb_mount_is_critical(monkeypatch):
     runner = healthy_runner()
     monkeypatch.setattr(system, "run", runner)
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "")
     monkeypatch.setattr(system.os.path, "ismount", lambda path: False)
     caps = system.detect_capabilities(cfg(cold_backend="smb"), deep=False)
@@ -144,8 +133,6 @@ def _pools_online(monkeypatch, online: set[str]):
 
 def _base(monkeypatch):
     monkeypatch.setattr(system, "run", healthy_runner())
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
 
 
@@ -220,12 +207,9 @@ def test_doctor_flags_a_logical_mount_that_is_down(monkeypatch):
     monkeypatch.setattr(system.service, "discover_labs", lambda tier: ["bio"])
     monkeypatch.setattr(system.mfs, "is_mergerfs_mount", lambda path: False)
     monkeypatch.setattr(system, "_quota_violations", lambda cfg: [])
-    monkeypatch.setattr(system, "_stale_seccomp_containers", lambda cfg: [])
-    monkeypatch.setattr(system, "_stale_systempaths_containers", lambda: [])
-    monkeypatch.setattr(system, "_stale_lab_userns_containers", lambda: [])
-    monkeypatch.setattr(system, "_stale_bwrap_capability_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_privileged_capability_containers", lambda: [])
     monkeypatch.setattr(system, "_stale_bind_propagation_containers", lambda: [])
-    monkeypatch.setattr(system, "_stale_apparmor_containers", lambda cfg: [])
+    monkeypatch.setattr(system, "_stale_security_override_containers", lambda: [])
     monkeypatch.setattr(system, "_first_student_container", lambda: None)
     caps = system.detect_capabilities(cfg(cold_pools=["cold1", "cold2"]), deep=True)
     issue = next(i for i in caps.issues if i.code == "cold_logical_mount_missing")
@@ -257,12 +241,9 @@ def test_doctor_flags_a_branch_quota_sum_over_the_configured_quota(monkeypatch):
     monkeypatch.setattr(system.service, "discover_labs", lambda tier: [])
     monkeypatch.setattr(system, "_quota_violations",
                         lambda cfg: ["cold/bio committed 3000 > configured 2000"])
-    monkeypatch.setattr(system, "_stale_seccomp_containers", lambda cfg: [])
-    monkeypatch.setattr(system, "_stale_systempaths_containers", lambda: [])
-    monkeypatch.setattr(system, "_stale_lab_userns_containers", lambda: [])
-    monkeypatch.setattr(system, "_stale_bwrap_capability_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_privileged_capability_containers", lambda: [])
     monkeypatch.setattr(system, "_stale_bind_propagation_containers", lambda: [])
-    monkeypatch.setattr(system, "_stale_apparmor_containers", lambda cfg: [])
+    monkeypatch.setattr(system, "_stale_security_override_containers", lambda: [])
     monkeypatch.setattr(system, "_first_student_container", lambda: None)
     caps = system.detect_capabilities(cfg(), deep=True)
     assert any(i.code == "storage_quota_invariant" for i in caps.issues)
@@ -273,8 +254,6 @@ def test_stale_cdi_is_critical(monkeypatch):
     runner = healthy_runner()
     runner.responses["nvidia-ctk cdi list"] = (True, "nvidia.com/gpu=all")
     monkeypatch.setattr(system, "run", runner)
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
     caps = system.detect_capabilities(cfg(), deep=False)
     assert any(i.code == "nvidia_cdi_stale" and i.repairable for i in caps.issues)
@@ -285,8 +264,6 @@ def test_driver_or_secure_boot_failure_is_operator_only(monkeypatch):
     runner.responses["nvidia-smi -L"] = (False, "")
     runner.responses["nvidia-smi --query-gpu=driver_version"] = (False, "")
     monkeypatch.setattr(system, "run", runner)
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "")
     monkeypatch.setattr(system, "_nvidia_hardware_count", lambda: 1)
     caps = system.detect_capabilities(cfg(), deep=False)
@@ -294,48 +271,17 @@ def test_driver_or_secure_boot_failure_is_operator_only(monkeypatch):
     assert issue.repairable is False
 
 
-def test_docker_root_ok_accepts_userns_remap_nested_path(monkeypatch):
+def test_docker_root_ok_accepts_configured_path(monkeypatch):
     runner = healthy_runner()
     monkeypatch.setattr(system, "run", runner)
     assert system._docker_root_ok(cfg())
 
 
-def test_docker_root_ok_rejects_wrong_remap_suffix(monkeypatch):
+def test_docker_root_ok_rejects_nested_remap_path(monkeypatch):
     runner = healthy_runner()
     runner.responses["docker info --format {{.DockerRootDir}}"] = (True, "/var/lib/docker/0.0")
     monkeypatch.setattr(system, "run", runner)
     assert not system._docker_root_ok(cfg())
-
-
-def test_stale_seccomp_containers_detects_missing_and_changed_labels(monkeypatch):
-    monkeypatch.setattr(system.docker, "security_profile_digest", lambda path: "current")
-    monkeypatch.setattr(system, "run", Runner({
-        "docker ps": (True, "lab-old\nlab-stale\tprevious\nlab-current\tcurrent\n"),
-    }))
-    assert system._stale_seccomp_containers(cfg()) == ["lab-old", "lab-stale"]
-
-
-def test_stale_systempaths_containers_detects_old_contract(monkeypatch):
-    monkeypatch.setattr(system, "run", Runner({
-        "docker ps": (True, "lab-old\nlab-stale\nlab-current\n"),
-        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-old":
-            (True, "null\tnull"),
-        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-stale":
-            (True, '["/proc/kcore"]\t["/proc/sys"]'),
-        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-current":
-            (True, "[]\t[]"),
-    }))
-    assert system._stale_systempaths_containers() == ["lab-old", "lab-stale"]
-
-
-def test_stale_lab_userns_containers_detects_remapped_contract(monkeypatch):
-    monkeypatch.setattr(system, "run", Runner({
-        "docker ps": (True, "lab-old\nlab-remapped\nlab-current\n"),
-        "docker inspect --format {{.HostConfig.UsernsMode}} lab-old": (True, ""),
-        "docker inspect --format {{.HostConfig.UsernsMode}} lab-remapped": (True, "default"),
-        "docker inspect --format {{.HostConfig.UsernsMode}} lab-current": (True, "host"),
-    }))
-    assert system._stale_lab_userns_containers() == ["lab-old", "lab-remapped"]
 
 
 def test_stale_bind_propagation_containers_detects_private_binds(monkeypatch):
@@ -353,19 +299,21 @@ def test_stale_bind_propagation_containers_detects_private_binds(monkeypatch):
     assert system._stale_bind_propagation_containers() == ["lab-old", "lab-half"]
 
 
-def test_stale_apparmor_containers_detects_unconfined(monkeypatch):
-    # Unprivileged bwrap cannot write its own uid_map when the task is AppArmor-unconfined, so an
-    # unconfined lab (or one whose profile cannot be read) must be flagged for recreation.
+def test_stale_security_overrides_detects_custom_and_unconfined_containers(monkeypatch):
+    inspect = (
+        "docker inspect --format "
+        "{{json .HostConfig.SecurityOpt}}\t{{.AppArmorProfile}}"
+    )
     monkeypatch.setattr(system, "run", Runner({
-        "docker ps": (True, "lab-old\nlab-unconfined\nlab-current\n"),
-        "docker inspect --format {{.AppArmorProfile}} lab-old": (True, ""),
-        "docker inspect --format {{.AppArmorProfile}} lab-unconfined": (True, "unconfined"),
-        "docker inspect --format {{.AppArmorProfile}} lab-current": (True, "lab-codex"),
+        "docker ps": (True, "lab-custom\nlab-unconfined\nlab-current\n"),
+        f"{inspect} lab-custom": (True, '["seccomp=/tmp/custom.json"]\tlab-custom'),
+        f"{inspect} lab-unconfined": (True, '["apparmor=unconfined"]\t'),
+        f"{inspect} lab-current": (True, "null\tdocker-default"),
     }))
-    assert system._stale_apparmor_containers(cfg()) == ["lab-old", "lab-unconfined"]
+    assert system._stale_security_override_containers() == ["lab-custom", "lab-unconfined"]
 
 
-def test_stale_bwrap_capability_containers_detects_legacy_capabilities(monkeypatch):
+def test_stale_privileged_capability_containers(monkeypatch):
     monkeypatch.setattr(system, "run", Runner({
         "docker ps": (True, "lab-current\nlab-partial\nlab-legacy\n"),
         "docker inspect --format {{json .HostConfig.CapAdd}} lab-current": (True, "null"),
@@ -374,150 +322,41 @@ def test_stale_bwrap_capability_containers_detects_legacy_capabilities(monkeypat
         "docker inspect --format {{json .HostConfig.CapAdd}} lab-legacy":
             (True, '["CAP_SYS_ADMIN","CAP_NET_ADMIN","CAP_SYS_PTRACE"]'),
     }))
-    assert system._stale_bwrap_capability_containers() == ["lab-partial", "lab-legacy"]
+    assert system._stale_privileged_capability_containers() == ["lab-partial", "lab-legacy"]
 
 
-def test_deep_doctor_accepts_bwrap_and_cuda_toolkit(monkeypatch):
+def test_deep_doctor_accepts_docker_defaults_and_cuda_toolkit(monkeypatch):
     runner = healthy_runner()
     runner.responses.update({
-        'docker ps --filter label=lab-agent.managed=true --format {{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}':
-            (True, "lab-test\tcurrent\n"),
         "docker ps --filter label=lab-agent.managed=true --format {{.Names}}": (True, "lab-test\n"),
-        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
-            (True, "[]\t[]"),
-        "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
         "docker inspect --format {{range .HostConfig.Mounts}}{{.Target}}={{.BindOptions.Propagation}} {{end}} lab-test":
             (True, "/home=rslave /cold-storage=rslave"),
         "docker inspect --format {{json .HostConfig.CapAdd}} lab-test": (True, "null"),
-        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "lab-codex"),
+        "docker inspect --format {{json .HostConfig.SecurityOpt}}\t{{.AppArmorProfile}} lab-test":
+            (True, "null\tdocker-default"),
         "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
-        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "755"),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
-            (True, "bwrap works"),
-        # Seccomp enforcement: add_key returns EPERM (probe exits 0 = blocked).
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test python3":
-            (True, ""),
         "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test nvcc --version":
             (True, ""),
     })
     monkeypatch.setattr(system, "run", runner)
-    monkeypatch.setattr(system.docker, "security_profile_digest", lambda path: "current")
     monkeypatch.setattr(system.docker, "wait_ssh_ready", lambda container, **kwargs: True)
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
 
     caps = system.detect_capabilities(cfg(), deep=True)
 
-    assert caps.runtime.bwrap_ok
+    assert caps.runtime.default_security_ok
     assert caps.runtime.cuda_toolkit_ok
     assert caps.health.status == "healthy"
-    assert not any(i.code == "bubblewrap_failed" for i in caps.issues)
-    assert not any(i.code == "seccomp_enforcement_failed" for i in caps.issues)
-    assert not any(i.code == "container_apparmor_stale" for i in caps.issues)
-    assert any(command.endswith(
-        "bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo bwrap works"
-    ) for command in runner.calls)
+    assert not any(i.code == "container_security_overrides_stale" for i in caps.issues)
 
 
-def test_seccomp_enforcement_failure_is_critical(monkeypatch):
+def test_missing_default_security_integration_is_critical(monkeypatch):
     runner = healthy_runner()
-    runner.responses.update({
-        'docker ps --filter label=lab-agent.managed=true --format {{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}':
-            (True, "lab-test\tcurrent\n"),
-        "docker ps --filter label=lab-agent.managed=true --format {{.Names}}": (True, "lab-test\n"),
-        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
-            (True, "[]\t[]"),
-        "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
-        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test": (True, "null"),
-        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "lab-codex"),
-        "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
-        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "755"),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
-            (True, "bwrap works"),
-        # Seccomp enforcement: add_key not blocked with EPERM (probe exits 1 = not enforcing).
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test python3":
-            (False, ""),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test nvcc --version":
-            (True, ""),
-    })
+    runner.responses["docker info --format {{json .SecurityOptions}}"] = (
+        True, '["name=seccomp,profile=default"]'
+    )
     monkeypatch.setattr(system, "run", runner)
-    monkeypatch.setattr(system.docker, "security_profile_digest", lambda path: "current")
-    monkeypatch.setattr(system.docker, "wait_ssh_ready", lambda container, **kwargs: True)
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
     monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
-
-    caps = system.detect_capabilities(cfg(), deep=True)
-
-    assert caps.runtime.bwrap_ok
-    issue = next(i for i in caps.issues if i.code == "seccomp_enforcement_failed")
+    caps = system.detect_capabilities(cfg(), deep=False)
+    issue = next(i for i in caps.issues if i.code == "docker_default_security")
     assert issue.severity == "critical"
-    assert issue.repairable is True
-
-
-def test_unconfined_container_is_flagged_stale(monkeypatch):
-    runner = healthy_runner()
-    runner.responses.update({
-        'docker ps --filter label=lab-agent.managed=true --format {{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}':
-            (True, "lab-test\tcurrent\n"),
-        "docker ps --filter label=lab-agent.managed=true --format {{.Names}}": (True, "lab-test\n"),
-        "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
-            (True, "[]\t[]"),
-        "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
-        "docker inspect --format {{json .HostConfig.CapAdd}} lab-test": (True, "null"),
-        # Container was created unconfined (by the previous setuid-bwrap contract): unprivileged
-        # bwrap cannot write its uid_map there, so doctor must demand recreation.
-        "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "unconfined"),
-        "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),
-        "docker exec lab-test stat -c %a /usr/bin/bwrap": (True, "755"),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test bwrap":
-            (True, "bwrap works"),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test python3":
-            (True, ""),
-        "docker exec -u alice -e HOME=/home/alice -e USER=alice -e LOGNAME=alice lab-test nvcc --version":
-            (True, ""),
-    })
-    monkeypatch.setattr(system, "run", runner)
-    monkeypatch.setattr(system.docker, "security_profile_digest", lambda path: "current")
-    monkeypatch.setattr(system.docker, "wait_ssh_ready", lambda container, **kwargs: True)
-    monkeypatch.setattr(system, "_security_profiles_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_subid_ok", lambda cfg: True)
-    monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
-
-    caps = system.detect_capabilities(cfg(), deep=True)
-
-    issue = next(i for i in caps.issues if i.code == "container_apparmor_stale")
-    assert issue.severity == "critical"
-    assert "lab-test" in issue.message
-
-
-def test_seccomp_probe_exit_code_tracks_eperm():
-    """The probe must exit 0 exactly when the syscall fails with EPERM (seccomp enforcing).
-
-    Runs the real probe script in a subprocess and compares it against the errno the same
-    syscall produces in-process, so an inverted mapping fails regardless of whether the test
-    host itself filters add_key(2).
-    """
-    import ctypes
-    import subprocess
-    import sys
-
-    if sys.platform != "linux":
-        pytest.skip("the seccomp syscall probe is Linux-only")
-
-    libc = ctypes.CDLL("libc.so.6", use_errno=True)
-    libc.syscall(248, 0, 0, 0, 0)
-    errno = ctypes.get_errno()
-    proc = subprocess.run([sys.executable, "-c", system.SECCOMP_PROBE], timeout=30)
-    assert proc.returncode == (0 if errno == 1 else 1)
-
-
-def test_seccomp_enforcement_ok_returns_true_on_blocked(monkeypatch):
-    monkeypatch.setattr(system, "run", lambda *a, **k: CommandResult(True, [], 0, "", ""))
-    assert system._seccomp_enforcement_ok("lab-test", "alice")
-
-
-def test_seccomp_enforcement_ok_returns_false_on_unconfined(monkeypatch):
-    monkeypatch.setattr(system, "run", lambda *a, **k: CommandResult(False, [], 1, "", ""))
-    assert not system._seccomp_enforcement_ok("lab-test", "alice")

@@ -1,21 +1,18 @@
-"""Idempotent host preparation for Docker, storage, and bubblewrap security profiles.
+"""Idempotent host preparation for Docker, storage, and NVIDIA CDI.
 
 Besides converging config, this installs everything host-prepare itself depends on: Docker Engine
-(from Docker's official apt repo), ZFS userspace tools, AppArmor tooling, and — only when NVIDIA
-GPU hardware is present — the NVIDIA Container Toolkit. It never installs the NVIDIA kernel driver
-itself (needs a reboot and hardware-specific version choice) or creates zpools (disk topology is
-the operator's call); both remain documented manual prerequisites.
+(from Docker's official apt repo), ZFS userspace tools, and — only when NVIDIA GPU hardware is
+present — the CDI-only NVIDIA Container Toolkit base package. It never installs the NVIDIA kernel
+driver itself (needs a reboot and hardware-specific version choice) or creates zpools (disk topology
+is the operator's call); both remain documented manual prerequisites.
 """
 
 from __future__ import annotations
 
-import grp
 import json
 import os
-import pwd
 import shutil
 from collections.abc import Sequence
-from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -25,17 +22,19 @@ from .storage import service as storage_service
 from .system import _nvidia_hardware_count, _pool_exists
 
 DAEMON_JSON = Path("/etc/docker/daemon.json")
-SUBUID = Path("/etc/subuid")
-SUBGID = Path("/etc/subgid")
-SYSCTL_FILE = Path("/etc/sysctl.d/90-lab-codex.conf")
-APPARMOR_DEST = Path("/etc/apparmor.d/lab-codex")
+SYSCTL_FILE = Path("/etc/sysctl.d/90-lab-agent.conf")
+LEGACY_SYSCTL_FILE = Path("/etc/sysctl.d/90-lab-codex.conf")
+LEGACY_SECCOMP_PROFILE = Path("/etc/lab-agent/security/lab-codex-seccomp.json")
+LEGACY_APPARMOR_PROFILE = Path("/etc/apparmor.d/lab-codex")
+LEGACY_DISTRO_NAMESPACE_PROFILE = Path("/etc/apparmor.d/bwrap-userns-restrict")
+LEGACY_NVIDIA_CDI_SPEC = Path("/etc/cdi/nvidia.yaml")
 STORAGE_UNIT_PATH = Path("/etc/systemd/system/lab-storage-mounts.service")
 STORAGE_UNIT = "lab-storage-mounts.service"
 
 # Packages available from the default Ubuntu archive. ca-certificates/curl/gnupg are fetched first
 # because adding the Docker/NVIDIA apt repos below needs them.
 PREREQ_APT_PACKAGES = ("ca-certificates", "curl", "gnupg")
-CORE_APT_PACKAGES = ("zfsutils-linux", "apparmor", "apparmor-utils")
+CORE_APT_PACKAGES = ("zfsutils-linux", "apparmor")
 # Installed only when a tier is configured with the mergerfs backend. `attr` provides
 # getfattr/setfattr, which is how a branch is added to a LIVE mergerfs mount (no remount, so running
 # lab containers keep their bind mount); `fuse3` provides fusermount3 for unmounting.
@@ -43,7 +42,10 @@ MERGERFS_APT_PACKAGES = ("mergerfs", "attr", "fuse3")
 DOCKER_APT_PACKAGES = (
     "docker-ce", "docker-ce-cli", "containerd.io", "docker-buildx-plugin", "docker-compose-plugin",
 )
-NVIDIA_APT_PACKAGES = ("nvidia-container-toolkit",)
+NVIDIA_APT_PACKAGES = ("nvidia-container-toolkit-base",)
+LEGACY_NVIDIA_APT_PACKAGES = (
+    "nvidia-container-toolkit", "nvidia-container-runtime", "nvidia-docker2",
+)
 
 DOCKER_GPG_KEY = Path("/etc/apt/keyrings/docker.asc")
 DOCKER_APT_LIST = Path("/etc/apt/sources.list.d/docker.list")
@@ -55,45 +57,37 @@ NVIDIA_APT_LIST_URL = (
 )
 
 
-def mapped_host_id(cfg: AgentConfig, container_id: int) -> int:
-    if not 0 <= container_id < cfg.userns_size:
-        raise ValueError(f"container id {container_id} is outside the subordinate-id range")
-    return cfg.userns_start + container_id
+LEGACY_NVIDIA_CGROUPFS_EXEC_OPT = "native.cgroupdriver=cgroupfs"
 
 
-# Certain runc versions drop a container's access to its GPU device nodes on `systemctl
-# daemon-reload` when using the systemd cgroup driver and the NVIDIA driver hasn't created the
-# /dev/char symlinks those runc versions need to re-apply the device cgroup rule (see
-# https://github.com/opencontainers/runc/discussions/1133). Docker's own cgroupfs driver isn't
-# affected, so GPU nodes get pinned to it.
-NVIDIA_CGROUPFS_EXEC_OPT = "native.cgroupdriver=cgroupfs"
-
-
-def merge_daemon_config(current: dict[str, Any], cfg: AgentConfig, *, use_zfs: bool,
-                         gpu_present: bool) -> dict[str, Any]:
+def merge_daemon_config(
+    current: dict[str, Any], cfg: AgentConfig, *, use_zfs: bool
+) -> dict[str, Any]:
     merged = dict(current)
-    # Deliberately NOT enabling "userns-remap". Labs run with --userns=host (bubblewrap needs the
-    # initial user namespace, see executors/docker.py), which opts each container out of remapping
-    # anyway — so a daemon-wide remap gives labs no containment. Its only real effect is that Docker
-    # unpacks the image into a remapped graph store and chowns every file, including setuid
-    # /usr/bin/passwd and /usr/bin/sudo, to the subordinate base UID; under --userns=host those
-    # binaries then elevate to that unprivileged UID instead of real root, so passwd, sudo, and
-    # every other setuid-root program fail inside the lab ("Authentication token manipulation
-    # error"). Drop any stale key an earlier agent left behind.
+    # Managed labs rely on identity numeric UIDs across local and SMB storage, so the daemon uses
+    # Docker's normal non-remapped default. Drop any stale key an earlier agent left behind.
     merged.pop("userns-remap", None)
+    if merged.get("default-runtime") == "nvidia":
+        merged.pop("default-runtime")
+    runtimes = dict(merged.get("runtimes", {}))
+    runtimes.pop("nvidia", None)
+    if runtimes:
+        merged["runtimes"] = runtimes
+    else:
+        merged.pop("runtimes", None)
     merged["data-root"] = cfg.docker_data_root
     if use_zfs:
         # The data-root is a native ZFS dataset; the zfs graphdriver clones it per layer/container
         # and honours --storage-opt size via ZFS's own "quota" property.
         merged["storage-driver"] = "zfs"
-    if gpu_present:
-        # Replace rather than append: Docker rejects daemon.json if "native.cgroupdriver" appears
-        # in exec-opts more than once, so any prior value (ours from an earlier run, or an
-        # operator's) is dropped in favour of the workaround.
-        exec_opts = [o for o in merged.get("exec-opts", [])
-                     if not o.startswith("native.cgroupdriver=")]
-        exec_opts.append(NVIDIA_CGROUPFS_EXEC_OPT)
+    # CDI records GPU device access in the OCI config, so the old cgroupfs workaround is no longer
+    # needed. Remove only the exact value previously managed here and preserve operator settings.
+    exec_opts = [o for o in merged.get("exec-opts", [])
+                 if o != LEGACY_NVIDIA_CGROUPFS_EXEC_OPT]
+    if exec_opts:
         merged["exec-opts"] = exec_opts
+    else:
+        merged.pop("exec-opts", None)
     return merged
 
 
@@ -113,27 +107,6 @@ def docker_apt_source_line(arch: str, codename: str) -> str:
 def rewrite_nvidia_apt_list(raw: str) -> str:
     """Inject signed-by=<our keyring> into NVIDIA's published sources.list content."""
     return raw.replace("deb https://", f"deb [signed-by={NVIDIA_GPG_KEY}] https://")
-
-
-def replace_subid_entry(text: str, user: str, start: int, size: int) -> str:
-    lines = [line for line in text.splitlines() if line and not line.startswith(f"{user}:")]
-    lines.append(f"{user}:{start}:{size}")
-    return "\n".join(lines) + "\n"
-
-
-def subid_conflicts(text: str, user: str, start: int, size: int) -> bool:
-    end = start + size
-    for line in text.splitlines():
-        parts = line.split(":")
-        if len(parts) != 3 or parts[0] == user:
-            continue
-        try:
-            other_start, other_size = int(parts[1]), int(parts[2])
-        except ValueError:
-            continue
-        if start < other_start + other_size and other_start < end:
-            return True
-    return False
 
 
 def _write(path: Path, text: str, mode: int = 0o644) -> None:
@@ -270,55 +243,53 @@ def ensure_mergerfs_available() -> bool:
     return True
 
 
-def _ensure_nvidia_toolkit_if_present(gpu_present: bool) -> None:
-    """Install nvidia-container-toolkit when NVIDIA GPU hardware is present. Never touches the
-    proprietary driver itself; that stays a manual, reboot-requiring operator step."""
-    if not gpu_present or not _missing_packages(NVIDIA_APT_PACKAGES):
+def _ensure_nvidia_cdi_if_present(gpu_present: bool) -> None:
+    """Install the latest CDI-only toolkit package when NVIDIA hardware is present.
+
+    Running apt install even when the package exists intentionally converges an existing node to
+    the newest version published by NVIDIA's stable repository. The kernel driver remains a manual,
+    reboot-requiring operator step.
+    """
+    if not gpu_present:
         return
-    if _ensure_nvidia_apt_repo():
-        _apt_update()
-    _apt_install(NVIDIA_APT_PACKAGES)
+    _ensure_nvidia_apt_repo()
+    _apt_update()
+    result = run([
+        "apt-get", "install", "-y",
+        "-o", "Dpkg::Options::=--force-confdef", "-o", "Dpkg::Options::=--force-confold",
+        *NVIDIA_APT_PACKAGES,
+    ], timeout=600)
+    if not result.ok:
+        raise RuntimeError(f"apt-get install failed for {', '.join(NVIDIA_APT_PACKAGES)}: "
+                           f"{result.logs}")
+    installed_legacy = [pkg for pkg in LEGACY_NVIDIA_APT_PACKAGES if _dpkg_installed(pkg)]
+    if installed_legacy:
+        removed = run(["apt-get", "remove", "-y", *installed_legacy], timeout=600)
+        if not removed.ok:
+            raise RuntimeError(f"could not remove legacy NVIDIA runtime packages: {removed.logs}")
 
 
-def _ensure_account(user: str) -> None:
-    try:
-        grp.getgrnam(user)
-    except KeyError:
-        result = run(["groupadd", "--system", user])
-        if not result.ok:
-            raise RuntimeError(result.logs) from None
-    try:
-        pwd.getpwnam(user)
-    except KeyError:
-        result = run([
-            "useradd", "--system", "--gid", user, "--home-dir", "/nonexistent",
-            "--shell", "/usr/sbin/nologin", user,
-        ])
-        if not result.ok:
-            raise RuntimeError(result.logs) from None
+def _refresh_nvidia_cdi(gpu_present: bool) -> None:
+    if not gpu_present:
+        return
+    if LEGACY_NVIDIA_CDI_SPEC.exists():
+        LEGACY_NVIDIA_CDI_SPEC.unlink()
+    enabled = run([
+        "systemctl", "enable", "--now",
+        "nvidia-cdi-refresh.path", "nvidia-cdi-refresh.service",
+    ], timeout=60)
+    if not enabled.ok:
+        raise RuntimeError(f"could not enable NVIDIA CDI refresh: {enabled.logs}")
 
 
-def _install_security_assets(cfg: AgentConfig) -> None:
-    asset_root = resources.files("lab_agent").joinpath("assets")
-    seccomp = asset_root.joinpath("lab-codex-seccomp.json").read_text(encoding="utf-8")
-    apparmor = asset_root.joinpath("lab-codex.apparmor").read_text(encoding="utf-8")
-    if not Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").exists():
-        # AppArmor 3-era Ubuntu kernels do not mediate userns and reject the AppArmor 4 rule.
-        apparmor = apparmor.replace("    userns,\n", "")
-    _write(Path(cfg.seccomp_profile), seccomp)
-    _write(APPARMOR_DEST, apparmor)
-    loaded = run(["apparmor_parser", "-r", str(APPARMOR_DEST)], timeout=30)
-    if not loaded.ok:
-        raise RuntimeError(f"could not load lab-codex AppArmor profile: {loaded.logs}")
-
-    distro_bwrap = Path("/usr/share/apparmor/extra-profiles/bwrap-userns-restrict")
-    if distro_bwrap.exists():
-        target = Path("/etc/apparmor.d/bwrap-userns-restrict")
-        shutil.copyfile(distro_bwrap, target)
-        target.chmod(0o644)
-        loaded = run(["apparmor_parser", "-r", str(target)], timeout=30)
-        if not loaded.ok:
-            raise RuntimeError(f"could not load bwrap-userns-restrict: {loaded.logs}")
+def _remove_legacy_security_assets() -> None:
+    """Remove profiles installed by older agents before Docker's defaults were restored."""
+    for profile in (LEGACY_APPARMOR_PROFILE, LEGACY_DISTRO_NAMESPACE_PROFILE):
+        if profile.exists():
+            run(["apparmor_parser", "-R", str(profile)], timeout=30)
+            profile.unlink()
+    if LEGACY_SECCOMP_PROFILE.exists():
+        LEGACY_SECCOMP_PROFILE.unlink()
 
 
 def _docker_pool_ready(cfg: AgentConfig) -> bool:
@@ -466,49 +437,23 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
     gpu_present = _nvidia_hardware_count() > 0
     _ensure_base_packages()
     mergerfs_installed = _ensure_mergerfs_if_required(cfg)
-    _ensure_nvidia_toolkit_if_present(gpu_present)
-
-    if not Path("/proc/self/ns/user").exists():
-        raise RuntimeError("kernel lacks user namespace support")
-    try:
-        proc_status = Path("/proc/self/status").read_text(encoding="utf-8")
-    except OSError:
-        proc_status = ""
-    if "Seccomp:" not in proc_status:
-        raise RuntimeError("kernel lacks seccomp filtering support")
-    if not Path("/sys/kernel/security/apparmor/features/domain/stack").exists():
-        raise RuntimeError("kernel lacks AppArmor namespace support")
-
-    # Reserve the subordinate-ID range for the labdockremap account. The daemon no longer consumes
-    # it (see merge_daemon_config — labs run --userns=host, not remapped), but keeping the exact
-    # reservation stops the range being handed to another account and keeps the numeric mapping the
-    # controller reports for cross-node cold-storage consistency stable.
-    _ensure_account(cfg.userns_user)
-    for path in (SUBUID, SUBGID):
-        current = path.read_text(encoding="utf-8") if path.exists() else ""
-        if subid_conflicts(current, cfg.userns_user, cfg.userns_start, cfg.userns_size):
-            raise RuntimeError(f"requested subordinate-ID range overlaps another account in {path}")
-        _write(path, replace_subid_entry(current, cfg.userns_user,
-                                         cfg.userns_start, cfg.userns_size))
+    _ensure_nvidia_cdi_if_present(gpu_present)
+    _remove_legacy_security_assets()
 
     sysctls = (
-        "kernel.unprivileged_userns_clone = 1\n"
-        "user.max_user_namespaces = 16384\n"
-        # Labs run --userns=host, so IDE file watchers inside containers (VS Code Remote-SSH et
-        # al.) draw from the host kernel's per-UID inotify budget. Distro defaults exhaust on large
+        # IDE file watchers inside containers draw from the host kernel's per-UID inotify budget.
+        # Distro defaults exhaust on large
         # workspaces and surface as ENOSPC in the student's editor. Each student owns a unique host
         # UID, so these caps are per student, not shared across the node.
         "fs.inotify.max_user_watches = 524288\n"
         "fs.inotify.max_user_instances = 1024\n"
     )
-    if Path("/proc/sys/kernel/apparmor_restrict_unprivileged_userns").exists():
-        sysctls += "kernel.apparmor_restrict_unprivileged_userns = 1\n"
+    if LEGACY_SYSCTL_FILE.exists():
+        LEGACY_SYSCTL_FILE.unlink()
     _write(SYSCTL_FILE, sysctls)
     applied = run(["sysctl", "--system"], timeout=60)
     if not applied.ok:
         raise RuntimeError(applied.logs)
-
-    _install_security_assets(cfg)
 
     docker_on_zfs = _prepare_docker_storage(cfg)
     storage_report = _prepare_lab_storage(cfg)
@@ -519,28 +464,15 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
             current = json.loads(DAEMON_JSON.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             raise RuntimeError(f"invalid {DAEMON_JSON}: {exc}") from exc
-    merged = merge_daemon_config(current, cfg, use_zfs=docker_on_zfs, gpu_present=gpu_present)
+    merged = merge_daemon_config(current, cfg, use_zfs=docker_on_zfs)
     _write(DAEMON_JSON, json.dumps(merged, indent=2) + "\n")
 
-    if shutil.which("nvidia-ctk"):
-        Path("/etc/cdi").mkdir(parents=True, exist_ok=True)
-        generated = run([
-            "nvidia-ctk", "cdi", "generate", "--output=/etc/cdi/nvidia.yaml"
-        ], timeout=60)
-        if not generated.ok:
-            raise RuntimeError(generated.logs)
-        units = run(["systemctl", "list-unit-files", "nvidia-cdi-refresh.path"], timeout=20)
-        if units.ok and "nvidia-cdi-refresh.path" in units.stdout:
-            enabled = run(["systemctl", "enable", "--now", "nvidia-cdi-refresh.path"], timeout=30)
-            if not enabled.ok:
-                raise RuntimeError(enabled.logs)
+    _refresh_nvidia_cdi(gpu_present)
 
     restarted = run(["systemctl", "restart", "docker"], timeout=120)
     if not restarted.ok:
         raise RuntimeError(restarted.logs)
     return {
-        "userns_user": cfg.userns_user,
-        "subordinate_range": [cfg.userns_start, cfg.userns_size],
         "docker_data_root": cfg.docker_data_root,
         "docker_storage_driver": "zfs" if docker_on_zfs else "default",
         "docker_dataset": cfg.docker_dataset if docker_on_zfs else None,
@@ -554,7 +486,5 @@ def prepare_host(cfg: AgentConfig) -> dict[str, Any]:
         },
         "storage_mounts": storage_report,
         "storage_unit": str(STORAGE_UNIT_PATH),
-        "gpu_cgroupfs_workaround": gpu_present,
-        "seccomp_profile": cfg.seccomp_profile,
-        "apparmor_profile": cfg.apparmor_profile,
+        "nvidia_cdi_spec": "/var/run/cdi/nvidia.yaml" if gpu_present else None,
     }

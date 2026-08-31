@@ -5,8 +5,8 @@ The node agent mounts `/fast/<lab>` at container `/home` and `/cold-storage/<lab
 student accounts, explicit storage telemetry, NVIDIA CDI devices, and node health/maintenance tasks.
 
 On an SMB client, `/cold-storage` must be an active mount of the owner node's cold tree. The same
-numeric Docker user-namespace mapping is required on both nodes so either placement can safely and
-idempotently converge student-directory ownership.
+identity numeric UIDs are required on both nodes so either placement can safely and idempotently
+converge student-directory ownership.
 
 Storage configuration supports the legacy `[agent] fast_pool/slow_pool/slow_backend` keys and the
 generic schema below. Loading legacy values produces the same single-pool model; the next config
@@ -51,8 +51,8 @@ sudo uvx --from "$REPO" lab-agent start
 ```
 
 After a lab and student have been provisioned, run `sudo lab-agent doctor`. Health is critical if
-Docker userns remapping, the real unprivileged-bubblewrap smoke test, `nvcc --version`, NVML/CDI, ZFS, or
-the configured SMB mount fails.
+Docker's default security integrations, identity UIDs, `nvcc --version`, NVML/CDI, ZFS, or the
+configured SMB mount fails.
 
 Development checks:
 

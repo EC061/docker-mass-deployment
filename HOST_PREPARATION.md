@@ -7,7 +7,7 @@ needs an NVIDIA driver installed and pinned before the agent touches anything.
 
 ```
 1. Install the agent          (gives you the lab-agent CLI)
-2. Run host-prepare           (installs Docker, ZFS utils, AppArmor, nvidia-container-toolkit)
+2. Run host-prepare           (installs Docker, ZFS utils, AppArmor, and CDI support)
 3. Create/import ZFS pools    (or initialize a drive in Node -> Storage)
 4. Run host-prepare again     (native Docker ZFS + persistent tier mount service)
 5. Install + pin NVIDIA driver (manual step — reboot required)
@@ -47,22 +47,18 @@ packages beyond the OS are required:
 - **Docker Engine** (from Docker's official apt repo)
 - **ZFS userspace tools** (`zfsutils-linux`)
 - **mergerfs, FUSE and xattr tools** when either tier uses the `mergerfs` backend
-- **AppArmor tooling** (`apparmor`, `apparmor-utils`)
-- **NVIDIA Container Toolkit** (only when GPU hardware is detected —
-  never the driver itself)
+- **AppArmor** (Docker uses its standard `docker-default` profile)
+- **NVIDIA Container Toolkit base** from NVIDIA's stable repository (only when GPU hardware is
+  detected; the legacy runtime/hook and the driver itself are not installed)
 
 It also:
 
-- reserves the `labdockremap` account and its exact subuid/subgid range
-- enforces `kernel.unprivileged_userns_clone=1`,
-  `user.max_user_namespaces=16384`,
-  `kernel.apparmor_restrict_unprivileged_userns=1`,
-  `fs.inotify.max_user_watches=524288`, and
+- enforces `fs.inotify.max_user_watches=524288` and
   `fs.inotify.max_user_instances=1024` (labs share the host kernel's
   per-UID inotify budget; the raised caps stop VS Code Remote-SSH
   hitting ENOSPC "unable to watch for file changes" on large workspaces)
-- installs the seccomp profile and AppArmor profile
-- writes `/etc/docker/daemon.json`
+- writes `/etc/docker/daemon.json`; lab containers otherwise inherit Docker's standard runtime,
+  namespaces, capabilities, seccomp policy, AppArmor profile, and protected system paths
 
 On a brand-new node the zpools don't exist yet, so Docker gets its plain
 default backing store. That is expected — the next two steps fix it.
@@ -141,10 +137,10 @@ This run also applies `docker_quota_gb` (default 1024 GiB) as a live ZFS
 quota on the dataset. Change the value in the config and re-run
 host-prepare to resize immediately, with no unmount or reboot.
 
-On GPU nodes, host-prepare additionally pins Docker's cgroup driver to
-`cgroupfs` (workaround for a known runc/systemd-cgroup-driver bug that
-drops GPU device access on `systemctl daemon-reload`) and regenerates
-NVIDIA CDI at `/etc/cdi/nvidia.yaml`.
+On GPU nodes, host-prepare installs the latest CDI-only NVIDIA package and enables the packaged
+`nvidia-cdi-refresh.path` and `.service` units. They maintain
+`/var/run/cdi/nvidia.yaml`; managed labs request every GPU with
+`--device nvidia.com/gpu=all`. Docker keeps its normal cgroup driver.
 
 It also installs and enables `lab-storage-mounts.service`. The oneshot service runs after ZFS
 import/mount and before Docker, computes the safe live branch set, and creates one mergerfs mount per
@@ -350,13 +346,12 @@ sudo uvx --from "$REPO" lab-agent start
 sudo uvx --from "$REPO" lab-agent doctor
 ```
 
-Doctor needs a running lab with at least one provisioned student because
-it executes real namespace and Codex smoke tests as that ordinary user.
+Doctor needs a running lab with at least one provisioned student because it executes the CUDA smoke
+test as that ordinary user.
 
 Verify inside a running lab:
 
 ```bash
-bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"
 nvcc --version
 nvidia-smi
 ```
@@ -366,10 +361,9 @@ Inspect the resulting Docker and system settings:
 ```bash
 docker info --format '{{json .SecurityOptions}}'
 sudo cat /etc/docker/daemon.json
-sudo aa-status | grep lab-codex
-sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
-  kernel.apparmor_restrict_unprivileged_userns \
-  fs.inotify.max_user_watches fs.inotify.max_user_instances
+sudo systemctl status nvidia-cdi-refresh.path nvidia-cdi-refresh.service
+nvidia-ctk cdi list
+sysctl fs.inotify.max_user_watches fs.inotify.max_user_instances
 ```
 
 ## Persistent layout reference

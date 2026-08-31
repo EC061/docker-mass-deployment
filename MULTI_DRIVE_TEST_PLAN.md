@@ -336,7 +336,7 @@ sudo uvx --from "$REPO" lab-agent edit-config     # or write the file directly
 sudo uvx --from "$REPO" lab-agent host-prepare
 ```
 
-**Expect:** Docker CE, `zfsutils-linux`, apparmor tooling, **and** `mergerfs`/`attr`/`fuse3`
+**Expect:** Docker CE, `zfsutils-linux`, AppArmor, **and** `mergerfs`/`attr`/`fuse3`
 (because `[storage.fast]` declares the mergerfs backend). Docker keeps its default backing store —
 the pools do not exist yet. That is correct.
 
@@ -346,16 +346,12 @@ the pools do not exist yet. That is correct.
 mergerfs -V                     # record it — see B7
 zfs version
 docker info --format '{{.Driver}} {{.DockerRootDir}}'
-id labdockremap; grep labdockremap /etc/subuid /etc/subgid    # expect 231072:65536
-sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
-       kernel.apparmor_restrict_unprivileged_userns \
-       fs.inotify.max_user_watches fs.inotify.max_user_instances
-sudo aa-status | grep lab-codex
+sysctl fs.inotify.max_user_watches fs.inotify.max_user_instances
 sudo cat /etc/docker/daemon.json
 ```
 
-**Pass:** `labdockremap` exists with subuid/subgid `231072` range `65536`; inotify watches 524288,
-instances 1024; `lab-codex` AppArmor profile loaded; daemon.json present.
+**Pass:** inotify watches 524288, instances 1024; Docker advertises its default seccomp/AppArmor
+integrations; daemon.json is present.
 
 ---
 
@@ -540,12 +536,12 @@ sudo getfattr --only-values -n user.mergerfs.branches /fast/t-bravo/.mergerfs; e
 ```bash
 docker ps --format '{{.Names}}\t{{.Status}}'
 docker inspect <t-alpha-container> --format '{{json .Mounts}}' | python3 -m json.tool
-docker inspect <t-alpha-container> --format '{{.HostConfig.UsernsMode}} {{json .HostConfig.SecurityOpt}} {{json .HostConfig.CapAdd}}'
+docker inspect <t-alpha-container> --format '{{.HostConfig.UsernsMode}} {{json .HostConfig.SecurityOpt}} {{json .HostConfig.CapAdd}} {{.AppArmorProfile}}'
 ```
 
-**Pass:** mount destinations are exactly `{/home, /cold-storage, /run/labquota}`; `UsernsMode=host`;
-SecurityOpt contains `apparmor=lab-codex`, a seccomp profile path, `systempaths=unconfined`; `CapAdd`
-empty. (This mirrors `agent/tests/integration/test_real_lab.py::test_outer_boundary_and_mounts`,
+**Pass:** mount destinations are exactly `{/home, /cold-storage, /run/labquota}`; `UsernsMode` and
+`SecurityOpt` are empty, `AppArmorProfile=docker-default`, and `CapAdd` is empty. (This mirrors
+`agent/tests/integration/test_real_lab.py::test_outer_boundary_and_mounts`,
 which the agent can run directly:)
 
 ```bash
@@ -563,7 +559,6 @@ pwd; ls -la ~; ls -la ~/cold-storage; readlink -f ~/cold-storage
 df -h ~ /cold-storage
 labquota
 mount | grep -E ' / | /home | /cold-storage '
-bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"
 nvcc --version          # GPU nodes
 ```
 

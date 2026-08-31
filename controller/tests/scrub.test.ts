@@ -25,7 +25,7 @@ let settings: typeof import("../src/lib/settings");
 /** The agent's real `Capabilities.to_dict()` shape — see the same helper in rebalance.test.ts. */
 function agentCapabilities(zfsOk: boolean): object {
   return {
-    runtime: { docker_ok: true, bwrap_ok: true },
+    runtime: { docker_ok: true, default_security_ok: true },
     nvidia: { gpu_count: 4, nvml_ok: true },
     storage: { zfs_ok: zfsOk, fast_ok: true, cold_ok: true, cold_backend: zfsOk ? "local_zfs" : "smb" },
     health: { status: "ok", issues: [] },

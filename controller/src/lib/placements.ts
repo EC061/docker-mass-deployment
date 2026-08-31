@@ -231,20 +231,16 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
     if (node.cold_ready !== 1) {
       throw new Error(`the SMB cold-storage mount on '${node.name}' is not an active mount yet`);
     }
-    const mapping = (raw: string | null) => {
+    const identityUids = (raw: string | null) => {
       try {
         const runtime = (JSON.parse(raw ?? "{}") as any).runtime;
-        if (Number.isInteger(runtime?.userns_start) && Number.isInteger(runtime?.userns_size)) {
-          return `${runtime.userns_start}:${runtime.userns_size}`;
-        }
+        return runtime?.userns_ok === true;
       } catch { /* handled below */ }
-      return null;
+      return false;
     };
-    const clientMapping = mapping(node.capabilities);
-    const ownerMapping = mapping(owner.capabilities);
-    if (!clientMapping || !ownerMapping || clientMapping !== ownerMapping) {
+    if (!identityUids(node.capabilities) || !identityUids(owner.capabilities)) {
       throw new Error(
-        `SMB client '${node.name}' and owner '${owner.name}' must report the same Docker userns numeric mapping`,
+        `SMB client '${node.name}' and owner '${owner.name}' must both report identity Docker UIDs`,
       );
     }
   } else if (coldQuota === null) {
