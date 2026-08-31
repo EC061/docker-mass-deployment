@@ -224,6 +224,7 @@ def test_doctor_flags_a_logical_mount_that_is_down(monkeypatch):
     monkeypatch.setattr(system, "_stale_systempaths_containers", lambda: [])
     monkeypatch.setattr(system, "_stale_lab_userns_containers", lambda: [])
     monkeypatch.setattr(system, "_stale_bwrap_capability_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_bind_propagation_containers", lambda: [])
     monkeypatch.setattr(system, "_stale_apparmor_containers", lambda cfg: [])
     monkeypatch.setattr(system, "_first_student_container", lambda: None)
     caps = system.detect_capabilities(cfg(cold_pools=["cold1", "cold2"]), deep=True)
@@ -260,6 +261,7 @@ def test_doctor_flags_a_branch_quota_sum_over_the_configured_quota(monkeypatch):
     monkeypatch.setattr(system, "_stale_systempaths_containers", lambda: [])
     monkeypatch.setattr(system, "_stale_lab_userns_containers", lambda: [])
     monkeypatch.setattr(system, "_stale_bwrap_capability_containers", lambda: [])
+    monkeypatch.setattr(system, "_stale_bind_propagation_containers", lambda: [])
     monkeypatch.setattr(system, "_stale_apparmor_containers", lambda cfg: [])
     monkeypatch.setattr(system, "_first_student_container", lambda: None)
     caps = system.detect_capabilities(cfg(), deep=True)
@@ -336,6 +338,21 @@ def test_stale_lab_userns_containers_detects_remapped_contract(monkeypatch):
     assert system._stale_lab_userns_containers() == ["lab-old", "lab-remapped"]
 
 
+def test_stale_bind_propagation_containers_detects_private_binds(monkeypatch):
+    """RETEST-FIND-7: an rprivate bind never shows a per-student dataset mounted after container
+    start, so the member silently gets the root-owned directory underneath instead of their own
+    storage. Propagation is fixed at creation, so such a container has to be recreated."""
+    inspect = "docker inspect --format {{range .HostConfig.Mounts}}{{.Target}}={{.BindOptions.Propagation}} {{end}}"
+    monkeypatch.setattr(system, "run", Runner({
+        "docker ps": (True, "lab-old\nlab-half\nlab-current\n"),
+        f"{inspect} lab-old": (True, "/home=rprivate /cold-storage=rprivate"),
+        f"{inspect} lab-half": (True, "/home=rslave /cold-storage=rprivate"),
+        f"{inspect} lab-current":
+            (True, "/home=rslave /cold-storage=rslave /run/labquota=rprivate"),
+    }))
+    assert system._stale_bind_propagation_containers() == ["lab-old", "lab-half"]
+
+
 def test_stale_apparmor_containers_detects_unconfined(monkeypatch):
     # Unprivileged bwrap cannot write its own uid_map when the task is AppArmor-unconfined, so an
     # unconfined lab (or one whose profile cannot be read) must be flagged for recreation.
@@ -369,6 +386,8 @@ def test_deep_doctor_accepts_bwrap_and_cuda_toolkit(monkeypatch):
         "docker inspect --format {{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}} lab-test":
             (True, "[]\t[]"),
         "docker inspect --format {{.HostConfig.UsernsMode}} lab-test": (True, "host"),
+        "docker inspect --format {{range .HostConfig.Mounts}}{{.Target}}={{.BindOptions.Propagation}} {{end}} lab-test":
+            (True, "/home=rslave /cold-storage=rslave"),
         "docker inspect --format {{json .HostConfig.CapAdd}} lab-test": (True, "null"),
         "docker inspect --format {{.AppArmorProfile}} lab-test": (True, "lab-codex"),
         "docker exec lab-test getent passwd": (True, "alice:x:10042:10042::/home/alice:/bin/bash\n"),

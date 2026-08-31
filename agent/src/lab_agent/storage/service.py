@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from ..executors import zfs
+from ..executors.base import run
 from ..executors.users import USERNAME_RE
 from ..paths import validate_lab_name
 from ..protocol import now_ms
@@ -558,6 +559,25 @@ def _record(
             tier.name, lab, obs.pool, present=obs.present, pool_available=obs.pool_usable,
             quota_bytes=obs.quota, used_bytes=obs.used, now_ms=stamp,
         )
+
+
+def make_shared(path: str) -> bool:
+    """Put ``path`` in a shared mount peer group so later submounts propagate out of it.
+
+    Per-student ZFS datasets are created AFTER the lab container exists (adding a member to a
+    running lab), and a bind mount only carries mounts made under its source afterwards when the
+    source is shared and the bind is a slave of it. Without this the student's dataset is mounted on
+    the host and simply invisible inside the container: the container keeps showing the root-owned
+    directory underneath, and the student cannot write to their own storage.
+
+    Best effort by design: the caller is about to start a container and a propagation flag that
+    could not be set is not a reason to refuse to run the lab. systemd already mounts ``/`` shared
+    on every supported host, so this is normally a no-op that only matters when something else has
+    made a mount private.
+    """
+    if not os.path.ismount(path):
+        return False
+    return run(["mount", "--make-rshared", path], timeout=30).ok
 
 
 def mount_lab(

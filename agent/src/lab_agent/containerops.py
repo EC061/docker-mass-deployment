@@ -42,9 +42,16 @@ def _mounts(cfg: AgentConfig, lab: str) -> Mounts:
     # Both are the LOGICAL tier paths (/fast/<lab>, /cold-storage/<lab>): a single ZFS dataset
     # on a one-pool tier, a per-lab mergerfs union on a multi-pool one. A container never sees
     # an individual branch.
+    fast = service.mount_lab(cfg, TIER_FAST, lab)
+    cold = coldstore.lab_mount(cfg, lab)
+    # Per-student datasets are mounted under these paths AFTER the container exists (student.add on
+    # a running lab). Shared here + slave in the container is what makes those later mounts visible
+    # inside it; without the pair the student sees the empty root-owned directory underneath.
+    service.make_shared(fast)
+    service.make_shared(cold)
     return Mounts(
-        fast=service.mount_lab(cfg, TIER_FAST, lab),
-        cold=coldstore.lab_mount(cfg, lab),
+        fast=fast,
+        cold=cold,
         labquota=usagereport.ensure_labquota_dirs(cfg, lab),
         seccomp_profile=cfg.seccomp_profile,
         apparmor_profile=cfg.apparmor_profile,

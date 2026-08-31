@@ -273,6 +273,37 @@ def _stale_lab_userns_containers() -> list[str]:
     return stale
 
 
+def _stale_bind_propagation_containers() -> list[str]:
+    """Return managed containers whose persistent binds cannot see later host mounts.
+
+    Mount propagation is fixed at creation. A container created with Docker's default ``rprivate``
+    binds never sees a per-student ZFS dataset mounted after it started, so a member added to a
+    running lab gets the root-owned directory underneath instead of their own storage — silently,
+    with no error anywhere. Only recreation can change it.
+    """
+    listed = run([
+        "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
+    ], timeout=20)
+    if not listed.ok:
+        return []
+    stale: list[str] = []
+    for container in listed.stdout.splitlines():
+        result = run([
+            "docker", "inspect", "--format",
+            "{{range .HostConfig.Mounts}}{{.Target}}={{.BindOptions.Propagation}} {{end}}",
+            container,
+        ], timeout=20)
+        if not result.ok:
+            stale.append(container)
+            continue
+        modes = dict(
+            entry.split("=", 1) for entry in result.stdout.split() if "=" in entry
+        )
+        if any(modes.get(target) != "rslave" for target in ("/home", "/cold-storage")):
+            stale.append(container)
+    return stale
+
+
 def _stale_bwrap_capability_containers() -> list[str]:
     """Return managed containers still carrying the legacy setuid-bubblewrap capabilities.
 
@@ -482,6 +513,15 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "critical",
                 "Managed containers still carry the legacy setuid bubblewrap capabilities and "
                 "require recreation: " + ", ".join(stale_bwrap_caps),
+            )
+        stale_propagation = _stale_bind_propagation_containers()
+        if stale_propagation:
+            _issue(
+                issues,
+                "container_bind_propagation_stale",
+                "warning",
+                "Managed containers cannot see per-student datasets mounted after they started "
+                "and require recreation: " + ", ".join(stale_propagation),
             )
         stale_apparmor = _stale_apparmor_containers(cfg)
         if stale_apparmor:

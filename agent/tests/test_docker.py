@@ -43,6 +43,13 @@ def test_runc_host_userns_outer_container_contract():
     assert "source=/fast/bio,target=/home" in joined
     assert "source=/cold/bio,target=/cold-storage" in joined
     assert "target=/run/labquota,readonly" in joined
+    # RETEST-FIND-7: a per-student dataset mounted after the container started must appear inside
+    # it. That needs slave propagation on both persistent binds — Docker's default is rprivate,
+    # which silently hides the student's own storage behind the root-owned directory underneath.
+    assert "source=/fast/bio,target=/home,bind-propagation=rslave" in joined
+    assert "source=/cold/bio,target=/cold-storage,bind-propagation=rslave" in joined
+    # Slave, never shared: propagation must not run container -> host.
+    assert "bind-propagation=rshared" not in joined
     assert "--storage-opt size=100g" in joined
     assert "--stop-signal SIGTERM" in joined
     assert "SIGRTMIN+3" not in joined
