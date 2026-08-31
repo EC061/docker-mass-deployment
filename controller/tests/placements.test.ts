@@ -60,6 +60,19 @@ const grant = (labId: number, nodeId: number, extra: Record<string, unknown> = {
     ...extra,
   });
 
+/** A node with reported pool telemetry, so the capacity/commitment checks have something to read. */
+const addNodeWithPools = (name: string, fastSize: number, coldSize: number) => {
+  const db = dbmod.db();
+  db.prepare("INSERT INTO nodes (name, online, created_at, pools) VALUES (?, 1, 0, ?)").run(
+    name,
+    JSON.stringify([
+      { name: `${name}-fast`, size: fastSize, alloc: 0, free: fastSize, tiers: ["fast"] },
+      { name: `${name}-cold`, size: coldSize, alloc: 0, free: coldSize, tiers: ["cold"] },
+    ]),
+  );
+  return (db.prepare("SELECT id FROM nodes WHERE name = ?").get(name) as any).id as number;
+};
+
 const memberRow = (placementId: number, username: string) =>
   dbmod.db()
     .prepare(
@@ -179,25 +192,70 @@ describe("updatePlacementQuota (live, no recreate)", () => {
   });
 
   it("rejects a quota larger than the node's reported pool capacity, and allows it once telemetry clears", async () => {
+    const node = addNodeWithPools("cap-1", 4000, 8000);
     const lab = newLab("quota-capped");
-    const p = await grant(lab.id, nodeA);
-    dbmod
-      .db()
-      .prepare("UPDATE nodes SET pools = ? WHERE id = ?")
-      .run(JSON.stringify([{ name: "fast", size: 4000, alloc: 0, free: 4000 }, { name: "cold", size: 8000, alloc: 0, free: 8000 }]), nodeA);
+    const p = await grant(lab.id, node);
     enqueueTask.mockClear();
 
-    expect(() => placements.updatePlacementQuota(p.id, { fastQuotaBytes: 5000 }, "admin")).toThrow(/exceeds node/);
+    expect(() => placements.updatePlacementQuota(p.id, { fastQuotaBytes: 5000 }, "admin")).toThrow(/exceeds/);
     expect(enqueueTask).not.toHaveBeenCalled();
 
-    // At the reported cap it's allowed.
+    // At the reported cap it's allowed: this is the only lab on the node, so nothing else is
+    // committed and the whole tier is still unallocated.
     placements.updatePlacementQuota(p.id, { fastQuotaBytes: 4000 }, "admin");
     expect(placements.getPlacement(p.id)!.fast_quota_bytes).toBe(4000);
 
     // No telemetry at all (e.g. node never reported) skips the cap rather than blocking the change.
-    dbmod.db().prepare("UPDATE nodes SET pools = NULL WHERE id = ?").run(nodeA);
+    dbmod.db().prepare("UPDATE nodes SET pools = NULL WHERE id = ?").run(node);
     placements.updatePlacementQuota(p.id, { fastQuotaBytes: 999_999 }, "admin");
     expect(placements.getPlacement(p.id)!.fast_quota_bytes).toBe(999_999);
+  });
+
+  // RETEST-FIND-6: a per-placement cap alone accepted 7.25 TiB for one lab while another lab held
+  // 64 GiB of the same 7.25 TiB tier, because a ZFS quota is a limit and not a reservation — the
+  // agent's allocator only ever sees raw pool free space, which still counts what other labs were
+  // promised. The sum has to be checked here or nowhere.
+  it("measures a quota against what other labs on the node have already been granted", async () => {
+    const node = addNodeWithPools("cap-2", 10_000, 20_000);
+    const alpha = await grant(newLab("agg-alpha").id, node, { fastQuotaBytes: 6000, coldQuotaBytes: 6000 });
+    const bravo = await grant(newLab("agg-bravo").id, node, { fastQuotaBytes: 1000, coldQuotaBytes: 1000 });
+    enqueueTask.mockClear();
+
+    // 10000 total - 1000 held by bravo = 9000 left for alpha. Its own current grant does not count
+    // against it.
+    expect(() => placements.updatePlacementQuota(alpha.id, { fastQuotaBytes: 9001 }, "admin"))
+      .toThrow(/exceeds the .* still unallocated on node 'cap-2'/);
+    expect(enqueueTask).not.toHaveBeenCalled();
+    placements.updatePlacementQuota(alpha.id, { fastQuotaBytes: 9000 }, "admin");
+    expect(placements.getPlacement(alpha.id)!.fast_quota_bytes).toBe(9000);
+
+    // Now the tier is fully committed, so bravo cannot grow by even one byte.
+    expect(() => placements.updatePlacementQuota(bravo.id, { fastQuotaBytes: 1001 }, "admin"))
+      .toThrow(/exceeds/);
+    // Cold is tracked independently and still has room.
+    placements.updatePlacementQuota(bravo.id, { coldQuotaBytes: 14_000 }, "admin");
+    expect(placements.getPlacement(bravo.id)!.cold_quota_bytes).toBe(14_000);
+  });
+
+  it("blocks a NEW placement that does not fit beside the existing ones", async () => {
+    const node = addNodeWithPools("cap-3", 5000, 5000);
+    await grant(newLab("fits-first").id, node, { fastQuotaBytes: 4000, coldQuotaBytes: 1000 });
+    await expect(grant(newLab("does-not-fit").id, node, { fastQuotaBytes: 1500, coldQuotaBytes: 1000 }))
+      .rejects.toThrow(/Fast quota .* exceeds/);
+    // Cold is over budget on its own even when fast fits.
+    await expect(grant(newLab("cold-too-big").id, node, { fastQuotaBytes: 500, coldQuotaBytes: 4500 }))
+      .rejects.toThrow(/Cold quota .* exceeds/);
+    // Exactly the remainder is accepted.
+    const ok = await grant(newLab("fits-exactly").id, node, { fastQuotaBytes: 1000, coldQuotaBytes: 4000 });
+    expect(ok.fast_quota_bytes).toBe(1000);
+  });
+
+  it("counts a placement that is still being deleted — its datasets are still on the node", async () => {
+    const node = addNodeWithPools("cap-4", 5000, 5000);
+    const doomed = await grant(newLab("still-deleting").id, node, { fastQuotaBytes: 4000, coldQuotaBytes: 4000 });
+    dbmod.db().prepare("UPDATE lab_placements SET state = 'deleting' WHERE id = ?").run(doomed.id);
+    await expect(grant(newLab("too-eager").id, node, { fastQuotaBytes: 2000, coldQuotaBytes: 1000 }))
+      .rejects.toThrow(/exceeds/);
   });
 });
 
