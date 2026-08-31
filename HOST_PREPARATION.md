@@ -7,7 +7,7 @@ needs an NVIDIA driver installed and pinned before the agent touches anything.
 
 ```
 1. Install the agent          (gives you the lab-agent CLI)
-2. Run host-prepare           (installs Docker, ZFS utils, AppArmor, and CDI support)
+2. Run host-prepare           (installs Docker, ZFS utils, AppArmor, nvidia-container-toolkit)
 3. Create/import ZFS pools    (or initialize a drive in Node -> Storage)
 4. Run host-prepare again     (native Docker ZFS + persistent tier mount service)
 5. Install + pin NVIDIA driver (manual step — reboot required)
@@ -29,6 +29,28 @@ sudo uvx --from "$REPO" lab-agent edit-config   # set controller_url, token, nod
 `uvx` pulls the agent from GitHub on first run and caches it. Every
 subsequent `uvx` call uses the cached copy. No local clone is needed.
 
+`install` puts the agent on the system PATH, so after this first step the
+rest of this guide can be typed as plain `sudo lab-agent <command>`. The
+long `uvx --from "$REPO"` form stays valid and is what you need if the
+install itself has to be redone.
+
+The install is deliberately **system-wide**, not per-user:
+
+| Path | What |
+|---|---|
+| `/usr/local/bin/lab-agent` | launcher (`UV_TOOL_BIN_DIR`) — what `ExecStart` names |
+| `/opt/lab-agent/uv-tools` | the tool venv (`UV_TOOL_DIR`) |
+| `/opt/lab-agent/python` | a uv-downloaded CPython, if the node has no suitable system one |
+| `/usr/local/bin/uv`, `/usr/local/bin/uvx` | copied from wherever uv's installer put them |
+
+uv's own defaults would put all of it under the installing user's home —
+`/root/.local` under `sudo`. `/root` is `0700`, so on such a node
+`lab-agent` is "command not found" for every non-root account (and a
+symlink out of `/root` only dangles for them), `sudo uvx ...` fails
+because `sudo`'s `secure_path` drops `~/.local/bin`, and even root's own
+login shell misses it. Some minimal Ubuntu images also ship no
+`/usr/local/bin` at all; `install` creates it.
+
 `lab-agent install` registers the systemd unit and writes
 `/etc/lab-agent/config.toml`. Edit the config before moving on — it
 needs the controller URL, authentication token, and (if non-default) the
@@ -47,18 +69,22 @@ packages beyond the OS are required:
 - **Docker Engine** (from Docker's official apt repo)
 - **ZFS userspace tools** (`zfsutils-linux`)
 - **mergerfs, FUSE and xattr tools** when either tier uses the `mergerfs` backend
-- **AppArmor** (Docker uses its standard `docker-default` profile)
-- **NVIDIA Container Toolkit base** from NVIDIA's stable repository (only when GPU hardware is
-  detected; the legacy runtime/hook and the driver itself are not installed)
+- **AppArmor tooling** (`apparmor`, `apparmor-utils`)
+- **NVIDIA Container Toolkit** (only when GPU hardware is detected —
+  never the driver itself)
 
 It also:
 
-- enforces `fs.inotify.max_user_watches=524288` and
+- reserves the `labdockremap` account and its exact subuid/subgid range
+- enforces `kernel.unprivileged_userns_clone=1`,
+  `user.max_user_namespaces=16384`,
+  `kernel.apparmor_restrict_unprivileged_userns=1`,
+  `fs.inotify.max_user_watches=524288`, and
   `fs.inotify.max_user_instances=1024` (labs share the host kernel's
   per-UID inotify budget; the raised caps stop VS Code Remote-SSH
   hitting ENOSPC "unable to watch for file changes" on large workspaces)
-- writes `/etc/docker/daemon.json`; lab containers otherwise inherit Docker's standard runtime,
-  namespaces, capabilities, seccomp policy, AppArmor profile, and protected system paths
+- installs the seccomp profile and AppArmor profile
+- writes `/etc/docker/daemon.json`
 
 On a brand-new node the zpools don't exist yet, so Docker gets its plain
 default backing store. That is expected — the next two steps fix it.
@@ -137,10 +163,10 @@ This run also applies `docker_quota_gb` (default 1024 GiB) as a live ZFS
 quota on the dataset. Change the value in the config and re-run
 host-prepare to resize immediately, with no unmount or reboot.
 
-On GPU nodes, host-prepare installs the latest CDI-only NVIDIA package and enables the packaged
-`nvidia-cdi-refresh.path` and `.service` units. They maintain
-`/var/run/cdi/nvidia.yaml`; managed labs request every GPU with
-`--device nvidia.com/gpu=all`. Docker keeps its normal cgroup driver.
+On GPU nodes, host-prepare additionally pins Docker's cgroup driver to
+`cgroupfs` (workaround for a known runc/systemd-cgroup-driver bug that
+drops GPU device access on `systemctl daemon-reload`) and regenerates
+NVIDIA CDI at `/etc/cdi/nvidia.yaml`.
 
 It also installs and enables `lab-storage-mounts.service`. The oneshot service runs after ZFS
 import/mount and before Docker, computes the safe live branch set, and creates one mergerfs mount per
@@ -346,12 +372,13 @@ sudo uvx --from "$REPO" lab-agent start
 sudo uvx --from "$REPO" lab-agent doctor
 ```
 
-Doctor needs a running lab with at least one provisioned student because it executes the CUDA smoke
-test as that ordinary user.
+Doctor needs a running lab with at least one provisioned student because
+it executes real namespace and Codex smoke tests as that ordinary user.
 
 Verify inside a running lab:
 
 ```bash
+bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"
 nvcc --version
 nvidia-smi
 ```
@@ -361,9 +388,10 @@ Inspect the resulting Docker and system settings:
 ```bash
 docker info --format '{{json .SecurityOptions}}'
 sudo cat /etc/docker/daemon.json
-sudo systemctl status nvidia-cdi-refresh.path nvidia-cdi-refresh.service
-nvidia-ctk cdi list
-sysctl fs.inotify.max_user_watches fs.inotify.max_user_instances
+sudo aa-status | grep lab-codex
+sysctl kernel.unprivileged_userns_clone user.max_user_namespaces \
+  kernel.apparmor_restrict_unprivileged_userns \
+  fs.inotify.max_user_watches fs.inotify.max_user_instances
 ```
 
 ## Persistent layout reference
