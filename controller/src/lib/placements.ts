@@ -250,6 +250,11 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
   } else if (coldQuota === null) {
     throw new Error("a local-ZFS placement requires a cold quota");
   }
+  // A new placement is measured against what the node's tiers have not already promised to other
+  // labs, not against raw pool size — the create path previously checked neither.
+  const commitment = nodeCommitmentBytes(input.nodeId);
+  assertQuotaFits("fast", input.fastQuotaBytes, commitment.fast, node.name);
+  if (coldQuota != null) assertQuotaFits("cold", coldQuota, commitment.cold, node.name);
   if (input.studentFastQuotaBytes != null &&
       (input.studentFastQuotaBytes <= 0 || input.studentFastQuotaBytes > input.fastQuotaBytes)) {
     throw new Error("Per-student fast quota must be positive and cannot exceed the placement fast quota");
@@ -631,6 +636,72 @@ export function nodePoolCapacityBytes(nodeId: number): NodePoolCapacity {
   };
 }
 
+export interface TierCommitment {
+  /** Physical tier capacity from telemetry; null when the node has not reported pools yet. */
+  capacityBytes: number | null;
+  /** Sum of the quotas already granted to the other placements on this node. */
+  committedBytes: number;
+  /** How many placements that sum covers, for the error/UI text. */
+  placements: number;
+  /** capacityBytes - committedBytes, floored at 0. Null when capacity is unknown. */
+  unallocatedBytes: number | null;
+}
+
+export interface NodeCommitment {
+  fast: TierCommitment;
+  cold: TierCommitment;
+}
+
+/**
+ * What a node's tiers have ALREADY promised to labs, versus what they physically hold.
+ *
+ * A ZFS quota is a limit, not a reservation, so the agent's per-lab allocator only ever sees the
+ * pool's raw free space — which still counts every byte another lab has been promised but not yet
+ * written. Nothing below the controller can therefore notice that the sum of granted quotas exceeds
+ * the tier. Four labs at the default 2 TiB fast is 8 TiB on a 7.25 TiB tier, and the first lab to
+ * actually fill up silently takes the space out of its neighbours.
+ *
+ * `deleting` placements are counted: their datasets still exist on the node until the agent confirms
+ * removal (the row is only dropped then), so their quota is still committed.
+ */
+export function nodeCommitmentBytes(nodeId: number, excludePlacementId?: number): NodeCommitment {
+  const capacity = nodePoolCapacityBytes(nodeId);
+  const row = db()
+    .prepare(
+      `SELECT COALESCE(SUM(fast_quota_bytes), 0) AS fast,
+              COALESCE(SUM(COALESCE(cold_quota_bytes, 0)), 0) AS cold,
+              COUNT(*) AS n
+         FROM lab_placements WHERE node_id = ? AND id IS NOT ?`,
+    )
+    .get(nodeId, excludePlacementId ?? null) as { fast: number; cold: number; n: number };
+  const tier = (capacityBytes: number | null, committedBytes: number): TierCommitment => ({
+    capacityBytes,
+    committedBytes,
+    placements: row.n,
+    unallocatedBytes: capacityBytes === null ? null : Math.max(0, capacityBytes - committedBytes),
+  });
+  return { fast: tier(capacity.fastBytes, row.fast), cold: tier(capacity.coldBytes, row.cold) };
+}
+
+/** Reject a quota that does not fit in what is left of the tier after every other lab's grant. */
+function assertQuotaFits(
+  tierName: "fast" | "cold",
+  requested: number,
+  commitment: TierCommitment,
+  nodeName: string,
+): void {
+  if (commitment.capacityBytes === null) return; // no telemetry yet — never block on missing data
+  if (requested <= (commitment.unallocatedBytes ?? 0)) return;
+  const others = commitment.placements === 0
+    ? ""
+    : ` (${fmtBytes(commitment.committedBytes)} is already committed to ${commitment.placements} other placement(s))`;
+  throw new Error(
+    `${tierName === "fast" ? "Fast" : "Cold"} quota ${fmtBytes(requested)} exceeds the ` +
+      `${fmtBytes(commitment.unallocatedBytes ?? 0)} still unallocated on node '${nodeName}'${others}. ` +
+      `The tier holds ${fmtBytes(commitment.capacityBytes)}.`,
+  );
+}
+
 /** Live quota change (no recreate). Routes to lab.set_quota on the placement's node. */
 export function updatePlacementQuota(
   placementId: number,
@@ -639,20 +710,13 @@ export function updatePlacementQuota(
 ): void {
   const p = getPlacement(placementId);
   if (!p) throw new Error("Unknown placement");
-  const capacity = nodePoolCapacityBytes(p.node_id);
-  if (input.fastQuotaBytes !== undefined && capacity.fastBytes !== null && input.fastQuotaBytes > capacity.fastBytes) {
-    throw new Error(
-      `Fast quota ${fmtBytes(input.fastQuotaBytes)} exceeds node '${p.node_name}'s fast pool capacity of ${fmtBytes(capacity.fastBytes)}`,
-    );
+  // Measured against what is left AFTER every other lab on this node — see nodeCommitmentBytes.
+  const commitment = nodeCommitmentBytes(p.node_id, placementId);
+  if (input.fastQuotaBytes !== undefined) {
+    assertQuotaFits("fast", input.fastQuotaBytes, commitment.fast, p.node_name);
   }
-  if (
-    input.coldQuotaBytes != null &&
-    capacity.coldBytes !== null &&
-    input.coldQuotaBytes > capacity.coldBytes
-  ) {
-    throw new Error(
-      `Cold quota ${fmtBytes(input.coldQuotaBytes)} exceeds node '${p.node_name}'s cold pool capacity of ${fmtBytes(capacity.coldBytes)}`,
-    );
+  if (input.coldQuotaBytes != null) {
+    assertQuotaFits("cold", input.coldQuotaBytes, commitment.cold, p.node_name);
   }
   const params: Record<string, unknown> = { lab: p.lab_name };
   if (input.fastQuotaBytes !== undefined) {

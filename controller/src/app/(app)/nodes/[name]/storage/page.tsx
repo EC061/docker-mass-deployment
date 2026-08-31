@@ -9,6 +9,7 @@ import { Select } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { db } from "@/lib/db";
 import { fmtBytes } from "@/lib/format";
+import { nodeCommitmentBytes } from "@/lib/placements";
 import { parseJsonObject, parsePoolTelemetry } from "@/lib/storage";
 import {
   attachStoragePoolAction,
@@ -22,6 +23,7 @@ import {
 export const dynamic = "force-dynamic";
 
 interface NodeRow {
+  id: number;
   name: string;
   alias: string | null;
   online: number;
@@ -64,7 +66,7 @@ export default async function NodeStoragePage({
   const sp = await searchParams;
   const message = typeof sp.message === "string" ? sp.message : null;
   const node = db().prepare(
-    "SELECT name, alias, online, pools, storage_tiers, storage_inventory FROM nodes WHERE name = ?",
+    "SELECT id, name, alias, online, pools, storage_tiers, storage_inventory FROM nodes WHERE name = ?",
   ).get(name) as NodeRow | undefined;
   if (!node) notFound();
 
@@ -81,6 +83,9 @@ export default async function NodeStoragePage({
         imported: pool.imported,
         tiers: pool.tiers ?? [],
       }));
+  // What the tiers have already promised to labs. ZFS quotas are limits, not reservations, so this
+  // is the only place the sum can be compared against the physical tier at all.
+  const commitment = nodeCommitmentBytes(node.id);
   const devices = Array.isArray(inventory?.devices) ? inventory.devices as any[] : [];
   const freeDevices = devices.filter((d) => d.by_id && !d.in_use && !d.mounted && !d.zfs_pool);
   const unattachedPools = pools.filter((p) => !Array.isArray(p.tiers) || p.tiers.length === 0);
@@ -149,6 +154,19 @@ export default async function NodeStoragePage({
                   <p className="text-sm text-muted-foreground">
                     Logical backing capacity: {fmtBytes(logicalCapacity)} · Free: {fmtBytes(logicalFree)}
                   </p>
+                  {(() => {
+                    const c = commitment[tierName];
+                    if (c.capacityBytes === null) return null;
+                    const over = c.committedBytes > c.capacityBytes;
+                    return (
+                      <p className={`text-sm ${over ? "text-warn" : "text-muted-foreground"}`}>
+                        Committed to labs: {fmtBytes(c.committedBytes)} across {c.placements} placement(s) ·{" "}
+                        {over
+                          ? `OVER-COMMITTED by ${fmtBytes(c.committedBytes - c.capacityBytes)} — the granted quotas cannot all be filled`
+                          : `Unallocated: ${fmtBytes(c.unallocatedBytes ?? 0)}`}
+                      </p>
+                    );
+                  })()}
                   {tier.mergerfs && (
                     <p className="text-xs text-muted-foreground">
                       mergerfs: create={tier.mergerfs.create_policy}, move-on-ENOSPC={tier.mergerfs.moveonenospc}, min free={fmtBytes(tier.mergerfs.minfreespace_bytes)}
