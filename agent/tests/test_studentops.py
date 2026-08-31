@@ -22,7 +22,10 @@ def patch_storage(monkeypatch, *, fast_pools=("fast",), cold_pools=("slow",), mi
     users = []
     datasets: set[str] = set()
 
+    tiers: dict[str, object] = {}
+
     def observe(tier, lab, health=None):
+        tiers[tier.name] = tier
         pools = fast_pools if tier.name == "fast" else cold_pools
         return [
             service.BranchObservation(
@@ -37,7 +40,20 @@ def patch_storage(monkeypatch, *, fast_pools=("fast",), cold_pools=("slow",), mi
             for pool in pools
         ]
 
+    def inherited_mountpoint(dataset: str) -> str:
+        """What ZFS gives a child with no local mountpoint: its lab branch's path + its own name.
+
+        Student datasets are created WITHOUT a mountpoint precisely so this stays true after the
+        lab's branch moves (see RETEST-FIND-8), so the stub has to model inheritance rather than
+        echo a path back.
+        """
+        pool, _prefix, tail = dataset.split("/", 2)
+        lab, _, user = tail.partition("/")
+        tier = tiers["fast" if pool in fast_pools else "cold"]
+        return f"{tier.branch_mount(pool, lab)}/{user}"
+
     monkeypatch.setattr(service, "observe_branches", observe)
+    monkeypatch.setattr(studentops.zfs, "get_mountpoint", inherited_mountpoint)
     monkeypatch.setattr(studentops.zfs, "dataset_exists", lambda ds: ds in datasets)
     monkeypatch.setattr(studentops.zfs, "create_dataset",
                         lambda *a, **k: pytest.fail("flat storage unexpectedly created a dataset"))
@@ -90,10 +106,38 @@ def test_fast_quota_alone_creates_only_fast_student_dataset(monkeypatch):
         "lab": "bio", "username": "alice", "password": "pw", "uid": 10042, "gid": 10042,
         "student_fast_quota_bytes": 500 * 1024 ** 3,
     })
-    assert created == [("fast/labs/bio/alice", {
-        "quota_bytes": 500 * 1024 ** 3, "mountpoint": "/fast/bio/alice",
-    })]
+    # No mountpoint is passed: the child inherits "/fast/bio" + "/alice" from its lab branch, and an
+    # inherited mountpoint is the one that follows the branch when the tier is later promoted.
+    assert created == [("fast/labs/bio/alice", {"quota_bytes": 500 * 1024 ** 3})]
     assert ("/cold-storage/bio/alice", 10042, 10042) in dirs
+
+
+def test_student_datasets_are_created_without_a_pinned_mountpoint(monkeypatch):
+    """RETEST-FIND-8: a pinned mountpoint does not follow the lab branch when the tier is promoted.
+
+    Inheritance produces the identical path (parent + name) and survives the move, so the mountpoint
+    is never passed. The agent verifies the inherited result instead of assuming it.
+    """
+    patch_storage(monkeypatch, fast_pools=("fast1", "fast2"))
+    created = []
+    monkeypatch.setattr(studentops.zfs, "create_dataset",
+                        lambda name, **kw: created.append((name, kw)))
+    studentops.add_student(cfg(fast_pools=["fast1", "fast2"]), {
+        "lab": "bio", "username": "alice", "password": "pw", "uid": 10042, "gid": 10042,
+        "student_fast_quota_bytes": 1 * TB,
+    })
+    assert created, "a per-student quota must create a dataset"
+    assert all("mountpoint" not in kw for _name, kw in created)
+
+
+def test_a_student_dataset_that_inherits_the_wrong_path_is_refused(monkeypatch):
+    """The one thing inheritance could get wrong is a branch mounted somewhere unexpected."""
+    patch_storage(monkeypatch)
+    monkeypatch.setattr(studentops.zfs, "create_dataset", lambda name, **kw: None)
+    monkeypatch.setattr(studentops.zfs, "get_mountpoint", lambda ds: "/somewhere/else")
+    monkeypatch.setattr(studentops.zfs, "destroy_dataset", lambda ds, recursive=True: None)
+    with pytest.raises(RuntimeError, match="inherited mountpoint"):
+        studentops._ensure_user_dataset("fast/labs/bio/alice", "/fast/bio/alice", 500, 1, 1)
 
 
 def test_student_quota_is_sharded_across_branches(monkeypatch):
@@ -119,6 +163,7 @@ def test_existing_fast_directory_is_promoted_with_data(tmp_path, monkeypatch):
     monkeypatch.setattr(studentops.zfs, "dataset_exists", lambda ds: ds in datasets)
     monkeypatch.setattr(studentops.zfs, "create_dataset",
                         lambda name, **kw: (datasets.add(name), home.mkdir()))
+    monkeypatch.setattr(studentops.zfs, "get_mountpoint", lambda ds: str(home))
     monkeypatch.setattr(studentops.zfs, "set_quota", lambda *a: None)
     monkeypatch.setattr(studentops.zfs, "destroy_dataset", lambda ds, recursive: datasets.discard(ds))
     monkeypatch.setattr(studentops.coldfs, "ensure_owned_dir", lambda *a, **k: None)

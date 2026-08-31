@@ -149,6 +149,51 @@ def test_adding_a_drive_keeps_the_container_path(monkeypatch, tmp_path):
     assert fake.datasets["cold1/labs/labA"].mountpoint == "/mnt/lab-storage/cold1/labs/labA"
 
 
+def test_promotion_carries_the_per_student_datasets_with_their_lab(monkeypatch, tmp_path):
+    """RETEST-FIND-8: promoting cold to mergerfs left every per-student dataset behind.
+
+    A student dataset created with a PINNED mountpoint does not follow its lab when the lab's
+    mountpoint moves: `zfs set mountpoint` unmounts the subtree and remounts only what it moved, so
+    the child ends up unmounted at a path the layout no longer uses. Its files disappear from the
+    new union and the student cannot write. Recovery meant moving four mountpoints by hand.
+    """
+    fake, c = one_cold_drive(monkeypatch, tmp_path)
+    service.provision_lab(c, "cold", "labA", 2 * TB)
+    # Legacy shape: pinned to the lab's CURRENT logical path, as older agents created them.
+    for user in ("stu1", "stu2"):
+        fake.create_dataset(f"cold1/labs/labA/{user}", quota_bytes=64 * GB,
+                            mountpoint=f"/cold-storage/labA/{user}")
+        fake.datasets[f"cold1/labs/labA/{user}"].used = 4 * GB
+
+    fake.add_pool("cold2", 8 * TB)
+    service.attach_pool(c, "cold", "cold2")
+
+    for user in ("stu1", "stu2"):
+        child = fake.datasets[f"cold1/labs/labA/{user}"]
+        # Under the lab's new branch path, mounted, with its data and quota untouched.
+        assert child.mountpoint == f"/mnt/lab-storage/cold1/labs/labA/{user}"
+        assert child.mounted is True
+        assert child.quota == 64 * GB
+        assert child.used == 4 * GB
+        # And no longer pinned, so any future move carries it automatically.
+        assert child.mountpoint_local is False
+
+
+def test_promotion_moves_inherited_student_datasets_without_touching_them(monkeypatch, tmp_path):
+    """The shape new agents create: inheritance means ZFS itself does the work."""
+    fake, c = one_cold_drive(monkeypatch, tmp_path)
+    service.provision_lab(c, "cold", "labA", 2 * TB)
+    fake.create_dataset("cold1/labs/labA/stu1", quota_bytes=64 * GB)  # inherited mountpoint
+    assert fake.datasets["cold1/labs/labA/stu1"].mountpoint == "/cold-storage/labA/stu1"
+
+    fake.add_pool("cold2", 8 * TB)
+    service.attach_pool(c, "cold", "cold2")
+
+    child = fake.datasets["cold1/labs/labA/stu1"]
+    assert child.mountpoint == "/mnt/lab-storage/cold1/labs/labA/stu1"
+    assert child.mounted is True
+
+
 def test_adding_a_drive_extends_every_existing_lab(monkeypatch, tmp_path):
     fake, c = one_cold_drive(monkeypatch, tmp_path)
     for lab, quota in (("labA", 2 * TB), ("labB", 1 * TB), ("labC", 512 * GB)):
@@ -514,6 +559,38 @@ def test_a_promotion_that_fails_midway_restores_the_labs_it_already_moved(monkey
     assert c.storage.cold.pools == ("cold1",)
     for lab in ("labA", "labB", "labC"):
         assert fake.datasets[f"cold1/labs/{lab}"].mountpoint == f"/cold-storage/{lab}"
+
+
+def test_a_failed_promotion_puts_the_student_datasets_back_too(monkeypatch, tmp_path):
+    """Rollback has the same nesting constraint as the forward move.
+
+    Every mountpoint has to be restored before ANY per-student dataset is remounted: `zfs set
+    mountpoint` cannot unmount a dataset while a child is mounted beneath it, so remounting a lab's
+    students early would block the restore of the very next lab.
+    """
+    fake, c = one_cold_drive(monkeypatch, tmp_path)
+    for lab in ("labA", "labB", "labC"):
+        service.provision_lab(c, "cold", lab, 1 * TB)
+        fake.create_dataset(f"cold1/labs/{lab}/stu1", quota_bytes=64 * GB)
+    fake.add_pool("cold2", 8 * TB)
+
+    real_set = fake.set_property
+
+    def refuse_the_third_lab(name, key, value):
+        if name == "cold1/labs/labC" and key == "mountpoint":
+            raise service.zfs.ZfsError("dataset is busy")
+        return real_set(name, key, value)
+
+    monkeypatch.setattr(service.zfs, "set_property", refuse_the_third_lab)
+
+    with pytest.raises(service.StorageError, match="could not promote"):
+        service.attach_pool(c, "cold", "cold2")
+
+    for lab in ("labA", "labB", "labC"):
+        assert fake.datasets[f"cold1/labs/{lab}"].mountpoint == f"/cold-storage/{lab}"
+        child = fake.datasets[f"cold1/labs/{lab}/stu1"]
+        assert child.mountpoint == f"/cold-storage/{lab}/stu1"
+        assert child.mounted is True
 
 
 def test_promotion_unmounts_labs_then_moves_the_root_then_the_labs(monkeypatch, tmp_path):
