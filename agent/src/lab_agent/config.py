@@ -49,7 +49,7 @@ from __future__ import annotations
 import os
 import socket
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -283,6 +283,39 @@ def load_config(path: Path | None = None) -> AgentConfig:
     except StorageConfigError as exc:
         raise ValueError(str(exc)) from exc
     return cfg
+
+
+def config_stamp(path: Path | None = None) -> tuple[int, int, int] | None:
+    """A cheap identity for the config file: (inode, size, mtime_ns), or None when it is missing."""
+    path = path or DEFAULT_CONFIG_PATH
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_ino, st.st_size, st.st_mtime_ns)
+
+
+def refresh_config(cfg: AgentConfig, path: Path | None = None) -> list[str]:
+    """Re-read the config file INTO the live ``cfg`` object, returning the fields that changed.
+
+    The long-running agent used to hold whatever it parsed at startup forever, while `lab-agent
+    storage attach/detach` (a separate process) rewrote the same file. The service then kept
+    reporting a pool that had already been detached — including in the health it sends the
+    controller — until someone restarted it.
+
+    The existing object is mutated in place rather than replaced because the dispatcher, telemetry,
+    the heartbeat and the GPU loops all hold a reference to it; rebinding one of them would leave
+    the others on the old topology, which is the same class of bug in a new place.
+    """
+    fresh = load_config(path)
+    changed: list[str] = []
+    for f in fields(cfg):
+        current = getattr(cfg, f.name)
+        replacement = getattr(fresh, f.name)
+        if current != replacement:
+            setattr(cfg, f.name, replacement)
+            changed.append(f.name)
+    return changed
 
 
 def _toml_value(value: object) -> str:
