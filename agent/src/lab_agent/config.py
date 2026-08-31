@@ -79,13 +79,6 @@ SLOW_BACKEND_ZFS = BACKEND_ZFS
 SLOW_BACKEND_SMB = BACKEND_SMB
 SLOW_BACKEND_MERGERFS = BACKEND_MERGERFS
 
-# Docker's native user-namespace mapping uses the same range on every node so numeric
-# ownership survives when cold storage is shared over SMB.
-DEFAULT_USERNS_USER = "labdockremap"
-DEFAULT_USERNS_START = 231_072
-DEFAULT_USERNS_SIZE = 65_536
-DEFAULT_SECCOMP_PROFILE = "/etc/lab-agent/security/lab-codex-seccomp.json"
-DEFAULT_APPARMOR_PROFILE = "lab-codex"
 
 # Legacy scalar keys still accepted in [agent]; each maps into the storage model.
 LEGACY_STORAGE_KEYS = (
@@ -105,11 +98,6 @@ AGENT_KEYS = (
     "controller_url",
     "token",
     "node_name",
-    "userns_user",
-    "userns_start",
-    "userns_size",
-    "seccomp_profile",
-    "apparmor_profile",
     "state_db",
     "heartbeat_interval_s",
     "usage_publish_interval_s",
@@ -130,12 +118,6 @@ class AgentConfig:
     node_name: str = field(default_factory=socket.gethostname)
     # The node's whole storage topology. Built from [storage.*] or from the legacy scalars.
     storage: StorageConfig = field(default_factory=default_storage)
-    # Native Docker userns-remap contract. Container uid N maps to userns_start + N on the host.
-    userns_user: str = DEFAULT_USERNS_USER
-    userns_start: int = DEFAULT_USERNS_START
-    userns_size: int = DEFAULT_USERNS_SIZE
-    seccomp_profile: str = DEFAULT_SECCOMP_PROFILE
-    apparmor_profile: str = DEFAULT_APPARMOR_PROFILE
     # Local cache DB for the durable task buffer + offline event/log buffer.
     state_db: str = "/var/lib/lab-agent/state.db"
     heartbeat_interval_s: int = 15

@@ -255,53 +255,6 @@ cold1/labs/t-bravo   512G                                   single pool, no spli
 
 Per-lab mergerfs union at `/fast/<lab>` (one per lab, not one per tier) ✅
 
-## FIND-5 🔴 Nested bubblewrap PID sandboxes cannot work on GPU nodes
-
-`lab-agent doctor` reports this itself once a lab is running:
-
-```
-'bwrap_ok': False
-health: critical — bubblewrap_failed:
-  "Distribution /usr/bin/bwrap cannot create a user/PID/proc sandbox"  (repairable: True)
-```
-
-Isolated inside `t-alpha-geass` as the student `salpha1`:
-
-| # | command | result |
-|---|---|---|
-| A | `bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid` | **FAIL** — `Can't mount proc on /newroot/proc: Operation not permitted` |
-| B | `bwrap ... --bind /proc /proc --unshare-pid` | OK |
-| C | `bwrap ... --proc /proc` (no `--unshare-pid`) | **OK** |
-| D | `bwrap ... --unshare-pid --unshare-user` (no proc) | OK |
-| E | `bwrap ... --tmpfs /tmp --unshare-pid` | OK |
-
-Only the **combination** of a fresh procfs and a new PID namespace fails — i.e. exactly
-`system.py:510-513`, the agent's own smoke test, and the nested-Codex sandbox the image exists for.
-
-**Cause.** A new PID namespace forces a new procfs *superblock*, which makes the kernel apply
-`mount_too_revealing()`: it refuses the mount if the procfs already visible to the caller has
-anything mounted over a subdirectory. Inside the container there is exactly one such overmount:
-
-```
-tmpfs /proc/driver/nvidia/params tmpfs rw,relatime,size=4k,inode64
-```
-
-The **host has no such mount** — it is injected by the NVIDIA container runtime. It is not in
-`/etc/cdi/nvidia.yaml`, so it comes from the legacy `nvidia-container-runtime` hook that
-`daemon.json` still registers (`runtimes.nvidia`), even though CDI is generated and working
-(`cdi_ok: True`, `nvidia.com/gpu=0..3` present).
-
-This is not caused by the container contract, which is correct: `MaskedPaths=[]`,
-`ReadonlyPaths=[]` (i.e. `systempaths=unconfined` applied), `CapAdd` empty, `Privileged=false`,
-`UsernsMode=host`, `apparmor=lab-codex` + seccomp.
-
-**Suggested fix:** inject GPUs via **CDI only** (`--device nvidia.com/gpu=all`) and stop using the
-legacy `nvidia` OCI runtime for lab containers, so no tmpfs is overmounted inside `/proc`.
-
-**Also:** the issue is flagged `repairable: True`, but `maintenance.run_repair` only chmods the
-seccomp profile, reloads AppArmor and regenerates CDI — **none of which can fix this**. The repair
-button will appear to run successfully and change nothing.
-
 ## FIND-6 🟡 Pool names leak into the container's mount table
 Plan §4.6 requires that no pool name be visible inside the lab. Paths are correctly hidden
 (`/fast`, `/cold`, `/mnt/lab-storage` all absent), but `mount` inside the lab shows dataset
@@ -334,8 +287,8 @@ Every student receives instructions for a path that isn't there. Fix the templat
 * `df ~` inside the lab reports the **logical union** `lab-fast-t-alpha 1.0T`, not a 512 G branch ✅
 * `labquota` reports logical totals `1.0 TiB fast / 2.0 TiB cold / 300 GiB rootfs` ✅
 * `~/cold-storage -> /cold-storage/salpha1` symlink ✅
-* §4.5 container contract: mounts exactly `{/home, /cold-storage, /run/labquota(ro)}`,
-  `UsernsMode=host`, `CapAdd` empty, seccomp + `apparmor=lab-codex`, `systempaths=unconfined` ✅
+* §4.5 container contract: mounts exactly `{/home, /cold-storage, /run/labquota(ro)}` and no
+  privileged mode or added capabilities ✅
 * 4 × RTX A6000 visible in the lab, `nvcc` 13.3 works ✅
 
 ## BUG-4 🔴 `minfreespace` is a flat 50 GiB, so small labs lose most (or all) of their quota

@@ -289,7 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_doctor.set_defaults(func=_cmd_doctor)
 
     p_prepare = sub.add_parser(
-        "host-prepare", help="configure Docker userns, sysctls, AppArmor, seccomp, and CDI"
+        "host-prepare", help="configure Docker, storage, host limits, and NVIDIA CDI"
     )
     p_prepare.set_defaults(func=_cmd_host_prepare)
 

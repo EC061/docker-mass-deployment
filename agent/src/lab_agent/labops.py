@@ -43,7 +43,7 @@ def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     containerops.assert_node_ready(cfg)
 
     # One quota-bearing dataset per POOL per tier, sharing the lab's single logical quota, plus the
-    # per-lab union mount when the tier spans more than one pool. Managed labs use --userns=host, so
+    # per-lab union mount when the tier spans more than one pool. Managed labs use identity UIDs, so
     # container root owns the lab mount roots as host uid 0.
     fast = service.provision_lab(cfg, TIER_FAST, lab, fast_quota, uid=0, gid=0, mode=0o711)
     cold_note = coldstore.create_lab(cfg, lab, slow_quota)

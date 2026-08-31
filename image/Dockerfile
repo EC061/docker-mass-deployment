@@ -1,7 +1,7 @@
 # SSH-accessible CUDA development lab. Docker/NVIDIA device integration lives on the host. This
 # image installs NVIDIA's minimal CUDA build package rather than inheriting the much larger devel
-# image. Students retain password-authenticated sudo. Bubblewrap is deliberately NOT setuid: it
-# runs the unprivileged user-namespace path, so the lab needs no added capabilities.
+# image. Students retain password-authenticated sudo, and the host starts the image with Docker's
+# standard container security defaults.
 
 FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517
 
@@ -9,8 +9,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH=/usr/local/cuda/bin:${PATH}
 ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 ARG CUDA_KEYRING_SHA256=d2a6b11c096396d868758b86dab1823b25e14d70333f1dfa74da5ddaf6a06dba
 
@@ -27,12 +25,8 @@ RUN apt-get update \
         cuda-minimal-build-13-3=13.3.1-1 \
         openssh-server sudo \
         python3-pip python3-venv python-is-python3 \
-        bubblewrap \
         build-essential cmake ninja-build pkg-config \
         git ripgrep procps util-linux nano gnupg \
-    && chown root:root /usr/bin/bwrap \
-    && chmod 0755 /usr/bin/bwrap \
-    && test ! -u /usr/bin/bwrap \
     && test "$(readlink -f /usr/bin/python)" = "$(readlink -f /usr/bin/python3)" \
     && nvcc --version \
     && printf '%s\n' '__global__ void kernel() {}' 'int main() { return 0; }' \

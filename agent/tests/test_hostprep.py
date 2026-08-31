@@ -1,6 +1,4 @@
-import json
 from dataclasses import replace
-from importlib import resources
 
 import pytest
 from storagehelp import make_cfg
@@ -12,11 +10,8 @@ from lab_agent.executors.base import run as real_run
 from lab_agent.hostprep import (
     docker_apt_source_line,
     docker_quota_zfs_value,
-    mapped_host_id,
     merge_daemon_config,
-    replace_subid_entry,
     rewrite_nvidia_apt_list,
-    subid_conflicts,
 )
 
 
@@ -42,27 +37,8 @@ class Runner:
         return real_run(args, **kwargs)
 
 
-def test_host_id_translation_and_bounds():
-    assert mapped_host_id(cfg(), 0) == 231072
-    assert mapped_host_id(cfg(), 10000) == 241072
-    assert mapped_host_id(cfg(), 59999) == 291071
-    with pytest.raises(ValueError):
-        mapped_host_id(cfg(), 65536)
-
-
-def test_subid_entry_is_exact_and_idempotent():
-    before = "other:100000:65536\nlabdockremap:1:2\n"
-    once = replace_subid_entry(before, "labdockremap", 231072, 65536)
-    twice = replace_subid_entry(once, "labdockremap", 231072, 65536)
-    assert once == twice
-    assert once.count("labdockremap:") == 1
-    assert "labdockremap:231072:65536" in once
-    assert subid_conflicts("other:250000:1000\n", "labdockremap", 231072, 65536)
-    assert not subid_conflicts("other:400000:1000\n", "labdockremap", 231072, 65536)
-
-
 def test_daemon_config_preserves_unrelated_settings():
-    merged = merge_daemon_config({"log-driver": "journald"}, cfg(), use_zfs=True, gpu_present=False)
+    merged = merge_daemon_config({"log-driver": "journald"}, cfg(), use_zfs=True)
     assert merged == {
         "log-driver": "journald",
         "data-root": "/var/lib/docker",
@@ -71,39 +47,39 @@ def test_daemon_config_preserves_unrelated_settings():
 
 
 def test_daemon_config_without_zfs_pools_omits_storage_driver():
-    merged = merge_daemon_config({}, cfg(), use_zfs=False, gpu_present=False)
+    merged = merge_daemon_config({}, cfg(), use_zfs=False)
     assert merged == {"data-root": "/var/lib/docker"}
 
 
 def test_daemon_config_drops_stale_userns_remap():
-    # An earlier agent version enabled remap; re-running host-prepare must remove it so setuid
-    # passwd/sudo work under --userns=host.
-    merged = merge_daemon_config({"userns-remap": "labdockremap"}, cfg(), use_zfs=False,
-                                 gpu_present=False)
+    merged = merge_daemon_config({"userns-remap": "labdockremap"}, cfg(), use_zfs=False)
     assert "userns-remap" not in merged
 
 
-def test_daemon_config_gpu_present_pins_cgroupfs():
-    merged = merge_daemon_config({}, cfg(), use_zfs=True, gpu_present=True)
-    assert merged["exec-opts"] == ["native.cgroupdriver=cgroupfs"]
+def test_daemon_config_removes_legacy_nvidia_runtime_only():
+    merged = merge_daemon_config({
+        "default-runtime": "nvidia",
+        "runtimes": {
+            "nvidia": {"path": "nvidia-container-runtime"},
+            "kata": {"path": "kata-runtime"},
+        },
+    }, cfg(), use_zfs=False)
+    assert "default-runtime" not in merged
+    assert merged["runtimes"] == {"kata": {"path": "kata-runtime"}}
 
 
-def test_daemon_config_gpu_cgroupfs_opt_is_idempotent():
-    once = merge_daemon_config({}, cfg(), use_zfs=True, gpu_present=True)
-    twice = merge_daemon_config(once, cfg(), use_zfs=True, gpu_present=True)
-    assert twice["exec-opts"] == ["native.cgroupdriver=cgroupfs"]
+def test_daemon_config_removes_legacy_cgroupfs_pin():
+    merged = merge_daemon_config(
+        {"exec-opts": ["native.cgroupdriver=cgroupfs"]}, cfg(), use_zfs=True
+    )
+    assert "exec-opts" not in merged
 
 
-def test_daemon_config_gpu_present_replaces_conflicting_cgroupdriver_opt():
-    merged = merge_daemon_config({"exec-opts": ["native.cgroupdriver=systemd"]}, cfg(),
-                                  use_zfs=True, gpu_present=True)
-    assert merged["exec-opts"] == ["native.cgroupdriver=cgroupfs"]
-
-
-def test_daemon_config_gpu_present_preserves_unrelated_exec_opts():
-    merged = merge_daemon_config({"exec-opts": ["native.cgroupdriver=systemd", "other=1"]}, cfg(),
-                                  use_zfs=True, gpu_present=True)
-    assert merged["exec-opts"] == ["other=1", "native.cgroupdriver=cgroupfs"]
+def test_daemon_config_preserves_operator_exec_opts():
+    merged = merge_daemon_config(
+        {"exec-opts": ["native.cgroupdriver=systemd", "other=1"]}, cfg(), use_zfs=True
+    )
+    assert merged["exec-opts"] == ["native.cgroupdriver=systemd", "other=1"]
 
 
 def test_docker_dataset_defaults_to_the_first_fast_pool():
@@ -252,16 +228,48 @@ def test_rewrite_nvidia_apt_list_injects_signed_by():
     )
 
 
-def test_security_assets_include_required_runtime_syscalls():
-    root = resources.files("lab_agent").joinpath("assets")
-    profile = json.loads(root.joinpath("lab-codex-seccomp.json").read_text())
-    allowed = {name for group in profile["syscalls"] if group["action"] == "SCMP_ACT_ALLOW"
-               for name in group["names"]}
-    assert {"clone", "clone3", "unshare", "setns", "mount", "umount2", "pivot_root",
-            "fsopen", "fsconfig", "fsmount", "move_mount", "open_tree", "mount_setattr",
-            "seccomp", "prctl", "capset", "chroot"} <= allowed
-    apparmor = root.joinpath("lab-codex.apparmor").read_text()
-    assert "/usr/bin/bwrap Px -> lab-codex//lab-codex-bwrap" in apparmor
-    assert "profile lab-codex//lab-codex-bwrap" in apparmor and "userns," in apparmor
-    assert "  mount options=(rw, make-rslave) -> **,\n" in apparmor
-    assert "  remount,\n" in apparmor
+def test_nvidia_cdi_installs_latest_base_and_removes_legacy_runtime(monkeypatch):
+    runner = Runner({"apt-get install": (True, ""), "apt-get remove": (True, "")})
+    monkeypatch.setattr(hostprep, "run", runner)
+    monkeypatch.setattr(hostprep, "_ensure_nvidia_apt_repo", lambda: False)
+    monkeypatch.setattr(hostprep, "_apt_update", lambda: None)
+    monkeypatch.setattr(
+        hostprep, "_dpkg_installed", lambda pkg: pkg == "nvidia-container-toolkit"
+    )
+    hostprep._ensure_nvidia_cdi_if_present(True)
+    assert any("nvidia-container-toolkit-base" in call for call in runner.calls)
+    assert any(call == "apt-get remove -y nvidia-container-toolkit" for call in runner.calls)
+
+
+def test_nvidia_cdi_refresh_uses_packaged_systemd_units(monkeypatch, tmp_path):
+    runner = Runner({"systemctl enable --now": (True, "")})
+    monkeypatch.setattr(hostprep, "run", runner)
+    legacy = tmp_path / "nvidia.yaml"
+    legacy.write_text("old")
+    monkeypatch.setattr(hostprep, "LEGACY_NVIDIA_CDI_SPEC", legacy)
+    hostprep._refresh_nvidia_cdi(True)
+    assert not legacy.exists()
+    assert runner.calls == [
+        "systemctl enable --now nvidia-cdi-refresh.path nvidia-cdi-refresh.service"
+    ]
+
+
+def test_legacy_security_assets_are_unloaded_and_removed(monkeypatch, tmp_path):
+    apparmor = tmp_path / "old-apparmor"
+    distro = tmp_path / "old-distro-profile"
+    seccomp = tmp_path / "old-seccomp.json"
+    for path in (apparmor, distro, seccomp):
+        path.write_text("old")
+    monkeypatch.setattr(hostprep, "LEGACY_APPARMOR_PROFILE", apparmor)
+    monkeypatch.setattr(hostprep, "LEGACY_DISTRO_NAMESPACE_PROFILE", distro)
+    monkeypatch.setattr(hostprep, "LEGACY_SECCOMP_PROFILE", seccomp)
+    runner = Runner({"apparmor_parser -R": (True, "")})
+    monkeypatch.setattr(hostprep, "run", runner)
+
+    hostprep._remove_legacy_security_assets()
+
+    assert not any(path.exists() for path in (apparmor, distro, seccomp))
+    assert runner.calls == [
+        f"apparmor_parser -R {apparmor}",
+        f"apparmor_parser -R {distro}",
+    ]

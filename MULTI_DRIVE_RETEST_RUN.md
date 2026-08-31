@@ -78,16 +78,6 @@ create as `sbravo1` immediately failed with `No space left on device`, despite e
 usage. This is the same flat-50-GiB-per-branch defect, now reproduced after complete disk wipe and
 bootstrap from merge commit `de061c084896f06966e6717e639a3fcc0e48cd55`.
 
-### RETEST-FIND-4 — nested bubblewrap remains broken with CDI-only GPU injection
-
-Both lab containers are now demonstrably `Runtime=runc` with a CDI `DeviceRequest` for
-`nvidia.com/gpu=all`; there is no legacy NVIDIA runtime selected. Nevertheless the container still
-has a tmpfs overmount at `/proc/driver/nvidia/params`, and the documented nested
-`bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid ...` probe fails. `lab-agent doctor`
-therefore remains critical with repairable `bubblewrap_failed`. The prior diagnosis that switching
-from the legacy NVIDIA runtime to CDI alone would remove the overmount is disproven; the current
-CDI path also injects it.
-
 ### RETEST-FIND-5 — `labquota --refresh --force` cannot run when home is full
 
 At the proven 64 GiB fast quota ceiling, `labquota --refresh --force` failed before contacting the
@@ -166,7 +156,7 @@ deployment and should be treated as failed pending controller-ticker investigati
 - [x] Verify every member reaches active, welcome emails arrive, alias is correct, and credentials work.
 - [x] Verify `labquota`, home/cold paths, sudo policy, ports, and container contract. (The
   security/mount contract, student password SSH, non-passwordless sudo behavior, four GPUs, and
-  quota reporting pass; the advertised `~/scratch` path and nested bwrap fail as findings.)
+  quota reporting pass; the advertised `~/scratch` path fails as a finding.)
 - [x] Exercise failed-member retry and failed-removal retry without disturbing active members.
   (`sbravo3` first failed at the clean deployment's reproduced 50 GiB `minfreespace` defect while
   the existing members stayed active. After a runtime-only 1 MiB workaround, Retry provisioned the
@@ -225,8 +215,8 @@ deployment and should be treated as failed pending controller-ticker investigati
 - [x] Restore production idle/grace thresholds and no unintended whitelist. (Enabled, 5% util,
   30-minute idle, 10-minute grace, immediate off, both whitelist fields empty.)
 - [x] Test lab-agent status, doctor, repair reporting, restart, and reconnect behavior. (Safe repair
-  reloaded AppArmor/CDI and restarted both lab containers but correctly left nested bubblewrap
-  critical; service restart changed only the agent PID, preserved container IDs/start times and
+  refreshed CDI and restarted both lab containers; service restart changed only the agent PID,
+  preserved container IDs/start times and
   data hashes, reconnected in under a second, and cleared stale in-memory `fast3`.)
 - [x] Test scheduled rebalance trigger plus manual rebalance semantics. (Manual UI task passes and
   carries `min_delta_bytes: 0`; no hourly scheduled task was observed — RETEST-FIND-11.)
@@ -249,7 +239,7 @@ deployment and should be treated as failed pending controller-ticker investigati
 | Full teardown and clean bootstrap | PASS | Prior containers, images, pools, packages, state, and signatures were removed from the three authorized data disks; the boot disk was preserved. The agent was installed from merged PR #131 commit `de061c084896f06966e6717e639a3fcc0e48cd55`, with no deployed hot patch. |
 | Persistent Duo SSH workflow | PASS | One Duo-approved Terminal SSH session and keepalive/control-master workflow survived the run; every `geass` command used that same Terminal window. |
 | Controller registration and alias | PASS | `geass` is online with per-node auth, four GPUs, and alias `geass.cs.uga.edu`; heartbeat was one second old in the final UI check. |
-| Pseudo-lab provisioning, email, and SSH | PASS with findings | Both labs and all members provisioned; PI/student Gmail deliveries and password SSH worked. `~/scratch` is missing (FIND-2), and nested bwrap failed while labs existed (FIND-4). |
+| Pseudo-lab provisioning, email, and SSH | PASS with findings | Both labs and all members provisioned; PI/student Gmail deliveries and password SSH worked. `~/scratch` is missing (FIND-2). |
 | Member failure and retry | PASS | Existing members remained active; `sbravo3` reached active after Retry and received a fresh credential email. The initial failure was another direct manifestation of FIND-3. |
 | Multi-drive quota and placement | PASS with findings | Split quota sums, one-branch file placement, hard ceilings, sharding, `moveonenospc`, oversized-file refusal, no-shrink-below-used, and container path isolation passed. Aggregate overcommit reporting failed (FIND-6); refresh-at-full failed (FIND-5). |
 | Fast pool lifecycle | PASS with finding | Synthetic `fast3` attach, rebalance/deadband, guarded detach, confirmed detach, and cleanup passed. A service restart was required to clear stale in-memory config (FIND-9). |
@@ -257,7 +247,7 @@ deployment and should be treated as failed pending controller-ticker investigati
 | Missing-pool destroy guard and retry | PASS | With `cold2` exported, placement removal failed safely before destroying any surviving branch and exposed Retry removal. After recovery, hashes and quotas matched exactly and retry teardown succeeded. |
 | ZFS scrubs | PASS | `fast1`, `fast2`, `cold1`, and synthetic `cold2` completed with 0 B repaired and no read/write/checksum errors. |
 | GPU idle termination | PASS | Fresh managed work warned and was killed after the temporary test thresholds; email delivery, whitelist exemption, and unmanaged-host-process safety passed. Production policy was restored. |
-| Agent check/repair/restart | PASS with expected final critical | Service repair/restart/reconnect and state reload passed. With no test labs left, final doctor reports only `lab_smoke_unavailable` because there is no running provisioned student container in which to repeat bwrap/CUDA smoke checks. |
+| Agent check/repair/restart | PASS with expected final critical | Service repair/restart/reconnect and state reload passed. With no test labs left, final doctor reports only `lab_smoke_unavailable` because there is no running provisioned student container in which to repeat the CUDA smoke check. |
 | Manual quota rebalance | PASS | Controller task carried `min_delta_bytes: 0` and completed successfully. |
 | Scheduled hourly rebalance | FAIL | No scheduled task appeared over more than five hours despite enabled 1-hour/1-GiB settings (FIND-11). |
 | Reboot survival | DEFERRED | Not run because reboot would terminate the Duo-authenticated persistent session and require a fresh interactive approval. |
@@ -301,7 +291,6 @@ Captured at `2026-08-30T21:29:05-04:00` in
 | FIND-1 zero-byte disk offered | Medium | agent device discovery / controller picker | Open; never selected. |
 | FIND-2 nonexistent `~/scratch` advertised | Medium | welcome template / provisioner | Open. |
 | FIND-3 50 GiB minimum breaks small labs | High | mergerfs tier policy | Open; directly affected provisioning and required runtime-only test workarounds. |
-| FIND-4 nested bwrap broken with CDI | High | container GPU/AppArmor mount contract | Open. |
 | FIND-5 refresh channel fails at full home | Medium | `labquota` refresh IPC | Open. |
 | FIND-6 aggregate quota overcommit invisible | High | quota allocator/status validation | Open. |
 | FIND-7 late child mounts invisible | High | provisioning order / mount propagation | Open. |

@@ -207,7 +207,7 @@ def add_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     users.validate_username(username)
     users.validate_uid(uid, gid)
 
-    # Managed labs use --userns=host, so persistent storage has identical host/container IDs.
+    # Managed labs use Docker's non-remapped default, so storage has identical host/container IDs.
     host_uid = uid
     host_gid = gid
     prepare_student_storage(

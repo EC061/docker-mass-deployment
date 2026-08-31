@@ -26,13 +26,6 @@ def _labels(cfg: AgentConfig, lab: str) -> dict[str, str]:
         "lab-agent.managed": "true",
         "lab-agent.lab": lab,
         "lab-agent.node": cfg.node_name,
-        # Docker compiles seccomp policy at container creation. A profile file updated later does
-        # not change an existing container, so stamp the exact policy for doctor to compare.
-        "lab-agent.seccomp-sha256": docker.security_profile_digest(cfg.seccomp_profile),
-        # This creation-time Docker option removes /proc overmounts that prevent bubblewrap from
-        # mounting the procfs for its PID namespace. Doctor uses the label to reject old labs.
-        "lab-agent.systempaths-unconfined": "true",
-        "lab-agent.userns": "host",
     }
 
 
@@ -53,14 +46,12 @@ def _mounts(cfg: AgentConfig, lab: str) -> Mounts:
         fast=fast,
         cold=cold,
         labquota=usagereport.ensure_labquota_dirs(cfg, lab),
-        seccomp_profile=cfg.seccomp_profile,
-        apparmor_profile=cfg.apparmor_profile,
     )
 
 
 def assert_node_ready(cfg: AgentConfig) -> Any:
     caps = detect_capabilities(cfg, deep=False)
-    runtime_ok = caps.runtime.docker_ok and caps.runtime.userns_ok and caps.runtime.bwrap_ok
+    runtime_ok = caps.runtime.docker_ok and caps.runtime.userns_ok
     if not runtime_ok or caps.health.status == "critical":
         raise docker.DockerError(
             "node runtime/storage is unhealthy; run `lab-agent doctor` before changing labs"

@@ -12,7 +12,7 @@ def cfg():
 
 def healthy(gpu=True, cdi=True):
     return SimpleNamespace(
-        runtime=SimpleNamespace(docker_ok=True, userns_ok=True, bwrap_ok=True),
+        runtime=SimpleNamespace(docker_ok=True, userns_ok=True),
         health=SimpleNamespace(status="healthy"),
         nvidia_gpu=gpu, nvidia_cdi=cdi,
     )
@@ -37,14 +37,14 @@ def test_mount_contract(monkeypatch):
     assert mounts.fast == "/fast/bio"
     assert mounts.cold == "/cold/bio"
     assert mounts.labquota == "/run/agent/labquota/bio"
-    assert mounts.apparmor_profile == "lab-codex"
 
 
-def test_labels_stamp_seccomp_digest(monkeypatch):
-    monkeypatch.setattr(containerops.docker, "security_profile_digest", lambda path: "abc123")
-    assert containerops._labels(cfg(), "bio")["lab-agent.seccomp-sha256"] == "abc123"
-    assert containerops._labels(cfg(), "bio")["lab-agent.systempaths-unconfined"] == "true"
-    assert containerops._labels(cfg(), "bio")["lab-agent.userns"] == "host"
+def test_labels_only_identify_the_managed_lab():
+    assert containerops._labels(cfg(), "bio") == {
+        "lab-agent.managed": "true",
+        "lab-agent.lab": "bio",
+        "lab-agent.node": "n",
+    }
 
 
 def test_creation_requires_userns_and_passes_cdi(monkeypatch):
@@ -58,7 +58,7 @@ def test_creation_requires_userns_and_passes_cdi(monkeypatch):
     assert events == ["pull", "remove", True]
 
     common(monkeypatch, SimpleNamespace(
-        runtime=SimpleNamespace(docker_ok=True, userns_ok=False, bwrap_ok=True),
+        runtime=SimpleNamespace(docker_ok=True, userns_ok=False),
         health=SimpleNamespace(status="critical"),
         nvidia_gpu=False, nvidia_cdi=False,
     ))

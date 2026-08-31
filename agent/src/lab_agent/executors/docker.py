@@ -12,12 +12,10 @@ host Docker socket.
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .base import CommandResult, run
 
@@ -32,14 +30,6 @@ ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 class DockerError(RuntimeError):
     pass
-
-
-def security_profile_digest(path: str) -> str:
-    """Fingerprint a seccomp profile so running containers can be checked for stale policy."""
-    try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
-    except OSError:
-        return ""
 
 
 def validate_image(image: str) -> str:
@@ -110,8 +100,6 @@ class Mounts:
     cold: str
     # Root-owned host dir holding usage.json/status.json, bind-mounted READ-ONLY at /run/labquota.
     labquota: str = ""
-    seccomp_profile: str = "/etc/lab-agent/security/lab-codex-seccomp.json"
-    apparmor_profile: str = "lab-codex"
 
 
 def build_run_args(
@@ -131,30 +119,10 @@ def build_run_args(
     if opts.ssh_port:
         args += ["-p", f"{opts.ssh_port}:22"]
     args += ["--cpus", opts.cpus, "--memory", opts.memory, "--shm-size", opts.shm_size]
-    # A daemon-remapped parent user namespace locks inherited mounts against a student's nested
-    # namespace, so bubblewrap cannot change root mount propagation. Labs use the initial user
-    # namespace; students are non-root by default and sudo requires their password.
-    args += [
-        "--runtime=runc", "--userns=host", "--cgroupns=private", "--stop-signal", "SIGTERM"
-    ]
-    # No added capabilities. Bubblewrap is NOT setuid in the image; it takes the unprivileged path,
-    # creating a user namespace first and gaining its setup capabilities inside that namespace,
-    # where they carry no authority over the host.
+    # Keep application-specific tmpfs mounts, but otherwise use the daemon's normal runtime,
+    # user/cgroup namespaces, capability set, seccomp policy, AppArmor profile, and system-path
+    # masks. The image's STOPSIGNAL supplies the normal SIGTERM shutdown behavior.
     args += ["--tmpfs", "/run:rw,nosuid,nodev", "--tmpfs", "/run/lock:rw,nosuid,nodev"]
-    # Docker's default seccomp policy masks every CLONE_NEW* flag off clone(2) for containers
-    # without CAP_SYS_ADMIN, which is the one and only thing that blocks unprivileged user
-    # namespaces on a current engine. This profile allows them; it stays mandatory.
-    args += ["--security-opt", f"seccomp={mounts.seccomp_profile}"]
-    # Labs MUST stay AppArmor-confined. Under Ubuntu's kernel.apparmor_restrict_unprivileged_userns
-    # an *unconfined* task cannot even write its own /proc/self/uid_map, so apparmor=unconfined
-    # breaks unprivileged bwrap (measured 2026-08-15). The lab-codex profile grants the bwrap child
-    # profile the mount/pivot_root/userns permissions the sandbox needs and denies the rest.
-    args += ["--security-opt", f"apparmor={mounts.apparmor_profile}"]
-    # Docker normally bind-mounts masks/read-only overlays below /proc. Linux then rejects the
-    # fresh procfs mount that an unprivileged bubblewrap PID namespace requires because it would
-    # be less restrictive than the procfs already visible in the mount namespace. The dedicated
-    # AppArmor profile carries the equivalent system-path restrictions without those overmounts.
-    args += ["--security-opt", "systempaths=unconfined"]
     if gpus:
         args += ["--device", "nvidia.com/gpu=all"]
     if storage_quota_supported and opts.rootfs_quota:

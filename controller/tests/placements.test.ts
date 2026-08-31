@@ -420,7 +420,7 @@ describe("SMB placement rules + shared student removal", () => {
 
   beforeAll(() => {
     const d = dbmod.db();
-    const capabilities = JSON.stringify({ runtime: { userns_start: 231072, userns_size: 65536 } });
+    const capabilities = JSON.stringify({ runtime: { userns_ok: true } });
     d.prepare("INSERT INTO nodes (name, online, created_at, cold_backend, cold_ready, capabilities) VALUES ('own-1', 1, 0, 'local_zfs', 1, ?)").run(capabilities);
     ownerId = (d.prepare("SELECT id FROM nodes WHERE name='own-1'").get() as any).id;
     d.prepare("INSERT INTO nodes (name, online, created_at, cold_backend, cold_owner_node_id, cold_ready, capabilities) VALUES ('smb-1', 1, 0, 'smb', ?, 1, ?)").run(ownerId, capabilities);
@@ -451,15 +451,15 @@ describe("SMB placement rules + shared student removal", () => {
     dbmod.db().prepare("UPDATE nodes SET cold_ready = 1 WHERE id = ?").run(clientId);
   });
 
-  it("refuses an SMB client with a different numeric userns mapping", async () => {
+  it("refuses an SMB client that does not use identity UIDs", async () => {
     const lab = newLab("smbids");
     const owner = await grant(lab.id, ownerId);
     placements.markPlacementState(owner.id, "active");
     dbmod.db().prepare("UPDATE nodes SET capabilities = ? WHERE id = ?")
-      .run(JSON.stringify({ runtime: { userns_start: 999999, userns_size: 65536 } }), clientId);
-    await expect(grant(lab.id, clientId)).rejects.toThrow(/same Docker userns numeric mapping/);
+      .run(JSON.stringify({ runtime: { userns_ok: false } }), clientId);
+    await expect(grant(lab.id, clientId)).rejects.toThrow(/both report identity Docker UIDs/);
     dbmod.db().prepare("UPDATE nodes SET capabilities = ? WHERE id = ?")
-      .run(JSON.stringify({ runtime: { userns_start: 231072, userns_size: 65536 } }), clientId);
+      .run(JSON.stringify({ runtime: { userns_ok: true } }), clientId);
   });
 
   it("defers shared cold cleanup until all placement removals succeed", async () => {

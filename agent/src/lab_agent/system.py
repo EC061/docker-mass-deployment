@@ -1,4 +1,4 @@
-"""Structured health checks for Docker, bubblewrap, CUDA, storage, and NVIDIA CDI."""
+"""Structured health checks for Docker, CUDA, storage, and NVIDIA CDI."""
 
 from __future__ import annotations
 
@@ -28,10 +28,7 @@ class RuntimeHealth:
     docker_ok: bool
     storage_driver: str
     userns_ok: bool
-    userns_user: str
-    userns_start: int
-    userns_size: int
-    bwrap_ok: bool
+    default_security_ok: bool
     cuda_toolkit_ok: bool
 
 
@@ -120,39 +117,25 @@ def _pool_exists(pool: str) -> bool:
 def _docker_userns(cfg: AgentConfig) -> bool:
     """Healthy when the daemon does NOT enable userns-remap.
 
-    Labs run with --userns=host, so a remapped daemon gives them no containment; its only effect is
-    that Docker unpacks the image into a remapped graph store and chowns every file — including
-    setuid /usr/bin/passwd and /usr/bin/sudo — to the subordinate base UID. Under --userns=host
-    those binaries then elevate to that unprivileged UID instead of real root, so passwd, sudo, and
-    every setuid-root program fail inside the lab. ``docker info`` reports ``name=userns`` in its
-    security options exactly when the running daemon is remapping, which is the authoritative check.
+    Managed labs and their bind-mounted storage use the same numeric UIDs on the host and in the
+    container. ``docker info`` reports ``name=userns`` exactly when the daemon is remapping.
     """
     res = run(["docker", "info", "--format", "{{json .SecurityOptions}}"], timeout=20)
     return res.ok and "name=userns" not in res.stdout
 
 
 def _docker_root_ok(cfg: AgentConfig) -> bool:
-    # With userns-remap active, Docker nests its real root a level deeper at
-    # <data-root>/<remapped-uid>.<remapped-gid> and reports that nested path here rather than the
-    # configured data-root itself.
     result = run(["docker", "info", "--format", "{{.DockerRootDir}}"], timeout=20)
     if not result.ok:
         return False
     actual = os.path.realpath(result.stdout.strip())
-    remapped = os.path.realpath(
-        os.path.join(cfg.docker_data_root, f"{cfg.userns_start}.{cfg.userns_start}")
-    )
-    return actual in (os.path.realpath(cfg.docker_data_root), remapped)
+    return actual == os.path.realpath(cfg.docker_data_root)
 
 
-def _subid_ok(cfg: AgentConfig) -> bool:
-    wanted = f"{cfg.userns_user}:{cfg.userns_start}:{cfg.userns_size}"
-    try:
-        subuid = open("/etc/subuid", encoding="utf-8").read().splitlines()
-        subgid = open("/etc/subgid", encoding="utf-8").read().splitlines()
-    except OSError:
-        return False
-    return wanted in subuid and wanted in subgid
+def _docker_default_security_available() -> bool:
+    """Docker should advertise both standard Linux security integrations."""
+    res = run(["docker", "info", "--format", "{{json .SecurityOptions}}"], timeout=20)
+    return res.ok and "name=seccomp" in res.stdout and "name=apparmor" in res.stdout
 
 
 def _cdi_devices() -> list[str]:
@@ -196,83 +179,6 @@ def _userspace_driver_version() -> str:
     return match.group(1) if match else ""
 
 
-def _security_profiles_ok(cfg: AgentConfig) -> bool:
-    # Both profiles are mandatory now: seccomp is what permits unprivileged user namespaces at all,
-    # and the AppArmor profile is what lets bwrap mount inside one (see build_run_args).
-    return os.path.isfile(cfg.seccomp_profile) and os.path.isfile("/etc/apparmor.d/lab-codex")
-
-
-def _stale_seccomp_containers(cfg: AgentConfig) -> list[str]:
-    """Return managed containers not created with the currently installed seccomp policy."""
-    expected = docker.security_profile_digest(cfg.seccomp_profile)
-    if not expected:
-        return []
-    listed = run([
-        "docker", "ps", "--filter", "label=lab-agent.managed=true",
-        "--format", '{{.Names}}\t{{.Label "lab-agent.seccomp-sha256"}}',
-    ], timeout=20)
-    if not listed.ok:
-        return []
-    stale: list[str] = []
-    for line in listed.stdout.splitlines():
-        parts = line.split("\t", 1)
-        if parts and (len(parts) == 1 or parts[1] != expected):
-            stale.append(parts[0])
-    return stale
-
-
-def _stale_systempaths_containers() -> list[str]:
-    """Return managed containers created before the bubblewrap-compatible /proc contract."""
-    listed = run([
-        "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
-    ], timeout=20)
-    if not listed.ok:
-        return []
-    stale: list[str] = []
-    for container in listed.stdout.splitlines():
-        paths = run([
-            "docker", "inspect", "--format",
-            "{{json .HostConfig.MaskedPaths}}\t{{json .HostConfig.ReadonlyPaths}}", container,
-        ], timeout=20)
-        if not paths.ok:
-            stale.append(container)
-            continue
-        parts = paths.stdout.strip().split("\t", 1)
-        if len(parts) != 2:
-            stale.append(container)
-            continue
-        try:
-            masked_paths = json.loads(parts[0] or "[]")
-            readonly_paths = json.loads(parts[1] or "[]")
-        except json.JSONDecodeError:
-            stale.append(container)
-            continue
-        if not isinstance(masked_paths, list) or not isinstance(readonly_paths, list):
-            stale.append(container)
-            continue
-        if masked_paths or readonly_paths:
-            stale.append(container)
-    return stale
-
-
-def _stale_lab_userns_containers() -> list[str]:
-    """Return managed containers that still inherit Docker's remapped user namespace."""
-    listed = run([
-        "docker", "ps", "--filter", "label=lab-agent.managed=true",
-        "--format", "{{.Names}}",
-    ], timeout=20)
-    if not listed.ok:
-        return []
-    stale: list[str] = []
-    for container in listed.stdout.splitlines():
-        mode = run([
-            "docker", "inspect", "--format", "{{.HostConfig.UsernsMode}}", container,
-        ], timeout=20)
-        if not mode.ok or mode.stdout.strip() != "host":
-            stale.append(container)
-    return stale
-
-
 def _stale_bind_propagation_containers() -> list[str]:
     """Return managed containers whose persistent binds cannot see later host mounts.
 
@@ -304,13 +210,8 @@ def _stale_bind_propagation_containers() -> list[str]:
     return stale
 
 
-def _stale_bwrap_capability_containers() -> list[str]:
-    """Return managed containers still carrying the legacy setuid-bubblewrap capabilities.
-
-    Unprivileged bubblewrap needs none of them, and CAP_SYS_ADMIN in a ``--userns=host`` container
-    with student shells is a host-root escape surface. Capabilities are fixed at creation, so a
-    container that still has them needs recreation.
-    """
+def _stale_privileged_capability_containers() -> list[str]:
+    """Return managed containers carrying capabilities outside Docker's normal defaults."""
     forbidden = {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE"}
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
@@ -338,36 +239,8 @@ def _stale_bwrap_capability_containers() -> list[str]:
     return stale
 
 
-# Probe run inside a lab to prove the seccomp policy is enforcing: add_key(2) (syscall 248 on
-# x86_64) is outside the allow-list, so the profile fails it with defaultErrnoRet EPERM (exit 0);
-# without the profile the bogus arguments fail with a different errno such as EFAULT (exit 1).
-# CI runs this exact script with and without the profile to keep the errno mapping honest.
-SECCOMP_PROBE = (
-    "import ctypes, sys; libc = ctypes.CDLL('libc.so.6', use_errno=True); "
-    "libc.syscall(248, 0, 0, 0, 0); "
-    "sys.exit(0 if ctypes.get_errno() == 1 else 1)"
-)
-
-
-def _seccomp_enforcement_ok(container: str, user: str) -> bool:
-    """Verify the seccomp profile actually blocks denied syscalls (see SECCOMP_PROBE)."""
-    result = run([
-        "docker", "exec", "-u", user,
-        "-e", f"HOME=/home/{user}", "-e", f"USER={user}", "-e", f"LOGNAME={user}",
-        container, "python3", "-c", SECCOMP_PROBE,
-    ], timeout=30)
-    return result.ok
-
-
-def _stale_apparmor_containers(cfg: AgentConfig) -> list[str]:
-    """Return managed containers not created under the lab-codex AppArmor profile.
-
-    Unprivileged bubblewrap requires confinement: under Ubuntu's
-    ``kernel.apparmor_restrict_unprivileged_userns`` an unconfined task cannot write its own
-    ``/proc/self/uid_map``, so an ``apparmor=unconfined`` lab fails the bwrap smoke test.
-    Confinement is fixed at container creation; an unconfined container needs recreation, not a
-    host profile change.
-    """
+def _stale_security_override_containers() -> list[str]:
+    """Return managed containers that override Docker's standard seccomp/AppArmor settings."""
     listed = run([
         "docker", "ps", "--filter", "label=lab-agent.managed=true", "--format", "{{.Names}}",
     ], timeout=20)
@@ -375,10 +248,20 @@ def _stale_apparmor_containers(cfg: AgentConfig) -> list[str]:
         return []
     stale: list[str] = []
     for container in listed.stdout.splitlines():
-        profile = run([
-            "docker", "inspect", "--format", "{{.AppArmorProfile}}", container,
+        security = run([
+            "docker", "inspect", "--format",
+            "{{json .HostConfig.SecurityOpt}}\t{{.AppArmorProfile}}", container,
         ], timeout=20)
-        if not profile.ok or profile.stdout.strip() != cfg.apparmor_profile:
+        if not security.ok:
+            stale.append(container)
+            continue
+        parts = security.stdout.strip().split("\t", 1)
+        try:
+            opts = json.loads(parts[0] or "null") or []
+        except json.JSONDecodeError:
+            opts = ["invalid"]
+        profile = parts[1] if len(parts) == 2 else ""
+        if opts or profile != "docker-default":
             stale.append(container)
     return stale
 
@@ -470,49 +353,25 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     userns_ok = docker_ok and _docker_userns(cfg)
     if docker_ok and not userns_ok:
         _issue(issues, "docker_userns", "critical",
-               "Docker userns-remap must be disabled: labs run --userns=host and a remapped daemon "
-               "breaks setuid passwd/sudo inside the lab — re-run host-prepare and recreate "
-               "placements")
+               "Docker userns-remap must be disabled so bind-mounted storage keeps identity "
+               "numeric UIDs; re-run host-prepare and recreate placements")
 
-    bwrap_ok = _security_profiles_ok(cfg)
+    default_security_ok = docker_ok and _docker_default_security_available()
+    if docker_ok and not default_security_ok:
+        _issue(issues, "docker_default_security", "critical",
+               "Docker must provide its standard seccomp and AppArmor integrations")
+
     cuda_ok = False
     target: tuple[str, str] | None = None
     if deep and docker_ok:
-        stale_seccomp = _stale_seccomp_containers(cfg)
-        if stale_seccomp:
+        stale_caps = _stale_privileged_capability_containers()
+        if stale_caps:
             _issue(
                 issues,
-                "container_seccomp_stale",
+                "container_capabilities_stale",
                 "critical",
-                "Managed containers require recreation after a seccomp profile update: "
-                + ", ".join(stale_seccomp),
-            )
-        stale_systempaths = _stale_systempaths_containers()
-        if stale_systempaths:
-            _issue(
-                issues,
-                "container_systempaths_stale",
-                "critical",
-                "Managed containers require recreation for nested bubblewrap procfs: "
-                + ", ".join(stale_systempaths),
-            )
-        stale_lab_userns = _stale_lab_userns_containers()
-        if stale_lab_userns:
-            _issue(
-                issues,
-                "container_userns_stale",
-                "critical",
-                "Managed containers require reinstall for bubblewrap-compatible user namespaces: "
-                + ", ".join(stale_lab_userns),
-            )
-        stale_bwrap_caps = _stale_bwrap_capability_containers()
-        if stale_bwrap_caps:
-            _issue(
-                issues,
-                "container_bwrap_caps_stale",
-                "critical",
-                "Managed containers still carry the legacy setuid bubblewrap capabilities and "
-                "require recreation: " + ", ".join(stale_bwrap_caps),
+                "Managed containers carry non-standard privileged capabilities and require "
+                "recreation: " + ", ".join(stale_caps),
             )
         stale_propagation = _stale_bind_propagation_containers()
         if stale_propagation:
@@ -523,15 +382,14 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                 "Managed containers cannot see per-student datasets mounted after they started "
                 "and require recreation: " + ", ".join(stale_propagation),
             )
-        stale_apparmor = _stale_apparmor_containers(cfg)
-        if stale_apparmor:
+        stale_security = _stale_security_override_containers()
+        if stale_security:
             _issue(
                 issues,
-                "container_apparmor_stale",
+                "container_security_overrides_stale",
                 "critical",
-                f"Managed containers require recreation under the '{cfg.apparmor_profile}' "
-                "AppArmor profile (unconfined breaks unprivileged bwrap): "
-                + ", ".join(stale_apparmor),
+                "Managed containers override Docker's standard seccomp/AppArmor settings and "
+                "require recreation: " + ", ".join(stale_security),
             )
         target = _first_student_container()
         if target:
@@ -542,38 +400,14 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                     "critical",
                     f"SSH key exchange failed in '{target[0]}'; inspect its Docker logs",
                 )
-            # bwrap must NOT be setuid: the unprivileged path is the supported one, and a setuid
-            # binary reachable by students is exactly the escape surface this design removes.
-            mode = run(["docker", "exec", target[0], "stat", "-c", "%a", "/usr/bin/bwrap"],
-                       timeout=20)
-            mode_ok = mode.ok and mode.stdout.strip() == "755"
-            bwrap_smoke = [
-                "bwrap", "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc",
-                "--unshare-pid", "--", "echo", "bwrap works",
-            ]
-            raw_bwrap_ok = mode_ok and _student_command(target, bwrap_smoke)
-            bwrap_ok = mode_ok and raw_bwrap_ok
-            seccomp_ok = bwrap_ok and _seccomp_enforcement_ok(target[0], target[1])
-            if bwrap_ok and not seccomp_ok:
-                _issue(
-                    issues,
-                    "seccomp_enforcement_failed",
-                    "critical",
-                    "Seccomp profile is applied but does not block denied syscalls; "
-                    "re-run host-prepare to refresh the profile",
-                    True,
-                )
             cuda_ok = _student_command(target, ["nvcc", "--version"])
         else:
             _issue(
                 issues,
                 "lab_smoke_unavailable",
                 "critical",
-                "No running lab with a provisioned student is available for bwrap/CUDA checks",
+                "No running lab with a provisioned student is available for the CUDA check",
             )
-    if not bwrap_ok:
-        _issue(issues, "bubblewrap_failed", "critical",
-               "Distribution /usr/bin/bwrap cannot create a user/PID/proc sandbox", True)
     if deep and target is not None and not cuda_ok:
         _issue(issues, "cuda_toolkit_failed", "critical",
                "nvcc --version failed as a provisioned student")
@@ -628,8 +462,7 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     severity = {"warning": 1, "critical": 2}
     status = "healthy" if not issues else max(issues, key=lambda i: severity[i.severity]).severity
     return Capabilities(
-        runtime=RuntimeHealth(docker_ok, driver, userns_ok, cfg.userns_user,
-                              cfg.userns_start, cfg.userns_size, bwrap_ok, cuda_ok),
+        runtime=RuntimeHealth(docker_ok, driver, userns_ok, default_security_ok, cuda_ok),
         nvidia=NvidiaHealth(gpu_count, nvml_ok, loaded, userspace, cdi_ok, devices),
         storage=StorageHealth(
             zfs_ok, fast_ok, cold_ok, cfg.slow_backend, tiers=tiers,

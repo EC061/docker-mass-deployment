@@ -542,7 +542,7 @@ def provision_lab(
     logs += apply_allocation(tier, lab, allocation, branches)
     logs += list(allocation.warnings)
 
-    # Managed labs run --userns=host, so the mount roots are owned by real host uid 0.
+    # Managed labs use Docker's non-remapped default, so mount roots are owned by real host uid 0.
     for obs in branches:
         if obs.present:
             coldfs.ensure_owned_dir(obs.path, uid, gid, mode=mode)

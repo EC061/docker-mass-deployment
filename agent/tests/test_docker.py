@@ -6,8 +6,7 @@ from lab_agent.executors.docker import ContainerOptions, DockerError, Mounts, bu
 
 
 def mounts():
-    return Mounts("/fast/bio", "/cold/bio", "/run/agent/labquota/bio",
-                  "/etc/lab-agent/security/lab-codex-seccomp.json", "lab-codex")
+    return Mounts("/fast/bio", "/cold/bio", "/run/agent/labquota/bio")
 
 
 def test_container_name_and_hostname_scheme():
@@ -26,19 +25,14 @@ def test_hostname_is_set_on_run():
     assert "--hostname" not in build_run_args("bio-node1", ContainerOptions(), mounts(), gpus=False)
 
 
-def test_runc_host_userns_outer_container_contract():
+def test_normal_docker_security_and_cdi_container_contract():
     opts = ContainerOptions(image="custom-ssh", cpus="8", memory="16g", shm_size="2g",
                             rootfs_quota="100g", ssh_port=50012)
     args = build_run_args("lab-bio", opts, mounts(), gpus=True)
     joined = " ".join(args)
-    assert "--runtime=runc" in args
-    assert "--userns=host" in args
     assert "--device nvidia.com/gpu=all" in joined
-    assert "seccomp=/etc/lab-agent/security/lab-codex-seccomp.json" in joined
-    assert "apparmor=lab-codex" in joined
-    assert "systempaths=unconfined" in joined
-    # Unprivileged bwrap needs no capabilities; CAP_SYS_ADMIN in a --userns=host lab with student
-    # shells would be a host-root escape surface.
+    for flag in ("--runtime", "--userns", "--cgroupns", "--security-opt", "--cap-add"):
+        assert flag not in args
     assert "--cap-add" not in args
     assert "source=/fast/bio,target=/home" in joined
     assert "source=/cold/bio,target=/cold-storage" in joined
@@ -51,10 +45,8 @@ def test_runc_host_userns_outer_container_contract():
     # Slave, never shared: propagation must not run container -> host.
     assert "bind-propagation=rshared" not in joined
     assert "--storage-opt size=100g" in joined
-    assert "--stop-signal SIGTERM" in joined
-    assert "SIGRTMIN+3" not in joined
     for forbidden in ("--privileged", "/var/run/docker.sock", "no-new-privileges",
-                      "seccomp=unconfined", "apparmor=unconfined"):
+                      "seccomp=", "apparmor=", "systempaths=unconfined"):
         assert forbidden not in joined
 
 
