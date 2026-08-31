@@ -265,6 +265,10 @@ class Agent:
             try:
                 from .telemetry import collect_heartbeat
 
+                # Storage CLI commands are separate processes. Refresh here as well as around task
+                # execution so an otherwise-idle node does not publish a detached pool as UNAVAIL
+                # indefinitely while waiting for the next controller task.
+                await asyncio.to_thread(self.dispatcher.sync_config, wait=False)
                 payload = await asyncio.to_thread(collect_heartbeat, self.cfg, self.usage)
             except Exception as exc:
                 payload = {"error": str(exc)}

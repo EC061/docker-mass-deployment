@@ -88,6 +88,34 @@ def test_a_config_edited_by_the_cli_is_adopted_before_the_next_task(tmp_path, mo
     assert cfg.storage.fast.pools == ("fast1", "fast2")
 
 
+def test_a_config_edited_during_a_task_is_not_marked_current_without_loading(
+    tmp_path, monkeypatch,
+):
+    """The post-task check must load a concurrent CLI edit, not only record its new file stamp."""
+    from lab_agent.config import load_config
+
+    path = tmp_path / "config.toml"
+    _write_config(path, ["fast1", "fast2", "fast3"])
+    monkeypatch.setenv("LAB_AGENT_CONFIG", str(path))
+    cfg = load_config(path)
+    disp = Dispatcher(cfg, LogBus("test-node", sink=lambda _e: None, echo=False))
+
+    def detach_while_task_runs(_cfg, _params):
+        _write_config(path, ["fast1", "fast2"])
+        return {}, ""
+
+    disp.register("test.concurrent-detach", detach_while_task_runs)
+    assert disp.handle(P.Task(id="10", action="test.concurrent-detach"))["ok"] is True
+
+    # The old finally block only copied the new stamp. The next task then believed the stale object
+    # already matched the file and retained fast3 forever.
+    assert cfg.storage.fast.pools == ("fast1", "fast2")
+    seen = {}
+    disp.register("test.peek-after-detach", lambda c, p: (seen.setdefault("pools", c.fast_tier.pools), ""))
+    assert disp.handle(P.Task(id="11", action="test.peek-after-detach"))["ok"] is True
+    assert seen["pools"] == ("fast1", "fast2")
+
+
 def test_an_unreadable_config_leaves_the_running_agent_on_its_last_good_copy(tmp_path, monkeypatch):
     from lab_agent.config import load_config
 
