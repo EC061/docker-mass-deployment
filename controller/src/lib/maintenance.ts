@@ -7,6 +7,7 @@ import { backupAll } from "./backup";
 import { db } from "./db";
 import { enqueueTask } from "./queue";
 import { getSetting } from "./settings";
+import { nodeHasZfs } from "./storage";
 
 // Approximate byte size of a single `logs` row's textual content. SQLite has no cheap per-table
 // size, so we sum the text-column lengths plus a fixed estimate for the int columns + row overhead.
@@ -226,13 +227,7 @@ export function scheduleScrubs(now = Date.now()): string[] {
     .all() as { name: string; last_scrub: number | null; capabilities: string | null }[];
   const scheduled: string[] = [];
   for (const n of nodes) {
-    let caps: { zfs?: boolean } = {};
-    try {
-      caps = n.capabilities ? JSON.parse(n.capabilities) : {};
-    } catch {
-      caps = {};
-    }
-    if (!caps.zfs) continue; // no ZFS -> nothing to scrub (e.g. all cold storage is SMB)
+    if (!nodeHasZfs(n.capabilities)) continue; // no ZFS -> nothing to scrub (e.g. cold is all SMB)
     if (n.last_scrub && now - n.last_scrub < intervalMs) continue;
     enqueueTask(n.name, "node.scrub", {}, "scrub-scheduler");
     db().prepare("UPDATE nodes SET last_scrub = ? WHERE name = ?").run(now, n.name);
@@ -264,13 +259,8 @@ export function scheduleRebalances(now = Date.now()): string[] {
     .all() as { name: string; last_rebalance: number | null; capabilities: string | null }[];
   const scheduled: string[] = [];
   for (const n of nodes) {
-    let caps: { zfs?: boolean } = {};
-    try {
-      caps = n.capabilities ? JSON.parse(n.capabilities) : {};
-    } catch {
-      caps = {};
-    }
-    if (!caps.zfs) continue; // no ZFS -> no branch quotas to re-split (e.g. SMB-only cold storage)
+    // no ZFS -> no branch quotas to re-split (e.g. SMB-only cold storage)
+    if (!nodeHasZfs(n.capabilities)) continue;
     if (n.last_rebalance && now - n.last_rebalance < intervalMs) continue;
     // No `tier` -> both tiers.
     enqueueTask(n.name, "storage.rebalance", { min_delta_bytes: minDeltaBytes }, "rebalance-scheduler");

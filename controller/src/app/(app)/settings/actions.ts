@@ -225,15 +225,10 @@ export async function scrubNowAction() {
   const nodes = db()
     .prepare("SELECT name, capabilities FROM nodes WHERE online = 1")
     .all() as { name: string; capabilities: string | null }[];
+  const { nodeHasZfs } = await import("@/lib/storage");
   let count = 0;
   for (const n of nodes) {
-    let zfs = false;
-    try {
-      zfs = !!(n.capabilities && JSON.parse(n.capabilities).zfs);
-    } catch {
-      zfs = false;
-    }
-    if (!zfs) continue;
+    if (!nodeHasZfs(n.capabilities)) continue;
     enqueueTask(n.name, "node.scrub", {}, actor);
     db().prepare("UPDATE nodes SET last_scrub = ? WHERE name = ?").run(Date.now(), n.name);
     count++;

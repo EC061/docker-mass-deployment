@@ -19,13 +19,27 @@ let settings: typeof import("../src/lib/settings");
 
 const GB = 1024 ** 3;
 
-function addNode(name: string, caps: object, lastRebalance: number | null = null) {
+/**
+ * The shape the agent actually sends: `Capabilities.to_dict()`, nested by health area. Building the
+ * fixture from the real payload is the point — a hand-written `{zfs: true}` blob (which no agent has
+ * ever sent) is what let `capabilities.zfs` read undefined in production while these tests passed.
+ */
+function agentCapabilities(zfsOk: boolean): object {
+  return {
+    runtime: { docker_ok: true, bwrap_ok: true },
+    nvidia: { gpu_count: 4, nvml_ok: true },
+    storage: { zfs_ok: zfsOk, fast_ok: true, cold_ok: true, cold_backend: zfsOk ? "local_zfs" : "smb" },
+    health: { status: "ok", issues: [] },
+  };
+}
+
+function addNode(name: string, zfsOk: boolean, lastRebalance: number | null = null) {
   dbmod
     .db()
     .prepare(
       "INSERT INTO nodes (name, online, capabilities, last_rebalance, created_at) VALUES (?, 1, ?, ?, 0)",
     )
-    .run(name, JSON.stringify(caps), lastRebalance);
+    .run(name, JSON.stringify(agentCapabilities(zfsOk)), lastRebalance);
 }
 
 beforeAll(async () => {
@@ -45,16 +59,16 @@ beforeEach(() => {
 describe("storage rebalance scheduling", () => {
   it("does nothing when disabled", () => {
     settings.setSetting("rebalanceEnabled", false);
-    addNode("off-node", { zfs: true });
+    addNode("off-node", true);
     expect(maintenance.scheduleRebalances()).toEqual([]);
     expect(enqueueTask).not.toHaveBeenCalled();
   });
 
   it("rebalances due ZFS nodes, skipping non-ZFS and recently-rebalanced ones", () => {
     const now = 1_000_000_000_000;
-    addNode("zfs-due", { zfs: true }, null); // never rebalanced -> due
-    addNode("smb-only", { zfs: false }, null); // no branch quotas to re-split
-    addNode("recent", { zfs: true }, now - 3600 * 1000); // 1h ago, interval is 24h
+    addNode("zfs-due", true, null); // never rebalanced -> due
+    addNode("smb-only", false, null); // no branch quotas to re-split
+    addNode("recent", true, now - 3600 * 1000); // 1h ago, interval is 24h
 
     const scheduled = maintenance.scheduleRebalances(now);
     expect(scheduled).toEqual(["zfs-due"]);
@@ -73,7 +87,7 @@ describe("storage rebalance scheduling", () => {
   });
 
   it("has no hour-of-day gate, unlike scrubs — quota writes have no off-peak", () => {
-    addNode("any-hour", { zfs: true }, null);
+    addNode("any-hour", true, null);
     // 03:00 and 15:00 must behave identically.
     expect(maintenance.scheduleRebalances(Date.UTC(2026, 5, 27, 3, 0, 0))).toEqual(["any-hour"]);
     dbmod.db().prepare("UPDATE nodes SET last_rebalance = NULL").run();
@@ -83,7 +97,7 @@ describe("storage rebalance scheduling", () => {
   it("fires again once the interval has elapsed", () => {
     const now = 1_000_000_000_000;
     settings.setSetting("rebalanceIntervalHours", 1);
-    addNode("hourly", { zfs: true }, now - 30 * 60 * 1000); // half an hour ago
+    addNode("hourly", true, now - 30 * 60 * 1000); // half an hour ago
     expect(maintenance.scheduleRebalances(now)).toEqual([]);
     expect(maintenance.scheduleRebalances(now + 31 * 60 * 1000)).toEqual(["hourly"]);
   });
@@ -91,14 +105,14 @@ describe("storage rebalance scheduling", () => {
   it("clamps a sub-hourly interval so it cannot re-enqueue on every tick", () => {
     const now = 1_000_000_000_000;
     settings.setSetting("rebalanceIntervalHours", 0);
-    addNode("clamped", { zfs: true }, now - 60 * 1000); // a minute ago
+    addNode("clamped", true, now - 60 * 1000); // a minute ago
     // With no clamp a 0-hour interval would make this due immediately.
     expect(maintenance.scheduleRebalances(now)).toEqual([]);
   });
 
   it("passes a zero deadband through, meaning apply every recomputed split", () => {
     settings.setSetting("rebalanceMinDeltaGb", 0);
-    addNode("exact", { zfs: true }, null);
+    addNode("exact", true, null);
     maintenance.scheduleRebalances(1_000_000_000_000);
     expect(enqueueTask).toHaveBeenCalledWith(
       "exact",
@@ -110,7 +124,7 @@ describe("storage rebalance scheduling", () => {
 
   it("supports a fractional deadband in GB", () => {
     settings.setSetting("rebalanceMinDeltaGb", 0.5);
-    addNode("fractional", { zfs: true }, null);
+    addNode("fractional", true, null);
     maintenance.scheduleRebalances(1_000_000_000_000);
     expect(enqueueTask).toHaveBeenCalledWith(
       "fractional",
