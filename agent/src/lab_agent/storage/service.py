@@ -434,7 +434,30 @@ def apply_allocation(
             continue
         applied.append((step.dataset, step.current))
         logs.append(f"{step.dataset} quota {step.current} -> {step.target}")
+    if applied:
+        logs += sync_minfreespace(tier, lab, [obs.path for obs in observed.values()])
     return logs
+
+
+def sync_minfreespace(tier: TierConfig, lab: str, branches: list[str]) -> list[str]:
+    """Re-scale a live union's minfreespace after its branch quotas moved.
+
+    mergerfs skips any branch with less than minfreespace free when placing a NEW file, and a
+    branch's free space is its quota minus its usage. A threshold left over from a larger quota
+    therefore makes the whole lab unwritable — a 64 GiB lab against the 50 GiB default could not
+    create a single file — so the value has to follow the quota. The live control file avoids a
+    remount, so the lab's containers and open file handles are untouched.
+    """
+    target = tier.logical_mount(lab)
+    if not tier.uses_mergerfs or not branches or not mfs.is_mergerfs_mount(target):
+        return []
+    value = mfs.minfreespace_for(tier, branches)
+    res = mfs.set_minfreespace_live(target, value)
+    if not res.ok:
+        # Not fatal: the quotas are correct and the next mount picks the value up. Say so rather
+        # than failing a quota change over a threshold.
+        return [f"PARTIAL: could not update minfreespace on {target} to {value}: {res.logs}"]
+    return [f"{target} minfreespace -> {value}"]
 
 
 def provision_lab(

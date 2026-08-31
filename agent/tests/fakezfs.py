@@ -47,6 +47,8 @@ class FakeZfs:
     datasets: dict[str, FakeDataset] = field(default_factory=dict)
     # mountpoint -> branch list, mimicking live mergerfs mounts
     unions: dict[str, list[str]] = field(default_factory=dict)
+    # mountpoint -> minfreespace currently set on the live union
+    minfreespace: dict[str, int] = field(default_factory=dict)
     remounts: list[str] = field(default_factory=list)
     live_attach_fails: bool = False
 
@@ -229,6 +231,23 @@ class FakeZfs:
         self.unions[target] = list(branches)
         return target
 
+    def branch_capacity(self, path: str) -> int | None:
+        """A branch's capacity is its ZFS quota — which is what mergerfs sees through statvfs."""
+        for ds in self.datasets.values():
+            if ds.mounted and ds.mountpoint == path:
+                pool = self.pool_of(ds.name)
+                return ds.quota if ds.quota is not None else (pool.size if pool else None)
+        return None
+
+    def set_minfreespace_live(self, mountpoint: str, value: int):
+        from lab_agent.executors.base import CommandResult
+
+        args = ["setfattr", "minfreespace", mountpoint]
+        if mountpoint not in self.unions:
+            return CommandResult(False, args, 1, "", "no such mount")
+        self.minfreespace[mountpoint] = int(value)
+        return CommandResult(True, args, 0, "", "")
+
     def remove_branch_live(self, mountpoint: str, branch: str):
         from lab_agent.executors.base import CommandResult
 
@@ -280,6 +299,10 @@ def install(monkeypatch, fake: FakeZfs) -> FakeZfs:
     monkeypatch.setattr(mfs, "remount", fake.mfs_remount)
     monkeypatch.setattr(mfs, "add_branch_live", fake.add_branch_live)
     monkeypatch.setattr(mfs, "remove_branch_live", fake.remove_branch_live)
+    monkeypatch.setattr(mfs, "branch_capacity", fake.branch_capacity)
+    monkeypatch.setattr(mfs, "set_minfreespace_live", fake.set_minfreespace_live)
+    monkeypatch.setattr(service.mfs, "set_minfreespace_live", fake.set_minfreespace_live)
+    monkeypatch.setattr(service.mfs, "minfreespace_for", mfs.minfreespace_for)
     monkeypatch.setattr(service.mfs, "remove_branch_live", fake.remove_branch_live)
     monkeypatch.setattr(service.mfs, "remount", fake.mfs_remount)
     monkeypatch.setattr(service.mfs, "current_branches", fake.current_branches)

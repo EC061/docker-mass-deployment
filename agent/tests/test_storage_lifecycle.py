@@ -424,6 +424,29 @@ def test_quota_changes_never_transiently_exceed_the_configured_total(monkeypatch
     assert max(peaks) <= 2 * TB
 
 
+def test_a_small_lab_gets_a_minfreespace_it_can_actually_write_under(monkeypatch, tmp_path):
+    """RETEST-FIND-3: mergerfs skips any branch with less than minfreespace FREE, and a branch's
+    free space is `quota - used`. At the flat 50 GiB default every branch of a 64 GiB lab is below
+    the threshold forever, so the first write returns ENOSPC on an essentially empty lab."""
+    fake, c = _two_pool_lab(monkeypatch, tmp_path)
+    union = "/cold-storage/labA"
+    assert union in fake.unions
+
+    # Shrink to 64 GiB: 32 GiB per branch, far under the 50 GiB tier ceiling.
+    for name in ("cold1/labs/labA", "cold2/labs/labA"):
+        fake.datasets[name].used = 0
+    service.set_lab_quota(c, "cold", "labA", 64 * GB)
+
+    branch_quota = min(fake.datasets[n].quota for n in
+                       ("cold1/labs/labA", "cold2/labs/labA"))
+    assert fake.minfreespace[union] < branch_quota, "the lab could not create a single file"
+    assert fake.minfreespace[union] == branch_quota * 2 // 100
+
+    # Growing back restores the full ceiling — the ceiling is what a big branch keeps.
+    service.set_lab_quota(c, "cold", "labA", 8 * TB)
+    assert fake.minfreespace[union] == 50 * GB
+
+
 def test_a_failed_shrink_is_rolled_back(monkeypatch, tmp_path):
     fake, c = _two_pool_lab(monkeypatch, tmp_path)
     before = {n: ds.quota for n, ds in fake.datasets.items() if n.endswith("/labA")}

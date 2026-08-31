@@ -47,6 +47,70 @@ def test_minfreespace_is_configurable():
     assert f"minfreespace={10 * GB}" in opts.option_string(fsname="x")
 
 
+# --------------------------------------------------------------------------- minfreespace scaling
+
+
+TB = 1024 ** 4
+
+
+def test_minfreespace_scales_to_the_branch_a_small_lab_actually_has(monkeypatch):
+    """RETEST-FIND-3: the flat 50 GiB default is measured against `quota - used`, not disk size.
+
+    Every branch of a 64 GiB lab is permanently below it, so mergerfs skips them all and the lab
+    gets ENOSPC on its first byte. A 1 TiB lab writes fine but silently loses the last 50 GiB per
+    branch while `labquota` still reports it as free.
+    """
+    t = tier()
+    branches = ["/mnt/lab-storage/cold1/labs/labA", "/mnt/lab-storage/cold2/labs/labA"]
+    # 64 GiB lab -> 32 GiB per branch: 2% is ~655 MiB, and the lab is writable.
+    monkeypatch.setattr(mfs, "branch_capacity", lambda path: 32 * GB)
+    scaled = mfs.minfreespace_for(t, branches)
+    assert scaled == 32 * GB * 2 // 100
+    assert scaled < 32 * GB
+
+    # 1 TiB lab -> 512 GiB per branch: ~10 GiB kept back instead of 50.
+    monkeypatch.setattr(mfs, "branch_capacity", lambda path: 512 * GB)
+    assert mfs.minfreespace_for(t, branches) == 512 * GB * 2 // 100
+
+    # A branch big enough for the configured ceiling still gets exactly the ceiling.
+    monkeypatch.setattr(mfs, "branch_capacity", lambda path: 4 * TB)
+    assert mfs.minfreespace_for(t, branches) == 50 * GB
+
+
+def test_minfreespace_follows_the_smallest_branch(monkeypatch):
+    """One branch below the threshold is one branch mergerfs will not place new files on."""
+    sizes = {"/a": 4 * TB, "/b": 32 * GB}
+    monkeypatch.setattr(mfs, "branch_capacity", sizes.get)
+    assert mfs.minfreespace_for(tier(), ["/a", "/b"]) == 32 * GB * 2 // 100
+
+
+def test_minfreespace_falls_back_to_the_ceiling_when_capacity_is_unreadable(monkeypatch):
+    monkeypatch.setattr(mfs, "branch_capacity", lambda path: None)
+    assert mfs.minfreespace_for(tier(), ["/a"]) == 50 * GB
+
+
+def test_mount_argv_carries_the_scaled_value(monkeypatch):
+    monkeypatch.setattr(mfs, "branch_capacity", lambda path: 32 * GB)
+    argv = mfs.mount_argv(tier(), "labA", ["/a", "/b"])
+    assert f"minfreespace={32 * GB * 2 // 100}" in argv[2].split(",")
+    assert f"minfreespace={50 * GB}" not in argv[2]
+
+
+def test_live_minfreespace_update_targets_the_control_file(monkeypatch):
+    seen = {}
+
+    def fake_run(args, **kwargs):
+        seen["args"] = args
+        return CommandResult(True, list(args), 0, "", "")
+
+    monkeypatch.setattr(mfs, "run", fake_run)
+    assert mfs.set_minfreespace_live("/cold-storage/labA", 700 * 1024 ** 2).ok
+    assert seen["args"] == [
+        "setfattr", "-n", "user.mergerfs.minfreespace", "-v", str(700 * 1024 ** 2),
+        "/cold-storage/labA/.mergerfs",
+    ]
+
+
 @pytest.mark.parametrize("kwargs", [
     {"create_policy": "$(reboot)"},
     {"create_policy": "mfs,allow_other,nonempty"},
