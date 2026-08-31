@@ -13,13 +13,25 @@ export { audit } from "./audit"; // re-exported for back-compat with existing im
 // alphanumeric then alphanumerics/hyphen/underscore, no slashes/dots/whitespace, <= 40 (M-04).
 export const LAB_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,39}$/;
 
+// A lab alias is only ever used as the lab half of a container hostname, so it is restricted to the
+// RFC 1123 label set — no underscore. The agent folds anything illegal to '-', and an alias that
+// silently came back different from what was typed would be worse than refusing it here.
+export const LAB_ALIAS_RE = /^[a-zA-Z0-9][a-zA-Z0-9-]{0,39}$/;
+
 export function isValidLabName(name: string): boolean {
   return LAB_NAME_RE.test(name);
+}
+
+export function isValidLabAlias(alias: string): boolean {
+  return LAB_ALIAS_RE.test(alias);
 }
 
 export interface Lab {
   id: number;
   name: string;
+  /** Optional hostname alias. When set, containers are named `<alias>-<node>` instead of
+   *  `<name>-<node>` — see labs.alias in db.ts and container_hostname in the agent. */
+  alias: string | null;
   pi_name: string | null;
   pi_email: string | null;
   pi_student_id: number | null;
@@ -92,6 +104,66 @@ export function createLab(input: CreateLabInput): Lab {
     .run(input.name, input.piName ?? null, input.piEmail ?? null, now, now);
   audit(input.actor, "lab.create", input.name);
   return getLab(Number(info.lastInsertRowid))!;
+}
+
+/** The nodes a lab is currently placed on, for the messages that refuse an identity change. */
+function placedNodeNames(labId: number): string[] {
+  return (db()
+    .prepare(
+      `SELECT nodes.name AS name FROM lab_placements p JOIN nodes ON nodes.id = p.node_id
+       WHERE p.lab_id = ? ORDER BY nodes.name`,
+    )
+    .all(labId) as { name: string }[]).map((r) => r.name);
+}
+
+/**
+ * Rename a logical lab.
+ *
+ * The name is the lab's identity everywhere below the controller: the ZFS dataset component
+ * (`<pool>/labs/<name>`), the container name, the key in every task param, log line and GPU event.
+ * Nothing in the agent protocol can migrate those, so a rename is only offered while the lab has no
+ * placement. To change only what students see in their shell prompt, set an alias instead.
+ */
+export function renameLab(labId: number, name: string, actor?: string): void {
+  const lab = getLab(labId);
+  if (!lab) throw new Error("Unknown lab");
+  const clean = name.trim();
+  if (clean === lab.name) return;
+  if (!isValidLabName(clean)) {
+    throw new Error("Invalid lab name (use letters, digits, hyphen or underscore; max 40 chars)");
+  }
+  const placed = placedNodeNames(labId);
+  if (placed.length > 0) {
+    throw new Error(
+      `'${lab.name}' cannot be renamed while it is placed on ${placed.join(", ")} — the lab name is ` +
+        "its ZFS dataset and container name on the node. Remove node access first, or set an alias " +
+        "to change only the hostname students see.",
+    );
+  }
+  if (getLabByName(clean)) throw new Error(`A lab named '${clean}' already exists`);
+  db().prepare("UPDATE labs SET name = ?, updated_at = ? WHERE id = ?").run(clean, Date.now(), labId);
+  audit(actor, "lab.rename", lab.name, clean);
+}
+
+/**
+ * Set (or clear, with an empty value) a lab's hostname alias. Purely cosmetic — it replaces the lab
+ * half of the container hostname. Returns the nodes whose container must be recreated for it to take
+ * effect, because a container's hostname is fixed at creation.
+ */
+export function setLabAlias(labId: number, alias: string | null, actor?: string): string[] {
+  const lab = getLab(labId);
+  if (!lab) throw new Error("Unknown lab");
+  const clean = (alias ?? "").trim();
+  if (clean && !isValidLabAlias(clean)) {
+    throw new Error(
+      "Invalid lab alias (use letters, digits or hyphen — no underscore, since it becomes a hostname; max 40 chars)",
+    );
+  }
+  const next = clean || null;
+  if (next === lab.alias) return [];
+  db().prepare("UPDATE labs SET alias = ?, updated_at = ? WHERE id = ?").run(next, Date.now(), labId);
+  audit(actor, "lab.set_alias", lab.name, next ?? "(cleared)");
+  return placedNodeNames(labId);
 }
 
 export interface UpdateLabMetaInput {

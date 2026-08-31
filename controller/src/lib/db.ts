@@ -721,6 +721,17 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
     ALTER TABLE nodes ADD COLUMN last_rebalance INTEGER;
     `,
   },
+  {
+    // Optional hostname alias for a lab. `labs.name` is the lab's stable identity — its ZFS dataset
+    // component, container name, task/audit key — so it cannot change once a placement exists. The
+    // alias only replaces the lab component of the container hostname students see in their shell
+    // prompt (`<alias-or-name>-<node>`), which is cosmetic and therefore safe to change any time
+    // (it applies on the next container recreation).
+    id: "0030_lab_alias",
+    sql: `
+    ALTER TABLE labs ADD COLUMN alias TEXT;
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

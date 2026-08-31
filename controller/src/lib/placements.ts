@@ -75,6 +75,9 @@ export interface Placement {
   id: number;
   lab_id: number;
   lab_name: string;
+  /** The lab's optional hostname alias. Replaces the lab half of the container hostname when set;
+   * null means the container is named after `lab_name`. */
+  lab_alias: string | null;
   node_id: number;
   node_name: string;
   /** Node alias, when set. This — not `node_name` — is what actually resolves over the network:
@@ -103,7 +106,8 @@ export interface Placement {
 }
 
 const PLACEMENT_SELECT = `
-  SELECT p.*, labs.name AS lab_name, nodes.name AS node_name, nodes.alias AS node_alias,
+  SELECT p.*, labs.name AS lab_name, labs.alias AS lab_alias,
+         nodes.name AS node_name, nodes.alias AS node_alias,
          nodes.online AS online,
          nodes.cold_backend AS node_cold_backend, nodes.cold_owner_node_id AS node_cold_owner_node_id,
          owner.name AS cold_owner_name, nodes.cold_ready AS node_cold_ready
@@ -161,7 +165,22 @@ function touch(placementId: number): void {
 
 /** Build the lab.create / container.recreate container_options payload from a placement. */
 function taskContainerOptions(p: Placement): Record<string, unknown> {
-  return { ...containerOptionsOf(p), image: p.image, ssh_port: p.ssh_port };
+  const opts: Record<string, unknown> = {
+    ...containerOptionsOf(p), image: p.image, ssh_port: p.ssh_port,
+  };
+  // Only sent when the lab actually has an alias, so an agent that predates aliases (or a lab
+  // without one) keeps naming the container after the lab itself.
+  if (p.lab_alias) opts.hostname_alias = p.lab_alias;
+  return opts;
+}
+
+/** The hostname a student sees in their shell prompt on this placement: `<alias-or-lab>-<node>`.
+ *  Mirrors container_hostname in the agent (agent/src/lab_agent/executors/docker.py). */
+export function placementHostname(p: Placement): string {
+  const cleaned = `${p.lab_alias || p.lab_name}-${p.node_name}`
+    .replace(/[^A-Za-z0-9.-]+/g, "-")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return cleaned.slice(0, 63) || "lab";
 }
 
 function enqueuePlacementCreate(p: Placement, actor?: string): void {

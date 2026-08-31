@@ -17,6 +17,7 @@ import {
   listPlacementMembers,
   listPlacements,
   nodePoolCapacityBytes,
+  placementHostname,
   type Placement,
 } from "@/lib/placements";
 import {
@@ -274,6 +275,10 @@ export default async function PlacementPage({
             <div><dt className="text-muted-foreground">Shared memory</dt><dd className="font-medium">{opts.shm_size}</dd></div>
             <div><dt className="text-muted-foreground">Rootfs quota</dt><dd className="font-medium">{opts.rootfs_quota}</dd></div>
             <div><dt className="text-muted-foreground">Restart</dt><dd className="font-medium">{opts.restart}</dd></div>
+            <div>
+              <dt className="text-muted-foreground">Hostname</dt>
+              <dd className="font-medium break-all">{placementHostname(placement)}</dd>
+            </div>
           </dl>
           <p className="text-sm text-muted-foreground">
             Per-student quota: fast <b>{placement.student_fast_quota_bytes == null ? "not enabled" : fmtBytes(placement.student_fast_quota_bytes)}</b>

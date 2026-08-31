@@ -17,6 +17,29 @@ def test_container_name_and_hostname_scheme():
     assert docker.container_hostname("my_lab", "gpu_1") == "my-lab-gpu-1"
 
 
+def test_hostname_alias_replaces_the_lab_but_never_the_container_name():
+    # The alias is cosmetic: the container NAME stays the lab's identity on the node.
+    assert docker.container_hostname("Geng_Yuan_Lab", "geass", "gylab") == "gylab-geass"
+    assert docker.container_name("Geng_Yuan_Lab", "geass") == "Geng_Yuan_Lab-geass"
+    # No alias, empty alias and whitespace-only all fall back to the lab name.
+    assert docker.container_hostname("bio", "node1", None) == "bio-node1"
+    assert docker.container_hostname("bio", "node1", "") == "bio-node1"
+    assert docker.container_hostname("bio", "node1", "   ") == "bio-node1"
+    # An alias is sanitized on the same path as the lab name, and still length-capped.
+    assert docker.container_hostname("bio", "node1", "my_lab") == "my-lab-node1"
+    assert len(docker.container_hostname("bio", "n", "a" * 80)) == 63
+
+
+def test_hostname_alias_travels_in_container_options():
+    opts = ContainerOptions.from_params({"container_options": {"hostname_alias": "gylab"}})
+    assert opts.hostname_alias == "gylab"
+    # Absent (an older controller) or null must not become the string "None".
+    assert ContainerOptions.from_params({}).hostname_alias == ""
+    assert ContainerOptions.from_params(
+        {"container_options": {"hostname_alias": None}}
+    ).hostname_alias == ""
+
+
 def test_hostname_is_set_on_run():
     args = build_run_args("bio-node1", ContainerOptions(), mounts(), gpus=False,
                           hostname="bio-node1")

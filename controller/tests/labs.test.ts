@@ -181,3 +181,84 @@ describe("destroyLab", () => {
     expect(placements.getPlacement(placement.id)!.state).toBe("deleting");
   });
 });
+
+describe("lab identity: rename + hostname alias", () => {
+  it("renames an unplaced lab, audits the before/after, and keeps it findable", () => {
+    const lab = makeLab("Geng_Yuan_Lab_tmp");
+    labs.renameLab(lab.id, "gylab", "admin");
+
+    expect(labs.getLab(lab.id)!.name).toBe("gylab");
+    expect(labs.getLabByName("Geng_Yuan_Lab_tmp")).toBeUndefined();
+    expect(labs.getLabByName("gylab")!.id).toBe(lab.id);
+    const audit = dbmod.db()
+      .prepare("SELECT * FROM audit_log WHERE action='lab.rename' AND target='Geng_Yuan_Lab_tmp'")
+      .get() as any;
+    expect(audit).toBeTruthy();
+    expect(enqueueTask).not.toHaveBeenCalled(); // identity is controller-side only
+  });
+
+  it("refuses to rename a placed lab and names the nodes blocking it", async () => {
+    const lab = makeLab("placed-rename");
+    await makePlacement(lab.id);
+
+    expect(() => labs.renameLab(lab.id, "renamed", "admin")).toThrow(/placed on gpu-1/);
+    expect(labs.getLab(lab.id)!.name).toBe("placed-rename"); // unchanged
+  });
+
+  it("rejects an invalid or duplicate name, and no-ops an unchanged one", () => {
+    const lab = makeLab("rename-checks");
+    expect(() => labs.renameLab(lab.id, "bad/name", "admin")).toThrow(/Invalid lab name/);
+    makeLab("already-taken");
+    expect(() => labs.renameLab(lab.id, "already-taken", "admin")).toThrow(/already exists/);
+    labs.renameLab(lab.id, "rename-checks", "admin"); // same name: no throw, no write
+    expect(labs.getLab(lab.id)!.name).toBe("rename-checks");
+  });
+
+  it("accepts a hostname-safe alias and rejects an underscore (it becomes a hostname)", () => {
+    const lab = makeLab("alias-checks");
+    expect(labs.isValidLabAlias("gylab")).toBe(true);
+    expect(labs.isValidLabAlias("gy_lab")).toBe(false);
+    expect(labs.isValidLabAlias("-gylab")).toBe(false);
+    expect(() => labs.setLabAlias(lab.id, "gy_lab", "admin")).toThrow(/Invalid lab alias/);
+    expect(labs.getLab(lab.id)!.alias).toBeNull();
+
+    expect(labs.setLabAlias(lab.id, "gylab", "admin")).toEqual([]); // no placement to recreate
+    expect(labs.getLab(lab.id)!.alias).toBe("gylab");
+    labs.setLabAlias(lab.id, "", "admin");
+    expect(labs.getLab(lab.id)!.alias).toBeNull();
+  });
+
+  it("reports which placements must be recreated for a new alias to apply", async () => {
+    const lab = makeLab("alias-placed");
+    await makePlacement(lab.id);
+    expect(labs.setLabAlias(lab.id, "friendly", "admin")).toEqual(["gpu-1"]);
+  });
+
+  it("sends the alias to the node as a container option, and the hostname follows it", async () => {
+    const lab = makeLab("Alias_Task_Lab");
+    labs.setLabAlias(lab.id, "gylab", "admin");
+    const placement = await placements.createPlacement({
+      labId: lab.id,
+      nodeId,
+      fastQuotaBytes: 1000,
+      coldQuotaBytes: 2000,
+      sshPort: ++port,
+      image: "custom-ssh",
+      containerOptions: OPTS,
+      actor: "admin",
+    });
+    const create = enqueueTask.mock.calls.find((c) => c[1] === "lab.create")!;
+    expect((create[2] as any).container_options.hostname_alias).toBe("gylab");
+    expect(placements.placementHostname(placement)).toBe("gylab-gpu-1");
+
+    // Cleared alias: the option disappears from the next recreate and the container is named after
+    // the lab again (with the underscores folded, as before aliases existed).
+    labs.setLabAlias(lab.id, null, "admin");
+    enqueueTask.mockClear();
+    placements.recreatePlacement(placement.id, {}, "admin");
+    const recreate = enqueueTask.mock.calls.find((c) => c[1] === "container.recreate")!;
+    expect((recreate[2] as any).container_options).not.toHaveProperty("hostname_alias");
+    expect(placements.placementHostname(placements.getPlacement(placement.id)!))
+      .toBe("Alias-Task-Lab-gpu-1");
+  });
+});
