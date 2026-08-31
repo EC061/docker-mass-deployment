@@ -175,6 +175,66 @@ def test_existing_fast_directory_is_promoted_with_data(tmp_path, monkeypatch):
     assert not (tmp_path / "alice.student-quota-migration").exists()
 
 
+def test_existing_full_student_dataset_converges_metadata_before_quota_shrink(monkeypatch):
+    """BUG-7: a shrink may leave zero headroom, so metadata must be handled first."""
+    events = []
+    monkeypatch.setattr(studentops.zfs, "dataset_exists", lambda _ds: True)
+    monkeypatch.setattr(
+        studentops.zfs,
+        "get_usage",
+        lambda dataset: zfs.Usage(dataset, 23 * 1024**3, 64 * 1024**3, 41 * 1024**3),
+    )
+    monkeypatch.setattr(
+        studentops.coldfs,
+        "ensure_owned_dir",
+        lambda path, uid, gid: events.append(("ownership", path, uid, gid)),
+    )
+    monkeypatch.setattr(
+        studentops.zfs,
+        "set_quota",
+        lambda dataset, quota: events.append(("quota", dataset, quota)),
+    )
+
+    studentops._ensure_user_dataset(
+        "fast/labs/bio/alice", "/fast/bio/alice", 23 * 1024**3, 10042, 10042,
+    )
+
+    assert events == [
+        ("ownership", "/fast/bio/alice", 10042, 10042),
+        ("quota", "fast/labs/bio/alice", 23 * 1024**3),
+    ]
+
+
+def test_existing_full_student_dataset_gets_headroom_before_metadata_repair(monkeypatch):
+    """A quota clear/grow should happen first so a real metadata correction has room."""
+    events = []
+    monkeypatch.setattr(studentops.zfs, "dataset_exists", lambda _ds: True)
+    monkeypatch.setattr(
+        studentops.zfs,
+        "get_usage",
+        lambda dataset: zfs.Usage(dataset, 64 * 1024**3, 64 * 1024**3, 0),
+    )
+    monkeypatch.setattr(
+        studentops.coldfs,
+        "ensure_owned_dir",
+        lambda path, uid, gid: events.append(("ownership", path, uid, gid)),
+    )
+    monkeypatch.setattr(
+        studentops.zfs,
+        "set_quota",
+        lambda dataset, quota: events.append(("quota", dataset, quota)),
+    )
+
+    studentops._ensure_user_dataset(
+        "fast/labs/bio/alice", "/fast/bio/alice", None, 10042, 10042,
+    )
+
+    assert events == [
+        ("quota", "fast/labs/bio/alice", None),
+        ("ownership", "/fast/bio/alice", 10042, 10042),
+    ]
+
+
 def test_remove_data_is_host_side_and_cold_is_independent(monkeypatch):
     _, removed, calls, _ = patch_storage(monkeypatch)
     studentops.remove_student(cfg(), {

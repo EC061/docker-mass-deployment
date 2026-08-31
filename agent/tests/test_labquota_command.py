@@ -1,5 +1,6 @@
 import json
 import os
+import pwd
 import subprocess
 import sys
 from pathlib import Path
@@ -7,11 +8,16 @@ from pathlib import Path
 LABQUOTA = Path(__file__).parents[2] / "image" / "labquota"
 
 
-def run_labquota(tmp_path, snapshot, user):
+def run_labquota(tmp_path, snapshot, user, *args):
     (tmp_path / "usage.json").write_text(json.dumps(snapshot), encoding="utf-8")
-    env = os.environ | {"LABQUOTA_DIR": str(tmp_path), "USER": user}
+    env = os.environ | {"LABQUOTA_DIR": str(tmp_path)}
+    if user is None:
+        env.pop("USER", None)
+        env.pop("LOGNAME", None)
+    else:
+        env["USER"] = user
     return subprocess.run(
-        [sys.executable, str(LABQUOTA)],
+        [sys.executable, str(LABQUOTA), *args],
         check=True,
         capture_output=True,
         text=True,
@@ -73,13 +79,34 @@ def test_one_table_me_first_total_last(tmp_path):
     assert "57.0 MiB / 300.0 GiB (0%)" in total_row
 
 
-def test_student_percentages_are_share_of_total_quota(tmp_path):
+def test_student_without_an_individual_quota_omits_percentage(tmp_path):
     result = run_labquota(tmp_path, snapshot_fixture(), "alice")
 
     zack_row = next(line for line in result.stdout.splitlines() if "zack" in line)
-    # 1 GiB of the 2 TiB total fast quota and 768 GiB of the 3 TiB (3072 GiB) total cold quota.
-    assert "1.0 GiB (0%)" in zack_row
-    assert "768.0 GiB (25%)" in zack_row
+    assert "1.0 GiB" in zack_row
+    assert "768.0 GiB" in zack_row
+    assert "%" not in zack_row
+
+
+def test_student_with_an_individual_quota_shows_percentage(tmp_path):
+    snapshot = snapshot_fixture()
+    snapshot["students"][0]["home"]["quota"] = 512 * 1024**2
+    result = run_labquota(tmp_path, snapshot, "alice")
+
+    alice_row = next(line for line in result.stdout.splitlines() if "alice  (you)" in line)
+    assert "351.0 MiB / 512.0 MiB (68%)" in alice_row
+
+
+def test_me_falls_back_to_effective_uid_when_user_environment_is_unset(tmp_path):
+    username = pwd.getpwuid(os.geteuid()).pw_name
+    snapshot = snapshot_fixture()
+    snapshot["students"][0]["username"] = username
+
+    result = run_labquota(tmp_path, snapshot, None, "--me")
+
+    assert f"{username}  (you)" in result.stdout
+    assert "zack" not in result.stdout
+    assert "(no students provisioned yet)" not in result.stdout
 
 
 def test_legacy_snapshot_without_rootfs_quota_still_renders(tmp_path):

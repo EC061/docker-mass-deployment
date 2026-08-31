@@ -704,24 +704,125 @@ Phase 6.5 (exact re-slice applies, deadband suppresses, per-lab sums preserved),
 * **Phase 5.3–5.7** (hard quota ceiling, `moveonenospc`, per-student sharding, single-file > branch,
   deliberate over-commit) — blocked by **BUG-4**: with `minfreespace` at a flat 50 GiB these tests
   cannot reach the quota ceiling, because creation stops long before it. Re-run once BUG-4 is fixed.
+  **Superseded for 5.5** — per-student sharding was run in full on 2026-08-30 23:16–23:41 against a
+  single whole-node lab, at the production `minfreespace`; see *Per-member quota, single-lab node*
+  below.
 * **Phase 10 production reset** — the labs are intentionally left running for you to inspect.
 
-# SUMMARY — 6 bugs (5 blocking), 11 findings
+# SUMMARY — 7 bugs (6 blocking), 13 findings
 
 | ID | Sev | What | Fixed here |
 |---|---|---|---|
 | BUG-1 | 🔴 | 2nd+ lab on a multi-pool tier never provisions (`zfs set mountpoint` remounts a busy dataset) | ✅ + tests |
 | BUG-2 | 🔴 | No student credential can ever be verified (`SSH_ASKPASS` on a `noexec` tmpfs) | ✅ + test |
 | BUG-3 | 🟠 | Storage page overstates every size by 1024× (`MiB` missing from the unit ladder) | ✅ |
-| BUG-4 | 🔴 | Flat 50 GiB `minfreespace` — labs ≤ 100 GiB cannot write a single byte | ❌ documented |
+| BUG-4 | 🔴 | Flat 50 GiB `minfreespace` — labs ≤ 100 GiB cannot write a single byte | ✅ + tests in PR #132 |
 | BUG-5 | 🔴 | Cold-tier promotion fails with labs present; the naive fix silently shadows all data | ✅ + tests |
 | BUG-6 | 🔴 | A "refused" destroy still wipes the container and all fast storage | ✅ + test |
+| BUG-7 | 🔴 | A member at 100 % of their per-member quota breaks recreate/retry/add for the whole placement (`chown` → EDQUOT) | ✅ + tests in PR #132 |
 
 | ID | Sev | What | Fixed here |
 |---|---|---|---|
 | FIND-1 | 🟠 | Failed placement members can never be retried from the UI | ✅ + tests |
 | FIND-4 | 🟡 | Admin pages (and the default welcome email) show an unresolvable host | ✅ + test |
 | FIND-11 | 🟠 | A failed destroy strands the placement in `deleting` with no UI recovery | ✅ (UI only) |
+| FIND-12 | 🟡 | "Scan now" leaves the lab-storage row stale while its timestamp still ticks | ✅ + tests in PR #132 |
+| FIND-13 | 🟡 | `labquota --me` prints an empty table when `$USER` is unset | ✅ + tests in PR #132 |
 | FIND-2, 3, 5–10 | 🟡🟠 | See above — host/agent/plan issues, no controller change made | ❌ documented |
 
-Agent suite **494 passed / 5 skipped**; controller **351 passed**, typecheck, lint and build clean.
+Agent suite **516 passed / 5 skipped**; controller **359 passed**, typecheck, lint and build clean.
+
+---
+
+# EVIDENCE — Per-member quota, single-lab node ✅ (2026-08-30 23:16–23:41 EDT)
+
+Run against the shape `geass` will actually be used in: **one lab owning the whole node**. Disposable
+lab `q-solo` (placement 20) — fast **6 TiB**, cold **7 TiB**, members `piqsolo`, `sq1`, `sq2` on
+pseudo-roster mailboxes. `minfreespace` left at the **production default 50 GiB** for the whole run
+(the earlier 15:50 run had lowered it to 1 MiB, so this is the first per-member test at the shipped
+value). Raw capture: `/root/evidence/retest-45-per-member-quota-single-lab.txt` on the node. The lab
+was destroyed afterwards; the node is back to bare pools.
+
+| Check | Result |
+|---|---|
+| Whole-node lab split | `fast1` 3.00T + `fast2` 3.00T = 6 TiB; `cold1` 7T (single pool, no split) ✅ |
+| Promotion carries existing data | 3 GiB written *before* enabling quotas (1 file on `fast1`, 2 on `fast2`) survived promotion, `md5sum -c` clean ✅ |
+| Split honours prior per-branch usage | `sq1` 31.5G/32.5G (mirrors its 1G/2G), empty members 32.0G/32.0G ✅ |
+| Sum ≤ configured | 68718428160 vs 68719476736 — exactly one 1 MiB granule short, per `QUOTA_GRANULARITY` ✅ |
+| Fast ceiling is hard | `cp` failed at file 61 — *Disk quota exceeded* at **63.5 GiB of 64.0 GiB** ✅ |
+| Cold ceiling is hard | failed at file 65 — **64.1 GiB of 64.0 GiB** on the single-pool cold tier ✅ |
+| One member cannot starve another | `sq2` wrote 1 GiB while `sq1` sat at 100 % ✅ |
+| Recovery | deleting files at 100 % works (ZFS allows the unlink) and writes resume ✅ |
+| `labquota` | `63.5 GiB / 64.0 GiB (99%)` per member, lab total against 6 TiB ✅ |
+| Controller | placement page *"Per-student quota: fast 64.0 GiB · cold 64.0 GiB"*; Stats per-student table matches ZFS after **Scan now** ✅ |
+| Email | 99 %-full warning delivered to the member; all three welcome mails carry `ssh <user>@geass.cs.uga.edu -p 50000` ✅ |
+| Clearing the quota | every child dataset back to `quota=none`, data intact, writes resume ✅ |
+
+**BUG-4 does not reach per-member quotas.** mergerfs (`statfs=base`) measures each branch's free
+space on the *lab* dataset — 3 TiB here — so the 50 GiB `minfreespace` never suppresses creation, and
+the member's own ZFS quota is what stops the write. A 64 GiB per-member quota therefore behaves
+correctly under a large lab quota, which is exactly the production shape. BUG-4 remains real for
+*lab* quotas ≤ ~100 GiB and is fixed by PR #132's quota-scaled `minfreespace`.
+
+## BUG-7 🔴 A member at 100 % of their quota cannot be re-provisioned (recreate / retry / add fails)
+
+`coldfs.ensure_owned_dir` unconditionally `chown`ed and `chmod`ed the member's dataset root. On a ZFS
+dataset that is exactly at its quota, even a metadata-only change returns **EDQUOT**:
+
+```
+# /mnt/lab-storage/fast1/labs/q-solo/sq1 — used 29.5G, quota 29.5G, avail 0
+chown       FAILED 122 Disk quota exceeded
+chmod       FAILED 122 Disk quota exceeded
+mkdir/touch FAILED 122 Disk quota exceeded
+```
+
+so the placement-wide operation died:
+
+```
+[ERROR] dispatch: task container.recreate failed: student quota preparation failed for 'sq1':
+        [Errno 122] Disk quota exceeded: '/mnt/lab-storage/fast1/labs/q-solo/sq1'
+[ERROR] dispatch: task student.add failed: [Errno 122] ... '/mnt/lab-storage/cold1/labs/q-solo/sq2'
+```
+
+The placement showed **recreate failed** and every affected member flipped to `failed` — including
+members who did nothing wrong (`sq2` was caught by its *cold* dataset sitting at 64.1 G / 64 G).
+The `chown`/`chmod` in each of these cases was a **no-op**: ownership and mode already matched.
+
+**Made unrecoverable by the shrink path.** Setting a per-member quota *below* what a member already
+uses made the allocator clamp that branch to exactly `used`, i.e. zero free — and then the same
+`chown` failed. Observed loop: student frees 6 GiB → operator hits *Retry members* → the retry
+re-clamps the quota down to the new `used` (23.5G/23.5G, 0 avail) → EDQUOT again. The member could
+never return to `active` while the configured quota was under their usage.
+
+**Escape hatch verified before the fix:** raise the per-member quota back above current usage and
+recreate — all three members returned to `active`, with no data lost.
+
+**Fixed in PR #132.** `ensure_owned_dir` now skips ownership and mode syscalls independently when
+the observed metadata already matches. Existing datasets converge metadata before a quota shrink,
+while a quota clear/grow runs first to provide headroom for any real metadata repair; new datasets
+set their root metadata before copying data that may fill them. Regression tests cover the no-op
+EDQUOT path and both orderings.
+
+## FIND-12 🟡 "Scan now" refreshed the per-student table but not the lab-storage row
+
+`stats/actions.ts` and the page copy both promise that one *Scan now* refreshes the whole Stats page,
+and `client._handle_usage_scan` did call `set_lab_level`. Observed: after a scan, the per-student rows
+updated immediately (`sq2` cold 45.4 → 64.1 GiB) while the **Lab storage** row kept the previous
+values for the rest of the 5-minute cycle — yet its *"updated Ns ago"* label could advance with a
+different row, so a stale number looked fresh.
+
+**Fixed in PR #132.** Lab-level telemetry now carries the cache's actual `sampled_at` timestamp.
+The controller stores every newly measured row immediately, even inside its five-minute throttle,
+and ignores heartbeat replays carrying the same measurement. The stored freshness time now describes
+the measurement rather than when a cached heartbeat happened to arrive.
+
+## FIND-13 🟡 `labquota` printed an empty table when `$USER` was unset
+
+`labquota --me` resolved the caller from `$USER`/`$LOGNAME`, not `getuid()`. Over SSH these are set,
+but a `docker exec` (or any shell without them) got *"(no students provisioned yet)"* and an empty
+table rather than a fallback to the real uid. Also, with per-member quotas cleared, each row printed
+a misleading `(0%)` derived from the shared lab quota despite having no individual ceiling.
+
+**Fixed in PR #132.** `labquota` falls back to the effective UID's passwd entry and errors clearly
+if the caller still cannot be identified. Quota-less student rows now show usage without a percent;
+rows with a real individual quota retain `used / quota (percent)`.

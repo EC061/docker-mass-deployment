@@ -9,8 +9,8 @@ Reads the usage snapshot the lab agent publishes into the container. The numbers
 
 Everything renders as one table: you first, your labmates ranked by username, and the lab TOTAL
 (used / quota) last. A configured per-student quota is shown for that student; otherwise the
-percentage is their share of the lab's total quota for that tier;
-rootfs is shared by the whole lab, so only the TOTAL row carries it.
+usage is shown without a percentage because they have no individual ceiling. Rootfs is shared by
+the whole lab, so only the TOTAL row carries it.
 
 Lab totals are refreshed frequently; per-student home/cold sizes come from a periodic scan. Ask for
 a fresh one with `labquota --refresh` and watch the progress.
@@ -23,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import pwd
 import sys
 import time
 
@@ -73,14 +74,24 @@ def fmt_pair(pair) -> str:
     return base + fmt_pct(used, quota)
 
 
-def fmt_share(pair, total_quota) -> str:
-    """Format a student's usage with their share of the lab's total quota for that tier."""
+def fmt_student(pair) -> str:
+    """Format student usage, showing a percentage only for a real individual quota."""
     if not pair or pair.get("used") is None:
         return "—"
     if pair.get("quota"):
         return fmt_pair(pair)
-    used = pair["used"]
-    return fmt_bytes(used) + fmt_pct(used, total_quota)
+    return fmt_bytes(pair["used"])
+
+
+def current_username() -> str:
+    """Resolve the effective caller even when docker exec did not populate USER/LOGNAME."""
+    from_env = os.environ.get("USER") or os.environ.get("LOGNAME")
+    if from_env:
+        return from_env
+    try:
+        return pwd.getpwuid(os.geteuid()).pw_name
+    except KeyError:
+        return ""
 
 
 def fmt_age(ts_ms) -> str:
@@ -123,14 +134,12 @@ def render(snapshot: dict, *, me: str, only_me: bool) -> None:
     totals = snapshot.get("totals", {})
     # Older agents publish only totals.rootfs_used (no quota); accept both shapes.
     rootfs = totals.get("rootfs") or {"used": totals.get("rootfs_used"), "quota": None}
-    fast_quota = (totals.get("fast") or {}).get("quota")
-    cold_quota = (totals.get("cold") or {}).get("quota")
 
     if not students:
         print("  (no students provisioned yet)")
 
-    # One table: you first, labmates ranked by username, lab TOTAL last. Student percentages are
-    # shares of the lab's total quota; rootfs is shared, so only the TOTAL row carries it.
+    # One table: you first, labmates ranked by username, lab TOTAL last. Student percentages use only
+    # real per-student quotas; rootfs is shared, so only the TOTAL row carries it.
     ordered = sorted(students, key=lambda s: (s.get("username") != me, s.get("username", "")))
     rows = [("STUDENT", "HOME (fast)", "COLD (slow)", "ROOTFS (shared)")]
     for s in ordered:
@@ -138,8 +147,8 @@ def render(snapshot: dict, *, me: str, only_me: bool) -> None:
         label = f"{name}  (you)" if name == me else name
         rows.append((
             label,
-            fmt_share(s.get("home"), fast_quota),
-            fmt_share(s.get("cold"), cold_quota),
+            fmt_student(s.get("home")),
+            fmt_student(s.get("cold")),
             "—",
         ))
     rows.append(("TOTAL", fmt_pair(totals.get("fast")), fmt_pair(totals.get("cold")),
@@ -192,7 +201,7 @@ def do_refresh(force: bool) -> int:
               "Use --refresh --force to scan anyway.")
         return 0
 
-    me = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    me = current_username()
     if not already_running:
         request_refresh(me)
         print("Requested a fresh storage scan… (this can take a while on large homes)")
@@ -249,7 +258,10 @@ def main(argv=None) -> int:
         sys.stdout.write("\n")
         return 0
 
-    me = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    me = current_username()
+    if args.me and not me:
+        print("Cannot determine your username; run this as your lab user.", file=sys.stderr)
+        return 1
     render(snapshot, me=me, only_me=args.me)
     return 0
 

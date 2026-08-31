@@ -64,7 +64,10 @@ def _storage_usage(cfg: AgentConfig, usage_state: Any = None) -> list[dict[str, 
     # quota, already summed across branches. Sourced from the lab-usage cache (refreshed every
     # ``lab_usage_interval_s`` / on-demand), so the heartbeat re-reports the last computed snapshot.
     for level in usage_state.all_lab_level().values():
-        out.extend(level.storage)
+        # Preserve when the cache was actually measured. The controller otherwise timestamps every
+        # repeated heartbeat at receipt time and cannot distinguish a fresh on-demand scan from the
+        # same cached row, causing its five-minute ingestion throttle to discard "Scan now" results.
+        out.extend({**row, "sampled_at": level.computed_at} for row in level.storage)
     live_students = {(r.get("lab"), r.get("user"), r.get("tier")) for r in out if r.get("user")}
     # Per-student breakdown from the scan cache: each student's fast home and cold ``du``, measured
     # once through the LOGICAL lab path. Updated only by the nightly / on-demand scan, so the

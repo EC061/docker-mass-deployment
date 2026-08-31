@@ -105,6 +105,8 @@ def test_heartbeat_uses_explicit_storage_rows(monkeypatch):
     assert ("rootfs", "alice") not in rows
     assert rows[("fast", "alice")] == 4
     assert rows[("cold", "alice")] == 1
+    lab_row = next(r for r in hb["storage"] if r["tier"] == "fast" and r["user"] is None)
+    assert lab_row["sampled_at"] == 1
     assert "datasets" not in hb
     assert hb["usage_scans"] == [{"lab": "bio", "scanned_at": 7}]
     assert [t["tier"] for t in hb["storage_tiers"]] == ["fast", "cold"]
