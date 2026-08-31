@@ -814,6 +814,10 @@ def _promote_to_mergerfs(
 ) -> tuple[list[str], list[str]]:
     """Move a single-pool tier's datasets under ``branch_root`` so mergerfs can own the mount root.
 
+    "Datasets" means the whole subtree: the tier root, each lab's branch, AND every per-student
+    dataset below a branch. Moving only the lab roots strands the students' data at mountpoints the
+    layout no longer has.
+
     Changing a ZFS ``mountpoint`` unmounts and remounts the dataset at the new path; the data is
     untouched. Any container bind-mounted at the old path keeps pointing at the old (now detached)
     inode, which is why the caller reports these labs as needing a restart.
@@ -826,7 +830,7 @@ def _promote_to_mergerfs(
     pool = old.pools[0]
     moved: list[str] = []
     try:
-        # Order matters twice over, and both halves are load-bearing:
+        # Order matters three times over, and every part is load-bearing:
         #
         # 1. UNMOUNT the per-lab datasets first. `zfs set mountpoint` unmounts before it remounts,
         #    and ZFS refuses to unmount a dataset while a child is still mounted underneath it, so
@@ -837,14 +841,26 @@ def _promote_to_mergerfs(
         #    datasets keep their data, `zfs list` still shows it, and every file silently vanishes
         #    from the branch directory and from the mergerfs union above it.
         #
-        # So: unmount children -> move root -> move children (each remounting nested under the
-        # root's new mount).
+        # 3. Carry the PER-STUDENT descendants. A student dataset created with a pinned mountpoint
+        #    (`<mount_root>/<lab>/<user>`) does not follow its parent: moving the lab dataset
+        #    unmounts it and leaves it pinned below a path the layout no longer uses, so its files
+        #    vanish from the union and the student cannot write. Re-pointing each descendant at the
+        #    parent (`zfs inherit mountpoint`) both restores it here and makes it follow the parent
+        #    automatically ever after.
+        #
+        # So: unmount descendants -> unmount lab datasets -> move root -> move lab datasets ->
+        # re-inherit + remount the descendants (each landing nested under its lab's new mount).
         branches = [
             (lab, new.branch_dataset(pool, lab))
             for lab in labs
             if zfs.dataset_exists(new.branch_dataset(pool, lab))
         ]
+        descendants = {
+            dataset: zfs.list_descendants(dataset) for _, dataset in branches
+        }
         for _, dataset in branches:
+            for child in reversed(descendants[dataset]):  # deepest first
+                zfs.unmount(child)
             zfs.unmount(dataset)
         root = new.pool_root_dataset(pool)
         if zfs.dataset_exists(root):
@@ -858,6 +874,11 @@ def _promote_to_mergerfs(
             zfs.set_property(dataset, "mountpoint", new.branch_mount(pool, lab))
             moved.append(dataset)
             logs.append(f"moved {dataset} to {new.branch_mount(pool, lab)}")
+            for child in descendants[dataset]:  # shallowest first: mount under the parent, not over
+                if zfs.has_local_mountpoint(child):
+                    zfs.inherit_property(child, "mountpoint")
+                    logs.append(f"re-pointed {child} to follow {dataset}")
+                zfs.mount_dataset(child)
     except Exception as exc:
         failed = _demote_from_mergerfs(old, new, labs, moved)
         detail = (
@@ -887,8 +908,14 @@ def _demote_from_mergerfs(
     # Same nesting constraint as the forward move, and `reversed(moved)` satisfies neither half of
     # it: unmount the deepest datasets first so the tier root is free to be unmounted, then restore
     # shallowest-first so each child remounts *under* the restored root instead of being shadowed
-    # by it.
+    # by it. Per-student datasets the forward move already remounted count as deeper still, and a
+    # single one left mounted is enough to make its lab's restore fail with "dataset is busy".
     for dataset in sorted(moved, key=lambda name: name.count("/"), reverse=True):
+        for child in reversed(zfs.list_descendants(dataset)):
+            try:
+                zfs.unmount(child)
+            except zfs.ZfsError:  # best effort, as below
+                pass
         try:
             zfs.unmount(dataset)
         except zfs.ZfsError:  # best effort: a stuck child must not stop the rest being restored
@@ -901,6 +928,16 @@ def _demote_from_mergerfs(
             zfs.set_property(dataset, "mountpoint", target)
         except zfs.ZfsError as exc:
             failed.append(f"{dataset} could not be restored to {target}: {exc}")
+    # Only once every mountpoint is back: per-student descendants were unmounted before their parent
+    # moved, and ones that inherit follow it back but stay unmounted. Remounting them any earlier
+    # would block the remaining `zfs set mountpoint` calls, which cannot unmount a dataset while a
+    # child is mounted beneath it.
+    for dataset in sorted(moved, key=lambda name: name.count("/")):
+        for child in zfs.list_descendants(dataset):
+            try:
+                zfs.mount_dataset(child)
+            except zfs.ZfsError as exc:
+                failed.append(f"{child} could not be remounted: {exc}")
     return failed
 
 

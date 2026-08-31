@@ -56,7 +56,18 @@ def _ensure_user_dataset(dataset: str, path: str, quota: int | None, uid: int, g
         os.rename(path, staged)
     try:
         # The quota is applied at creation, so the dataset is never momentarily unlimited.
-        zfs.create_dataset(dataset, quota_bytes=quota, mountpoint=path)
+        #
+        # The mountpoint is deliberately INHERITED rather than pinned to `path`: a child inherits
+        # "parent's mountpoint + its own name", which is `path` exactly, and an inherited mountpoint
+        # then follows the lab branch wherever it moves. A pinned one does not — that is what left
+        # every per-student dataset stranded and unmounted when a cold tier was promoted to
+        # mergerfs. The result is verified below rather than assumed.
+        zfs.create_dataset(dataset, quota_bytes=quota)
+        actual = zfs.get_mountpoint(dataset)
+        if actual.rstrip("/") != path.rstrip("/"):
+            raise RuntimeError(
+                f"student dataset {dataset} inherited mountpoint {actual}, expected {path}"
+            )
         if had_data:
             copied = run(["cp", "-a", f"{staged}/.", path], timeout=3600)
             if not copied.ok:

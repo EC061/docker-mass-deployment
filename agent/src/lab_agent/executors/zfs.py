@@ -158,6 +158,35 @@ def get_mountpoint(dataset: str) -> str:
     return res.stdout.strip()
 
 
+def list_descendants(parent: str) -> list[str]:
+    """Every dataset below ``parent``, deepest last. Excludes ``parent`` itself.
+
+    Used to find the per-student child datasets under a lab's branch, which the lab-level operations
+    have to carry along with their parent.
+    """
+    res = run(["zfs", "list", "-H", "-o", "name", "-r", parent], timeout=60)
+    if not res.ok:
+        return []
+    names = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+    return sorted((n for n in names if n != parent), key=lambda n: n.count("/"))
+
+
+def has_local_mountpoint(dataset: str) -> bool:
+    """Whether ``dataset`` pins its own mountpoint instead of inheriting it from its parent.
+
+    A LOCAL mountpoint does not move when the parent's does: `zfs set mountpoint` on the parent
+    unmounts the whole subtree and remounts only the datasets whose mountpoint it recomputed, which
+    leaves a locally-pinned child unmounted at a path that no longer exists in the layout.
+    """
+    res = run(["zfs", "get", "-H", "-o", "source", "mountpoint", dataset], timeout=20)
+    return res.ok and res.stdout.strip() == "local"
+
+
+def inherit_property(dataset: str, key: str) -> None:
+    """Drop a local property so the dataset follows its parent again (``zfs inherit``)."""
+    _checked(run(["zfs", "inherit", key, dataset], timeout=30))
+
+
 @dataclass
 class MountState:
     """Whether a dataset is a REAL, currently-mounted ZFS filesystem at the expected path.

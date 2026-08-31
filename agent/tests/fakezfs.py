@@ -35,6 +35,10 @@ class FakeDataset:
     quota: int | None = None
     used: int = 0
     mounted: bool = True
+    # Whether the mountpoint is pinned on this dataset (`zfs set mountpoint`) or inherited from the
+    # parent. Only an INHERITED mountpoint follows the parent when the parent moves, which is the
+    # whole difference between a per-student dataset surviving a tier promotion and being stranded.
+    mountpoint_local: bool = False
 
 
 @dataclass
@@ -84,6 +88,12 @@ class FakeZfs:
             return zfs.MountState(name, False, False, None, expected)
         return zfs.MountState(name, True, ds.mounted, ds.mountpoint, expected)
 
+    def _inherited_mountpoint(self, name: str) -> str | None:
+        """What ZFS would give a dataset with no local mountpoint: parent's path + its own name."""
+        parent, _, leaf = name.rpartition("/")
+        holder = self.datasets.get(parent)
+        return f"{holder.mountpoint}/{leaf}" if holder and holder.mountpoint else None
+
     def create_dataset(self, name, *, quota_bytes=None, mountpoint=None, create_parents=True,
                        properties=None) -> None:
         if name in self.datasets:
@@ -91,10 +101,33 @@ class FakeZfs:
                 self.set_quota(name, quota_bytes)
             if mountpoint is not None:
                 self.datasets[name].mountpoint = mountpoint
+                self.datasets[name].mountpoint_local = True
             return
         if self.pool_of(name) is None:
             raise zfs.ZfsError(f"cannot create {name}: no such pool")
-        self.datasets[name] = FakeDataset(name, mountpoint, quota_bytes, 0, True)
+        self.datasets[name] = FakeDataset(
+            name,
+            mountpoint if mountpoint is not None else self._inherited_mountpoint(name),
+            quota_bytes, 0, True, mountpoint_local=mountpoint is not None,
+        )
+
+    def list_descendants(self, parent: str) -> list[str]:
+        prefix = parent + "/"
+        return sorted(
+            (n for n in self.datasets if n.startswith(prefix)), key=lambda n: n.count("/")
+        )
+
+    def has_local_mountpoint(self, name: str) -> bool:
+        ds = self.datasets.get(name)
+        return bool(ds and ds.mountpoint_local)
+
+    def inherit_property(self, name: str, key: str) -> None:
+        ds = self.datasets.get(name)
+        if ds is None:
+            raise zfs.ZfsError(f"no such dataset {name}")
+        if key == "mountpoint":
+            ds.mountpoint_local = False
+            ds.mountpoint = self._inherited_mountpoint(name)
 
     def mount_dataset(self, name: str) -> None:
         ds = self.datasets.get(name)
@@ -136,12 +169,16 @@ class FakeZfs:
                         )
             ds.mountpoint = value
             ds.mounted = True
-            # Unmounted descendants follow the parent to its new path, as an inherited mountpoint
-            # would; mounted ones can never get here (they raise above).
+            ds.mountpoint_local = True
+            # Descendants that INHERIT follow the parent to its new path and are remounted there.
+            # Ones with a pinned mountpoint do not move and stay unmounted — that is exactly how a
+            # per-student dataset disappears from the union after a tier promotion.
             for child in self.datasets.values():
-                if child is not ds and child.mountpoint and old \
-                        and child.mountpoint.startswith(old + "/"):
+                if (child is not ds and child.mountpoint and old
+                        and child.mountpoint.startswith(old + "/")
+                        and not child.mountpoint_local):
                     child.mountpoint = value + child.mountpoint[len(old):]
+                    child.mounted = True
         elif key == "quota":
             ds.quota = None if value == "none" else int(value)
 
@@ -227,6 +264,9 @@ def install(monkeypatch, fake: FakeZfs) -> FakeZfs:
         monkeypatch.setattr(module, "mount_dataset", fake.mount_dataset)
         monkeypatch.setattr(module, "set_quota", fake.set_quota)
         monkeypatch.setattr(module, "set_property", fake.set_property)
+        monkeypatch.setattr(module, "list_descendants", fake.list_descendants)
+        monkeypatch.setattr(module, "has_local_mountpoint", fake.has_local_mountpoint)
+        monkeypatch.setattr(module, "inherit_property", fake.inherit_property)
         monkeypatch.setattr(module, "unmount", fake.unmount)
         monkeypatch.setattr(module, "get_usage", fake.get_usage)
         monkeypatch.setattr(module, "list_usage", fake.list_usage)
