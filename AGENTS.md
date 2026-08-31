@@ -1,12 +1,14 @@
 # AGENTS.md — working in this repo as a coding agent
 
 Orientation for automated contributors. Tool-agnostic; the parts that only apply to one assistant
-live in that assistant's own file:
+live in that assistant's own file or the assistant-specific section below:
 
 - **Claude Code → [CLAUDE.md](CLAUDE.md)**
+- **Codex in T3 Code → [§6](#6-codex-in-t3-code)**
 
-Read this file first, then your assistant's file. Product documentation for humans stays where it
-is: [README.md](README.md) (architecture), [HOST_PREPARATION.md](HOST_PREPARATION.md) (node setup),
+Read this file first, then any linked assistant-specific guidance. Product documentation for humans
+stays where it is: [README.md](README.md) (architecture), [HOST_PREPARATION.md](HOST_PREPARATION.md)
+(node setup),
 [STUDENT_GUIDE.md](STUDENT_GUIDE.md), [MULTI_DRIVE_TEST_PLAN.md](MULTI_DRIVE_TEST_PLAN.md) and
 [MULTI_DRIVE_TEST_RUN.md](MULTI_DRIVE_TEST_RUN.md) (the live storage test and its execution log).
 
@@ -220,3 +222,25 @@ real bwrap and `nvcc` smoke tests as that ordinary user. On a node with no labs 
   the repo root are frequently mid-edit; leave them alone unless asked.
 - **Branch and PR.** Don't commit to `main`. Branch, run both suites, open a PR, merge with
   `--rebase`.
+
+## 6. Codex in T3 Code
+
+These rules are specific to Codex running in the repository's T3 Code workspace:
+
+- **Shell and edits:** use the shell for repository inspection and verification (`rg` / `rg
+  --files` first for searches), and use patch-based edits so diffs stay focused. For PR work, use a
+  separate temporary worktree as described in §5; the primary checkout commonly contains the
+  operator's live test log and scratch YAML.
+- **Controller browser:** use T3 Code's shared in-app preview for local UI verification. Check the
+  preview state, open it if needed, navigate to the scratch controller from §3, and prefer semantic
+  snapshots and element locators over screen coordinates.
+- **Do not request Chrome control by default.** The shared preview is the normal browser path and
+  does not require access to the operator's personal Chrome session. Use Chrome control only when
+  the operator explicitly asks for it or the task genuinely depends on an already authenticated
+  Chrome-only session; one failed or closed preview is not a reason to switch.
+- **Live node:** drive the Duo-authenticated node through `/tmp/geass-harness/g.sh` from the shell,
+  following §4. Chrome and browser automation are not substitutes for the terminal harness, and
+  the harness should be tried directly without asking the operator for repeated browser approval.
+- **Long checks:** keep the operator informed while builds or node commands run, and report the
+  exact commands and results. A green GitHub check is supporting evidence, not a substitute for
+  running the relevant local suite after an edit.
