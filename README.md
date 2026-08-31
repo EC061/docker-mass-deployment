@@ -188,6 +188,9 @@ restart affected labs; kernel module replacement is never attempted live.
 
 ## Verification
 
+Coding agents working in this repo should start with **[AGENTS.md](AGENTS.md)** (repo map,
+invariants, node access, controller UI) — Claude Code specifics are in [CLAUDE.md](CLAUDE.md).
+
 ```bash
 cd agent
 uv run --extra dev ruff check src tests

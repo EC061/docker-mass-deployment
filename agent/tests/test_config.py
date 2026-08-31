@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import pytest
@@ -263,3 +264,15 @@ def test_fast_and_cold_mount_roots_may_not_be_nested(tmp_path: Path):
     ))
     with pytest.raises(ValueError, match="must not overlap"):
         load_config(path)
+
+
+def test_unreadable_config_says_to_use_sudo(tmp_path: Path):
+    path = write(tmp_path, BASE)
+    path.chmod(0o000)
+    try:
+        if os.geteuid() == 0:
+            pytest.skip("root reads 0000 files regardless of mode")
+        with pytest.raises(PermissionError, match="Re-run the command with sudo"):
+            load_config(path)
+    finally:
+        path.chmod(0o600)

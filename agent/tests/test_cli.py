@@ -393,3 +393,23 @@ def test_storage_mount_reports_failures_without_raising(monkeypatch, capsys, tmp
     rc = cli.main(["--config", str(tmp_path / "none.toml"), "storage", "mount"])
     assert rc == 1
     assert "no pools" in capsys.readouterr().err
+
+
+def test_permission_error_is_one_line_not_a_traceback(monkeypatch, capsys):
+    # The agent installs onto every user's PATH, so unprivileged invocations are routine.
+    def boom(_args):
+        raise PermissionError("cannot read /etc/lab-agent/config.toml: permission denied")
+
+    monkeypatch.setattr(cli, "_cmd_doctor", boom)
+    assert cli.main(["doctor"]) == 1
+    err = capsys.readouterr().err
+    assert err.startswith("lab-agent: cannot read /etc/lab-agent/config.toml")
+    assert "Traceback" not in err
+
+
+def test_keyboard_interrupt_exits_130(monkeypatch):
+    def boom(_args):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(cli, "_cmd_doctor", boom)
+    assert cli.main(["doctor"]) == 130

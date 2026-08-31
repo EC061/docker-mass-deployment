@@ -235,8 +235,16 @@ def load_config(path: Path | None = None) -> AgentConfig:
             f"Agent config not found at {path}. "
             "Run `lab-agent install --controller ... --token ...`."
         )
-    with path.open("rb") as fh:
-        data = tomllib.load(fh)
+    try:
+        with path.open("rb") as fh:
+            data = tomllib.load(fh)
+    except PermissionError as exc:
+        # The config holds this node's controller token, so it is root-owned 0600. The CLI is on
+        # every user's PATH, so an ordinary user reaching this deserves a hint, not a traceback.
+        raise PermissionError(
+            f"cannot read {path}: permission denied. It holds this node's controller token and is "
+            "readable only by root. Re-run the command with sudo."
+        ) from exc
     agent = data.get("agent", {})
     try:
         cfg = AgentConfig(
