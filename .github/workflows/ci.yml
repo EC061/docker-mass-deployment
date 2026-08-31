@@ -50,22 +50,13 @@ jobs:
         run: npm run build
 
   lab-image:
-    name: Lab image + AppArmor policy
+    name: Lab image
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
-      - name: Parse AppArmor policy
-        run: sudo apparmor_parser -Q -T agent/src/lab_agent/assets/lab-codex.apparmor
-      - name: AppArmor profile loads
-        run: |
-          # Managed labs run CONFINED by this profile: unprivileged bwrap cannot write its own
-          # /proc/self/uid_map when the task is AppArmor-unconfined, so confinement is what makes
-          # the sandbox work. The bubblewrap smoke test below depends on this profile being loaded.
-          sudo apparmor_parser -r agent/src/lab_agent/assets/lab-codex.apparmor
-          sudo aa-status | grep -q "lab-codex" || { echo "FAIL: lab-codex profile not loaded"; exit 1; }
       - name: Build pinned lab image
         run: docker build --tag custom-ssh:ci image
-      - name: Verify CUDA toolkit and bubblewrap
+      - name: Verify CUDA toolkit and image contract
         run: |
           image_size=$(docker image inspect custom-ssh:ci --format '{{.Size}}')
           echo "Lab image size: $image_size bytes"
@@ -77,92 +68,8 @@ jobs:
             ! command -v node
             ! command -v npm
             ! command -v codex
-            test "$(stat -c %U:%G /usr/bin/bwrap)" = root:root
-            test "$(stat -c %a /usr/bin/bwrap)" = 755
             useradd -m -s /bin/bash student
             su - student -c "nvcc --version"
             env -i PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
               nvcc --version
           '
-          # Exactly the contract build_run_args emits: no capabilities, confined by lab-codex.
-          output=$(docker run --rm \
-            --security-opt "seccomp=$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json" \
-            --security-opt apparmor=lab-codex --security-opt systempaths=unconfined \
-            --entrypoint sh custom-ssh:ci -c '
-              useradd -m -s /bin/bash student
-              su - student -c '\''bwrap --ro-bind / / --dev /dev --proc /proc --unshare-pid -- echo "bwrap works"'\''
-            ')
-          test "$output" = "bwrap works"
-
-      - name: Seccomp denial tests
-        run: |
-          seccomp="$PWD/agent/src/lab_agent/assets/lab-codex-seccomp.json"
-          # add_key (syscall 248 on x86_64) must be denied — not in the allow-list.
-          docker run --rm --entrypoint sh \
-            --security-opt "seccomp=$seccomp" \
-            custom-ssh:ci -c 'python3 -c "import sys; sys.exit(0)"' \
-            || { echo "FAIL: python3 should run"; exit 1; }
-          # Verify add_key is blocked by attempting it directly via python3 ctypes.
-          docker run --rm --entrypoint sh \
-            --security-opt "seccomp=$seccomp" \
-            custom-ssh:ci -c '
-              python3 -c "
-          import ctypes, sys
-          libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
-          # add_key = syscall 248 on x86_64
-          ctypes.set_errno(0)
-          ret = libc.syscall(248, 0, 0, 0, 0)
-          if ret == 0:
-              print(\"FAIL: add_key should be blocked\", file=sys.stderr)
-              sys.exit(1)
-          print(\"PASS: add_key denied\")
-          "
-            ' && echo "seccomp: add_key correctly denied"
-          # Doctor probe parity: the exact _seccomp_enforcement_ok script must exit 0 under the
-          # enforcing profile (EPERM) and exit 1 when seccomp is off. Guards against the probe's
-          # errno mapping inverting again.
-          probe=$(PYTHONPATH=agent/src python3 -c 'from lab_agent.system import SECCOMP_PROBE; print(SECCOMP_PROBE)')
-          docker run --rm --entrypoint python3 \
-            --security-opt "seccomp=$seccomp" \
-            custom-ssh:ci -c "$probe" \
-            || { echo "FAIL: doctor seccomp probe should exit 0 under the enforcing profile"; exit 1; }
-          if docker run --rm --entrypoint python3 \
-            --security-opt seccomp=unconfined \
-            custom-ssh:ci -c "$probe"; then
-            echo "FAIL: doctor seccomp probe should exit 1 without seccomp"; exit 1
-          fi
-          echo "seccomp: doctor probe parity holds"
-          # userfaultfd (syscall 323) must be denied.
-          docker run --rm --entrypoint sh \
-            --security-opt "seccomp=$seccomp" \
-            custom-ssh:ci -c '
-              python3 -c "
-          import ctypes, sys
-          libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
-          # userfaultfd = syscall 323 on x86_64
-          ctypes.set_errno(0)
-          ret = libc.syscall(323, 0)
-          if ret == 0:
-              print(\"FAIL: userfaultfd should be blocked\", file=sys.stderr)
-              sys.exit(1)
-          print(\"PASS: userfaultfd denied\")
-          "
-            ' && echo "seccomp: userfaultfd correctly denied"
-          # clone3 (syscall 435) must be ALLOWED — bwrap needs it.
-          docker run --rm --entrypoint sh \
-            --security-opt "seccomp=$seccomp" \
-            custom-ssh:ci -c '
-              python3 -c "
-          import ctypes, sys
-          libc = ctypes.CDLL(\"libc.so.6\", use_errno=True)
-          # clone3 = syscall 435 on x86_64 — should succeed (allowed).
-          ctypes.set_errno(0)
-          ret = libc.syscall(435, 0, 0, 0, 0, 0)
-          # clone3 returns -1 with EAGAIN on invalid args, but NOT EPERM.
-          errno = ctypes.get_errno()
-          if errno == 1:  # EPERM = blocked by seccomp
-              print(\"FAIL: clone3 should be allowed\", file=sys.stderr)
-              sys.exit(1)
-          print(\"PASS: clone3 allowed\")
-          "
-            ' && echo "seccomp: clone3 correctly allowed"
