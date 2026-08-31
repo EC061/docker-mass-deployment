@@ -127,9 +127,35 @@ SEARCH_POLICIES = ("ff", "newest", "epff", "all")
 MOVEONENOSPC_POLICIES = ("mfs", "pfrd", "lfs", "false")
 CACHE_FILES_MODES = ("off", "partial", "full", "auto-full", "per-process", "libfuse")
 
-# 50 GiB of slack before a branch stops being chosen for NEW files. Large enough that a branch never
-# fills to the point where mergerfs has to fall back mid-write, small enough not to strand capacity.
+# The CEILING on the slack a branch keeps before it stops being chosen for NEW files. Large enough
+# that a big branch never fills to the point where mergerfs has to fall back mid-write.
+#
+# It is a ceiling and not a constant because a branch's free space is `quota - used`, not disk
+# space: a flat 50 GiB is 1.4% of a 3.6 TiB branch but 156% of a 32 GiB one. Applied flat it made
+# every branch of a small lab permanently ineligible, so mergerfs returned ENOSPC on the first byte
+# the lab ever wrote — and on a 1 TiB lab it still stranded the last 50 GiB per branch with no
+# explanation, since `labquota` correctly reported the space as free.
 DEFAULT_MINFREESPACE = 50 * GIB
+# Slack as a share of the branch's own capacity, used whenever it comes out below the ceiling.
+MINFREESPACE_PERCENT = 2
+# Never go below this: some slack is what keeps mergerfs from having to relocate an open file.
+MIN_MINFREESPACE = 64 * 1024 * 1024
+
+
+def scaled_minfreespace(ceiling: int, branch_capacity: int) -> int:
+    """The slack to keep on a branch of ``branch_capacity`` bytes, never above ``ceiling``.
+
+    Pure and monotonic in the capacity, so the two ends stay predictable: a 3.6 TiB branch keeps the
+    full configured ceiling, a 32 GiB branch keeps ~650 MiB instead of being unusable.
+    """
+    if branch_capacity <= 0:  # unknown capacity: keep the configured behaviour rather than guess
+        return ceiling
+    scaled = branch_capacity * MINFREESPACE_PERCENT // 100
+    if scaled >= ceiling:
+        return ceiling
+    # The floor is itself clamped, so an explicitly small ceiling is never inflated and an
+    # implausibly small branch is never asked to reserve most of itself.
+    return max(min(MIN_MINFREESPACE, ceiling, branch_capacity // 4), scaled)
 
 
 @dataclass(frozen=True)
@@ -183,15 +209,21 @@ class MergerfsOptions:
             raise StorageConfigError("mergerfs dropcacheonclose/allow_other must be booleans")
         return self
 
-    def option_string(self, *, fsname: str) -> str:
+    def option_string(self, *, fsname: str, minfreespace: int | None = None) -> str:
         """The single ``-o`` value passed to mergerfs. Every part is an allow-listed constant or a
-        validated integer/fsname, so this string is safe to hand to argv (never a shell)."""
+        validated integer/fsname, so this string is safe to hand to argv (never a shell).
+
+        ``minfreespace`` overrides the configured ceiling with the value scaled to the branches this
+        particular lab actually has (see :func:`scaled_minfreespace`); the tier-wide setting is the
+        upper bound, not the value.
+        """
+        effective = self.minfreespace_bytes if minfreespace is None else minfreespace
         parts = [
             f"category.create={self.create_policy}",
             f"category.action={self.action_policy}",
             f"category.search={self.search_policy}",
             f"moveonenospc={self.moveonenospc}",
-            f"minfreespace={int(self.minfreespace_bytes)}",
+            f"minfreespace={_positive_int(effective, what='mergerfs minfreespace')}",
             f"cache.files={self.cache_files}",
             f"dropcacheonclose={'true' if self.dropcacheonclose else 'false'}",
             f"fsname={fsname}",

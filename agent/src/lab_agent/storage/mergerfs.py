@@ -29,7 +29,7 @@ from dataclasses import dataclass
 
 from ..executors import zfs
 from ..executors.base import CommandResult, run
-from .model import TierConfig
+from .model import TierConfig, scaled_minfreespace
 
 MERGERFS_BIN = "mergerfs"
 # mergerfs exposes a runtime control file inside every mount. Writing the ``user.mergerfs.branches``
@@ -37,6 +37,8 @@ MERGERFS_BIN = "mergerfs"
 # unmounting — which means the lab container's bind mount (and its open file handles) survive.
 CONTROL_FILE = ".mergerfs"
 BRANCHES_XATTR = "user.mergerfs.branches"
+# Same control file, for the create-policy threshold that has to track a lab's quota.
+MINFREESPACE_XATTR = "user.mergerfs.minfreespace"
 
 
 class MergerfsError(RuntimeError):
@@ -95,7 +97,31 @@ def active_branches(tier: TierConfig, lab: str, pools: list[str] | None = None) 
 # --------------------------------------------------------------------------- command generation
 
 
-def mount_argv(tier: TierConfig, lab: str, branches: list[str]) -> list[str]:
+def branch_capacity(path: str) -> int | None:
+    """Total bytes a branch can ever hold, which for a quota'd ZFS dataset is its quota."""
+    try:
+        st = os.statvfs(path)
+    except OSError:
+        return None
+    return st.f_blocks * st.f_frsize
+
+
+def minfreespace_for(tier: TierConfig, branches: list[str]) -> int:
+    """The minfreespace this lab's union should use, scaled to its SMALLEST branch.
+
+    mergerfs measures free space per branch, and a branch's free space is its ZFS quota minus its
+    usage — so the tier-wide ceiling has to be scaled down for a lab whose quota is smaller than it.
+    The smallest branch decides, because a branch below minfreespace is simply skipped for new
+    files, and skipping every branch is ENOSPC.
+    """
+    capacities = [c for c in (branch_capacity(b) for b in branches) if c]
+    ceiling = tier.mergerfs.minfreespace_bytes
+    return scaled_minfreespace(ceiling, min(capacities)) if capacities else ceiling
+
+
+def mount_argv(
+    tier: TierConfig, lab: str, branches: list[str], *, minfreespace: int | None = None,
+) -> list[str]:
     """The exact argv used to mount one lab's union. Pure, so it is unit-testable without FUSE."""
     if not branches:
         raise MergerfsError(
@@ -104,7 +130,10 @@ def mount_argv(tier: TierConfig, lab: str, branches: list[str]) -> list[str]:
     return [
         MERGERFS_BIN,
         "-o",
-        tier.mergerfs.option_string(fsname=tier.fsname(lab)),
+        tier.mergerfs.option_string(
+            fsname=tier.fsname(lab),
+            minfreespace=minfreespace_for(tier, branches) if minfreespace is None else minfreespace,
+        ),
         ":".join(branches),
         tier.logical_mount(lab),
     ]
@@ -143,6 +172,21 @@ def add_branch_live(mountpoint: str, branch: str) -> CommandResult:
     """
     return run(
         ["setfattr", "-n", BRANCHES_XATTR, "-v", f"+>{branch}",
+         os.path.join(mountpoint, CONTROL_FILE)],
+        timeout=20,
+    )
+
+
+def set_minfreespace_live(mountpoint: str, value: int) -> CommandResult:
+    """Update minfreespace on a RUNNING mergerfs mount.
+
+    The right value depends on the lab's quota, so it has to move when the quota does — otherwise a
+    lab shrunk to 64 GiB keeps a 50 GiB threshold and can never create a file, and a lab grown to
+    2 TiB keeps a threshold sized for its old quota. Doing it live keeps the container's bind mount
+    (and every open file handle) intact.
+    """
+    return run(
+        ["setfattr", "-n", MINFREESPACE_XATTR, "-v", str(int(value)),
          os.path.join(mountpoint, CONTROL_FILE)],
         timeout=20,
     )
