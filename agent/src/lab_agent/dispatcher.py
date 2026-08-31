@@ -7,12 +7,14 @@ New actions (lab/student/container/usage) are registered here as later phases la
 
 from __future__ import annotations
 
+import os
 import traceback
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from . import protocol as P
-from .config import AgentConfig
+from .config import DEFAULT_CONFIG_PATH, AgentConfig, config_stamp, refresh_config
 from .logbus import LogBus
 from .system import detect_capabilities
 
@@ -24,6 +26,8 @@ class Dispatcher:
     def __init__(self, cfg: AgentConfig, log: LogBus):
         self.cfg = cfg
         self.log = log
+        self._config_path = Path(os.environ.get("LAB_AGENT_CONFIG", str(DEFAULT_CONFIG_PATH)))
+        self._config_stamp = config_stamp(self._config_path)
         self._handlers: dict[str, Handler] = {}
         self._register_builtin()
 
@@ -61,7 +65,30 @@ class Dispatcher:
         caps = detect_capabilities(cfg)
         return caps.to_dict(), ""
 
+    def _sync_config(self) -> None:
+        """Adopt an out-of-band edit of the config file before running a task.
+
+        `lab-agent storage attach/detach` and `host-prepare` are SEPARATE processes that rewrite
+        the same file; the service used to keep its startup copy forever and answer `storage.status`
+        and `node.check` from a topology that no longer existed — reporting a detached pool as
+        UNAVAIL and the tier as degraded until someone restarted it.
+        """
+        stamp = config_stamp(self._config_path)
+        if stamp is None or stamp == self._config_stamp:
+            return
+        try:
+            changed = refresh_config(self.cfg, self._config_path)
+        except (OSError, ValueError) as exc:
+            # A half-written or invalid file must never take the running agent down; keep the last
+            # good config and re-check on the next task.
+            self.log.warn("config", f"ignoring unreadable {self._config_path}: {exc}")
+            return
+        self._config_stamp = stamp
+        if changed:
+            self.log.info("config", f"reloaded {self._config_path}: {', '.join(sorted(changed))}")
+
     def handle(self, task: P.Task) -> dict[str, Any]:
+        self._sync_config()
         handler = self._handlers.get(task.action)
         if handler is None:
             self.log.warn("dispatch", f"no handler for action '{task.action}'",
@@ -76,3 +103,7 @@ class Dispatcher:
             self.log.error("dispatch", f"task {task.action} failed: {exc}",
                            task_id=task.id, detail=tb)
             return P.result_frame(task.id, ok=False, error=str(exc), logs=tb)
+        finally:
+            # Storage handlers write the file themselves after mutating cfg in place. Re-stamping
+            # keeps that from looking like an out-of-band edit on the next task.
+            self._config_stamp = config_stamp(self._config_path)
