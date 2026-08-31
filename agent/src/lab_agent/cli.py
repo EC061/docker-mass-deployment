@@ -471,7 +471,17 @@ def _cmd_storage_rebalance(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except PermissionError as exc:
+        # Most subcommands manage /etc, /var/lib, systemd or the docker socket, and the config is
+        # root-only. Since the agent installs onto every user's PATH, an unprivileged invocation is
+        # routine: report it as one actionable line instead of a traceback.
+        print(f"lab-agent: {exc}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("interrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":
