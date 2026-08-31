@@ -161,8 +161,14 @@ def build_run_args(
         args += ["--storage-opt", f"size={opts.rootfs_quota}"]
     args += ["--restart", opts.restart]
     validate_image(opts.image)
-    args += ["--mount", f"type=bind,source={mounts.fast},target=/home"]
-    args += ["--mount", f"type=bind,source={mounts.cold},target=/cold-storage"]
+    # bind-propagation=rslave, not Docker's default rprivate: a per-student ZFS dataset created
+    # after the container exists (adding a member to a running lab) is a NEW mount under the source,
+    # and an rprivate bind never sees it — the student's own quota'd directory stays invisible
+    # inside the container and they cannot write to it. Slave propagates host -> container only, so
+    # nothing inside the lab can affect the host's mount table.
+    args += ["--mount", f"type=bind,source={mounts.fast},target=/home,bind-propagation=rslave"]
+    args += ["--mount",
+             f"type=bind,source={mounts.cold},target=/cold-storage,bind-propagation=rslave"]
     # labquota status dir, READ-ONLY: the agent publishes usage.json/status.json here (root-owned,
     # off any student-writable mount); students read it via the `labquota` command at /run/labquota.
     if mounts.labquota:
