@@ -61,10 +61,19 @@ def container_name(lab: str, node: str) -> str:
 _HOSTNAME_INVALID_RE = re.compile(r"[^A-Za-z0-9.-]+")
 
 
-def container_hostname(lab: str, node: str) -> str:
+def container_hostname(lab: str, node: str, alias: str | None = None) -> str:
     """DNS-safe hostname (the ``<lab>-<node>`` a student sees in their shell prompt). Without this,
-    the container hostname defaults to the random truncated container ID."""
-    cleaned = _HOSTNAME_INVALID_RE.sub("-", f"{lab}-{node}").strip("-.")
+    the container hostname defaults to the random truncated container ID.
+
+    ``alias`` replaces the lab half when the controller sends one (``labs.alias``), so a lab keeps
+    its operational name — dataset component, container name, task key — while students see a
+    friendlier prompt. It is sanitized exactly like the lab name; the container NAME is deliberately
+    left alone, since that is the lab's identity on the node.
+    """
+    # Stripped, so a blank/whitespace alias falls back to the lab instead of eating the lab half:
+    # the controller already trims, but this must hold for anything that reaches the node.
+    label = (alias or "").strip() or lab
+    cleaned = _HOSTNAME_INVALID_RE.sub("-", f"{label}-{node}").strip("-.")
     return cleaned[:63] or "lab"
 
 
@@ -77,6 +86,8 @@ class ContainerOptions:
     rootfs_quota: str = "300g"  # outer container writable-layer quota
     ssh_port: int = 0
     restart: str = "unless-stopped"
+    # Optional lab hostname alias (see container_hostname). Empty = named after the lab itself.
+    hostname_alias: str = ""
     extra_env: dict[str, str] = field(default_factory=dict)
 
     @classmethod
@@ -90,6 +101,7 @@ class ContainerOptions:
             rootfs_quota=str(opts.get("rootfs_quota", cls.rootfs_quota)),
             ssh_port=int(params.get("ssh_port", opts.get("ssh_port", 0)) or 0),
             restart=str(opts.get("restart", cls.restart)),
+            hostname_alias=str(opts.get("hostname_alias") or ""),
             extra_env=dict(opts.get("extra_env", {})),
         )
 

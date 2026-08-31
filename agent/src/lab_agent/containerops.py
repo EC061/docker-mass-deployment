@@ -76,7 +76,7 @@ def ensure_container(cfg: AgentConfig, lab: str, params: dict[str, Any]) -> str:
         mounts,
         gpus=caps.nvidia_gpu and caps.nvidia_cdi,
         labels=_labels(cfg, lab),
-        hostname=docker.container_hostname(lab, cfg.node_name),
+        hostname=docker.container_hostname(lab, cfg.node_name, opts.hostname_alias),
     )
     if not docker.wait_ssh_ready(name):
         logs = docker.container_logs(name)
@@ -140,7 +140,7 @@ def recreate_container(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, s
         # 3. Bring up the candidate under the real name and verify it actually started.
         container_id = docker.create_container(
             name, opts, mounts, gpus=gpus, labels=_labels(cfg, lab),
-            hostname=docker.container_hostname(lab, cfg.node_name),
+            hostname=docker.container_hostname(lab, cfg.node_name, opts.hostname_alias),
         )
         if not docker.wait_ssh_ready(name):
             logs = docker.container_logs(name)

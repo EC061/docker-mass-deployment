@@ -4,7 +4,7 @@ import { ConfirmButton } from "../../_components/ConfirmButton";
 import { db } from "@/lib/db";
 import { takeFlash } from "@/lib/flash";
 import { getLab } from "@/lib/labs";
-import { listPlacements, type Placement } from "@/lib/placements";
+import { listPlacements, placementHostname, type Placement } from "@/lib/placements";
 import { listMembers } from "@/lib/students";
 import { DEGREE_OPTIONS, FACULTY_DEGREE } from "@/lib/names";
 import { getSettings, TIB } from "@/lib/settings";
@@ -24,6 +24,7 @@ import {
   grantNodeAccessAction,
   previewRosterImportAction,
   removeMemberAction,
+  updateLabIdentityAction,
   updateLabMetaAction,
 } from "../actions";
 
@@ -144,6 +145,41 @@ export default async function LabDetail({
           </CardContent>
         </Card>
       )}
+
+      <Card>
+        <CardContent className="space-y-3">
+          <h2 className="text-base font-semibold">Name and hostname</h2>
+          <form action={updateLabIdentityAction} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <input type="hidden" name="labId" value={lab.id} />
+            <div>
+              <Label>Lab name</Label>
+              <Input name="name" defaultValue={lab.name} readOnly={placements.length > 0} required />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {placements.length > 0
+                  ? `Fixed while placed on ${placements.map((p) => p.node_name).join(", ")} — it is the lab's ZFS dataset and container name there. Remove node access to rename, or set an alias below.`
+                  : "The lab's identity on every node: ZFS dataset, container name, task and log key."}
+              </p>
+            </div>
+            <div>
+              <Label>Hostname alias</Label>
+              <Input name="alias" defaultValue={lab.alias ?? ""} placeholder={lab.name} />
+              <p className="mt-1 text-xs text-muted-foreground">
+                Optional. Replaces the lab half of the container hostname only — letters, digits and
+                hyphens. Applies on the next container recreation.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <Label>Students&apos; shell prompt</Label>
+              <p className="font-mono text-sm">
+                {placements.length > 0
+                  ? placements.map((p) => placementHostname(p)).join(", ")
+                  : `<user>@${lab.alias || lab.name}-<node>`}
+              </p>
+              <Button type="submit">Save</Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
       <Card>
         <CardContent className="space-y-3">

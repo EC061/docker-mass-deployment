@@ -66,6 +66,23 @@ def test_creation_requires_userns_and_passes_cdi(monkeypatch):
         containerops.ensure_container(cfg(), "bio", {})
 
 
+def test_container_is_created_with_the_labs_hostname_alias(monkeypatch):
+    common(monkeypatch)
+    seen = {}
+    monkeypatch.setattr(containerops.docker, "remove_container", lambda name: None)
+    monkeypatch.setattr(containerops.docker, "create_container",
+                        lambda name, *a, hostname=None, **kw: seen.update(
+                            name=name, hostname=hostname) or "cid")
+    params = {"container_options": {"hostname_alias": "gylab"}}
+    containerops.ensure_container(cfg(), "Geng_Yuan_Lab", params)
+    # Alias drives only the hostname students see; the container name is still the lab's.
+    assert seen == {"name": "Geng_Yuan_Lab-n", "hostname": "gylab-n"}
+
+    seen.clear()
+    containerops.ensure_container(cfg(), "Geng_Yuan_Lab", {})
+    assert seen == {"name": "Geng_Yuan_Lab-n", "hostname": "Geng-Yuan-Lab-n"}
+
+
 def test_gpu_requires_nvml_and_cdi(monkeypatch):
     common(monkeypatch, healthy(gpu=True, cdi=False))
     got = {}

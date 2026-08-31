@@ -13,7 +13,7 @@ import {
   type WorkbookImportResult,
   type WorkbookSheet,
 } from "@/lib/workbookimport";
-import { createLab, destroyLab, getLab, updateLabMeta } from "@/lib/labs";
+import { createLab, destroyLab, getLab, renameLab, setLabAlias, updateLabMeta } from "@/lib/labs";
 import {
   type ContainerOptions,
   consumePlacementCredential,
@@ -131,6 +131,37 @@ export async function updateLabMetaAction(formData: FormData) {
   } else updateLabMeta(labId, { piName, piEmail }, who);
   revalidatePath(`/labs/${labId}`);
   const fid = putFlash("Lab metadata saved.");
+  redirect(`/labs/${labId}?saved=${fid}`);
+}
+
+/** Rename a lab and/or set its hostname alias. Both are identity, not container config: the rename
+ *  is refused while the lab is placed (see renameLab), the alias applies on the next recreate. */
+export async function updateLabIdentityAction(formData: FormData) {
+  const who = await actor();
+  const labId = Number(formData.get("labId"));
+  let recreateOn: string[] = [];
+  let renamedTo: string | null = null;
+  try {
+    const name = String(formData.get("name") ?? "").trim();
+    const before = getLab(labId);
+    if (!before) throw new Error("Unknown lab");
+    if (name && name !== before.name) {
+      renameLab(labId, name, who);
+      renamedTo = name;
+    }
+    recreateOn = setLabAlias(labId, String(formData.get("alias") ?? ""), who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not update the lab");
+    redirect(`/labs/${labId}?error=${fid}`);
+  }
+  revalidatePath(`/labs/${labId}`);
+  revalidatePath("/labs");
+  const fid = putFlash(
+    (renamedTo ? `Lab renamed to ${renamedTo}. ` : "") +
+      (recreateOn.length > 0
+        ? `Hostname alias saved — recreate the container on ${recreateOn.join(", ")} to apply it.`
+        : "Lab identity saved."),
+  );
   redirect(`/labs/${labId}?saved=${fid}`);
 }
 
