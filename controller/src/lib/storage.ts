@@ -52,6 +52,20 @@ export function tierTotal(
   );
 }
 
+/**
+ * Whether a node's stored `capabilities` blob says ZFS is usable.
+ *
+ * The agent sends `Capabilities.to_dict()`, which is nested by health area:
+ * `{runtime, nvidia, storage: {zfs_ok, ...}, health}`. The flag has never lived at the top level, so
+ * a `capabilities.zfs` read silently returns undefined for EVERY real node — which is exactly how
+ * the scrub and rebalance schedulers came to skip every node they were meant to serve. Read it
+ * through here so the shape is asserted in one place.
+ */
+export function nodeHasZfs(capabilities: string | null): boolean {
+  const caps = parseJsonObject(capabilities);
+  return caps?.storage?.zfs_ok === true;
+}
+
 export function parseJsonObject(raw: string | null): Record<string, any> | null {
   if (!raw) return null;
   try {

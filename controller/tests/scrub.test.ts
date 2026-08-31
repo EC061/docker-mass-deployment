@@ -22,13 +22,23 @@ let maintenance: typeof import("../src/lib/maintenance");
 let ingest: typeof import("../src/lib/ingest");
 let settings: typeof import("../src/lib/settings");
 
-function addNode(name: string, caps: object, lastScrub: number | null = null) {
+/** The agent's real `Capabilities.to_dict()` shape — see the same helper in rebalance.test.ts. */
+function agentCapabilities(zfsOk: boolean): object {
+  return {
+    runtime: { docker_ok: true, bwrap_ok: true },
+    nvidia: { gpu_count: 4, nvml_ok: true },
+    storage: { zfs_ok: zfsOk, fast_ok: true, cold_ok: true, cold_backend: zfsOk ? "local_zfs" : "smb" },
+    health: { status: "ok", issues: [] },
+  };
+}
+
+function addNode(name: string, zfsOk: boolean, lastScrub: number | null = null) {
   dbmod
     .db()
     .prepare(
       "INSERT INTO nodes (name, online, capabilities, last_scrub, created_at) VALUES (?, 1, ?, ?, 0)",
     )
-    .run(name, JSON.stringify(caps), lastScrub);
+    .run(name, JSON.stringify(agentCapabilities(zfsOk)), lastScrub);
 }
 
 beforeAll(async () => {
@@ -46,7 +56,7 @@ describe("scrub scheduling", () => {
   it("does nothing when disabled", () => {
     enqueueTask.mockClear();
     settings.setSetting("scrubEnabled", false);
-    addNode("disabled-node", { zfs: true });
+    addNode("disabled-node", true);
     expect(maintenance.scheduleScrubs()).toEqual([]);
     expect(enqueueTask).not.toHaveBeenCalled();
   });
@@ -58,9 +68,9 @@ describe("scrub scheduling", () => {
     const now = 1_000_000_000_000; // 2001-09-09 01:46 UTC -> hour 1
     settings.setSetting("scrubTimezone", "UTC");
     settings.setSetting("scrubHour", 1); // match `now`'s hour so the time-of-day gate passes
-    addNode("zfs-due", { zfs: true }, null); // never scrubbed -> due
-    addNode("smb-only", { zfs: false }, null); // no ZFS -> skip
-    addNode("recent", { zfs: true }, now - 1 * 86400 * 1000); // 1 day ago -> not due
+    addNode("zfs-due", true, null); // never scrubbed -> due
+    addNode("smb-only", false, null); // no ZFS -> skip
+    addNode("recent", true, now - 1 * 86400 * 1000); // 1 day ago -> not due
 
     const scheduled = maintenance.scheduleScrubs(now);
     expect(scheduled).toContain("zfs-due");
@@ -79,7 +89,7 @@ describe("scrub scheduling", () => {
     settings.setSetting("scrubEnabled", true);
     settings.setSetting("scrubIntervalDays", 30);
     settings.setSetting("scrubTimezone", "UTC");
-    addNode("tz-node", { zfs: true }, null);
+    addNode("tz-node", true, null);
     // 2026-06-27 09:00:00 UTC -> hour 9.
     const at9 = Date.UTC(2026, 5, 27, 9, 0, 0);
     settings.setSetting("scrubHour", 14); // window is 14:00, current is 09:00 -> skip
@@ -100,7 +110,7 @@ describe("scrub scheduling", () => {
 describe("scrub status ingestion", () => {
   it("stores status and alerts when a pool newly reports errors", async () => {
     sendMail.mockClear();
-    addNode("ingest-node", { zfs: true });
+    addNode("ingest-node", true);
     ingest.ingestTelemetry("ingest-node", {
       pools: [],
       scrub: [
