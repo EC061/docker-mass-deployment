@@ -30,6 +30,44 @@ def test_ensure_owned_dir_converges_under_concurrent_shared_creation(tmp_path):
     assert (stat.st_uid, stat.st_gid, stat.st_mode & 0o777) == (uid, gid, 0o700)
 
 
+def test_ensure_owned_dir_skips_noop_metadata_writes_at_quota(tmp_path, monkeypatch):
+    """BUG-7: even a no-op chown/chmod returns EDQUOT on a completely full ZFS dataset."""
+    target = tmp_path / "cold" / "alice"
+    target.parent.mkdir()
+    target.mkdir(mode=0o700)
+    uid, gid = os.getuid(), os.getgid()
+
+    def unexpected(*_args, **_kwargs):
+        raise OSError(122, "Disk quota exceeded")
+
+    monkeypatch.setattr(coldfs.os, "chown", unexpected)
+    monkeypatch.setattr(coldfs.os, "chmod", unexpected)
+
+    coldfs.ensure_owned_dir(str(target), uid, gid)
+
+
+def test_ensure_owned_dir_changes_only_metadata_that_differs(tmp_path, monkeypatch):
+    target = tmp_path / "cold" / "alice"
+    target.parent.mkdir()
+    target.mkdir(mode=0o755)
+    uid, gid = os.getuid(), os.getgid()
+    chowns = []
+    real_chmod = os.chmod
+    chmods = []
+
+    monkeypatch.setattr(coldfs.os, "chown", lambda *args, **kwargs: chowns.append((args, kwargs)))
+    monkeypatch.setattr(
+        coldfs.os,
+        "chmod",
+        lambda *args, **kwargs: (chmods.append((args, kwargs)), real_chmod(*args, **kwargs)),
+    )
+
+    coldfs.ensure_owned_dir(str(target), uid, gid)
+
+    assert chowns == []
+    assert len(chmods) == 1
+
+
 def test_remove_tree_deletes_subtree_inside_guard(tmp_path):
     guard = tmp_path / "cold"
     lab = guard / "labs" / "bio"

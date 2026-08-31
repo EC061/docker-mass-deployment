@@ -166,4 +166,36 @@ describe("telemetry ingestion", () => {
     });
     expect(fastRows()).toBe(fastBefore);
   });
+
+  it("stores a newly measured lab row inside the throttle window", () => {
+    const latestFast = () =>
+      db.db().prepare(
+        `SELECT used_bytes AS used, ts FROM storage_samples
+         WHERE pool='fast' AND lab_id=(SELECT id FROM labs WHERE name='bio')
+           AND student_id IS NULL ORDER BY id DESC LIMIT 1`,
+      ).get() as { used: number; ts: number };
+    const before = latestFast();
+    const measuredAt = Math.max(Date.now(), before.ts + 1);
+
+    // FIND-12: "Scan now" refreshes the agent's lab cache inside the five-minute ingestion window.
+    // sampled_at identifies that new measurement so it is not mistaken for a repeated heartbeat.
+    ingest.ingestTelemetry("gpu-1", {
+      storage: [{
+        lab: "bio", user: null, tier: "fast", used_bytes: 9876,
+        quota_bytes: 2199023255552, sampled_at: measuredAt,
+      }],
+      gpu_processes: [],
+    });
+    expect(latestFast()).toEqual({ used: 9876, ts: measuredAt });
+
+    // The same cached measurement is re-reported on every heartbeat but must only be stored once.
+    ingest.ingestTelemetry("gpu-1", {
+      storage: [{
+        lab: "bio", user: null, tier: "fast", used_bytes: 9999,
+        quota_bytes: 2199023255552, sampled_at: measuredAt,
+      }],
+      gpu_processes: [],
+    });
+    expect(latestFast()).toEqual({ used: 9876, ts: measuredAt });
+  });
 });

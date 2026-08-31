@@ -64,6 +64,7 @@ function shouldSample(
   used: number,
   now: number,
   scanDerived: boolean,
+  sampledAt: number | null,
 ): boolean {
   const row = db()
     .prepare(
@@ -73,6 +74,10 @@ function shouldSample(
     )
     .get(placementId, studentId, pool) as { ts: number; used: number } | undefined;
   if (!row) return true;
+  // New agents preserve the lab-cache measurement timestamp. Store each new measurement exactly
+  // once, even inside the normal five-minute throttle window; repeated heartbeats carry the same
+  // sampled_at and therefore do not grow the series or make stale values look freshly measured.
+  if (sampledAt !== null) return sampledAt > row.ts;
   if (now - row.ts >= STORAGE_SAMPLE_MIN_INTERVAL_MS) return true;
   return scanDerived && row.used !== used;
 }
@@ -84,6 +89,7 @@ interface StorageUsage {
   used_bytes: number;
   quota_bytes: number | null;
   available_bytes: number | null;
+  sampled_at?: number | null;
 }
 
 export function ingestTelemetry(node: string, payload: any): void {
@@ -119,9 +125,13 @@ export function ingestTelemetry(node: string, payload: any): void {
     const studentId = ds.user ? studentIdInLab(ref.lab_id, ds.user) : null;
     if (ds.user && studentId === null) continue;
     const scanDerived = ds.tier === "rootfs" || ds.user !== null;
-    if (!shouldSample(ref.placement_id, studentId, ds.tier, ds.used_bytes, now, scanDerived)) continue;
+    const sampledAt = typeof ds.sampled_at === "number" && Number.isFinite(ds.sampled_at)
+      ? ds.sampled_at
+      : null;
+    if (!shouldSample(ref.placement_id, studentId, ds.tier, ds.used_bytes, now, scanDerived,
+      sampledAt)) continue;
     insertSample.run(ref.placement_id, ref.lab_id, studentId, ds.tier, ds.used_bytes,
-      ds.quota_bytes ?? null, now);
+      ds.quota_bytes ?? null, sampledAt ?? now);
     const assignedUserQuota = ds.tier === "fast"
       ? (ds.quota_bytes ?? ref.student_fast_quota_bytes ?? ref.fast_quota_bytes)
       : ds.tier === "cold"

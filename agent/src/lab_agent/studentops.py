@@ -42,8 +42,20 @@ def _ensure_user_dataset(dataset: str, path: str, quota: int | None, uid: int, g
     by recreate.
     """
     if zfs.dataset_exists(dataset):
-        zfs.set_quota(dataset, quota)
-        coldfs.ensure_owned_dir(path, uid, gid)
+        current = zfs.get_usage(dataset).quota_bytes
+        if current == quota:
+            coldfs.ensure_owned_dir(path, uid, gid)
+            return
+        relaxing = quota is None or (current is not None and quota > current)
+        if relaxing:
+            # A clear/grow creates headroom that may be needed for a genuine metadata repair.
+            zfs.set_quota(dataset, quota)
+            coldfs.ensure_owned_dir(path, uid, gid)
+        else:
+            # Converge metadata while the old headroom is still in force. A shrink can pin quota to
+            # used bytes, at which point even chown/chmod may fail with EDQUOT on ZFS.
+            coldfs.ensure_owned_dir(path, uid, gid)
+            zfs.set_quota(dataset, quota)
         return
     if quota is None:
         coldfs.ensure_owned_dir(path, uid, gid)
@@ -68,11 +80,13 @@ def _ensure_user_dataset(dataset: str, path: str, quota: int | None, uid: int, g
             raise RuntimeError(
                 f"student dataset {dataset} inherited mountpoint {actual}, expected {path}"
             )
+        # Set the empty dataset root's metadata before copying data into its finite quota. The copy
+        # may fill the dataset completely, but no later metadata write is then required.
+        coldfs.ensure_owned_dir(path, uid, gid)
         if had_data:
             copied = run(["cp", "-a", f"{staged}/.", path], timeout=3600)
             if not copied.ok:
                 raise RuntimeError(f"could not copy student data into quota dataset: {copied.logs}")
-        coldfs.ensure_owned_dir(path, uid, gid)
         if had_data:
             shutil.rmtree(staged)
     except Exception:

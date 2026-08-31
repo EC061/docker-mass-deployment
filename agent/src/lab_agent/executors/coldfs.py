@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 
 
 class ColdFsError(RuntimeError):
@@ -26,7 +27,7 @@ def ensure_dir(path: str) -> None:
 def ensure_owned_dir(path: str, uid: int, gid: int, *, mode: int = 0o700) -> None:
     """Race-safely converge a real directory to exact numeric ownership and mode."""
     try:
-        os.lstat(path)
+        observed = os.lstat(path)
     except FileNotFoundError:
         try:
             os.mkdir(path, mode)
@@ -34,13 +35,20 @@ def ensure_owned_dir(path: str, uid: int, gid: int, *, mode: int = 0o700) -> Non
             # Another placement may be provisioning the same SMB-backed student directory.
             pass
     try:
-        os.lstat(path)
+        observed = os.lstat(path)
     except FileNotFoundError as exc:
         raise ColdFsError(f"directory '{path}' disappeared during provisioning") from exc
-    if not os.path.isdir(path) or os.path.islink(path):
+    if not stat.S_ISDIR(observed.st_mode):
         raise ColdFsError(f"refusing to use '{path}': expected a real directory")
-    os.chown(path, uid, gid, follow_symlinks=False)
-    os.chmod(path, mode, follow_symlinks=False)
+    # A metadata-only write can fail with EDQUOT when a ZFS dataset is exactly at its quota. Avoid
+    # issuing no-op changes: provisioned student roots normally already have the requested metadata,
+    # so recreate/retry remains possible even while the member is at 100%.
+    ownership_changed = (observed.st_uid, observed.st_gid) != (uid, gid)
+    if ownership_changed:
+        os.chown(path, uid, gid, follow_symlinks=False)
+    # chown may clear setuid/setgid bits, so re-assert the requested mode after a real owner change.
+    if ownership_changed or stat.S_IMODE(observed.st_mode) != mode:
+        os.chmod(path, mode, follow_symlinks=False)
 
 
 def remove_child(root: str, name: str) -> None:
