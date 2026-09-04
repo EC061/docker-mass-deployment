@@ -4,7 +4,12 @@ import { useMemo, useRef, useState } from "react";
 import type { AnnouncementTemplate, Person, RecipientGroup } from "@/lib/announcements";
 import { renderAnnouncementPreview, type AnnouncementPreviewSender } from "@/lib/announcement-preview";
 import { formatEmailFrom, type EmailFrom } from "@/lib/email";
-import { splitEmailBody, type EmailTable } from "@/lib/email-tables";
+import {
+  parseMarkdownBlocks,
+  renderInlineHtml,
+  type MarkdownBlock,
+} from "@/lib/email-markdown";
+import type { EmailTable } from "@/lib/email-tables";
 import { extractBracketTokens } from "@/lib/template";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -27,6 +32,65 @@ interface Props {
   from: EmailFrom;
   signatureText: string;
   action: (formData: FormData) => void | Promise<void>;
+}
+
+/**
+ * Inline Markdown inside the live preview. Rendered through the same renderer the mailer uses
+ * for the sent HTML alternative, so the preview shows exactly what recipients get. Safe by
+ * construction: the renderer escapes everything and only allows http/https/mailto links.
+ */
+function PreviewInline({ text }: { text: string }) {
+  return <span dangerouslySetInnerHTML={{ __html: renderInlineHtml(text) }} />;
+}
+
+/** One block of the preview body, styled with the app's theme. */
+function PreviewBlock({ block }: { block: MarkdownBlock }) {
+  switch (block.type) {
+    case "heading": {
+      const size =
+        block.level <= 1 ? "text-xl font-bold" : block.level === 2 ? "text-lg font-bold" : "text-base font-semibold";
+      const Tag = `h${block.level}` as "h1" | "h2" | "h3" | "h4" | "h5" | "h6";
+      return (
+        <Tag className={size}>
+          <PreviewInline text={block.text} />
+        </Tag>
+      );
+    }
+    case "quote":
+      return (
+        <blockquote className="border-l-2 border-border pl-3 text-muted-foreground">
+          <PreviewInline text={block.text} />
+        </blockquote>
+      );
+    case "list": {
+      const Tag = block.ordered ? "ol" : "ul";
+      return (
+        <Tag className={`${block.ordered ? "list-decimal" : "list-disc"} space-y-0.5 pl-6`}>
+          {block.items.map((item, i) => (
+            <li key={i}>
+              <PreviewInline text={item} />
+            </li>
+          ))}
+        </Tag>
+      );
+    }
+    case "code":
+      return (
+        <pre className="overflow-x-auto rounded-md bg-muted p-3 font-mono text-xs whitespace-pre-wrap break-words">
+          {block.text}
+        </pre>
+      );
+    case "hr":
+      return <hr className="border-border" />;
+    case "table":
+      return <PreviewTable table={block.table} />;
+    case "paragraph":
+      return (
+        <span className="whitespace-pre-wrap break-words">
+          <PreviewInline text={block.text} />
+        </span>
+      );
+  }
 }
 
 /**
@@ -68,22 +132,17 @@ function PreviewTable({ table }: { table: EmailTable }) {
 }
 
 /**
- * The preview body: prose chunks keep the old whitespace-preserving style and each pipe table
- * renders as a real table — the same split the mailer uses for the sent HTML alternative.
+ * The preview body: each Markdown block renders as it will in the sent HTML alternative —
+ * headings, lists, quotes, code, rules, tables — while plain prose keeps the old
+ * whitespace-preserving style. Parsed with the same parser the mailer uses.
  */
 function PreviewBody({ body }: { body: string }) {
   if (!body) return "Write a message to preview it here.";
   return (
     <span className="grid gap-3">
-      {splitEmailBody(body).map((segment, i) =>
-        segment.type === "table" ? (
-          <PreviewTable key={i} table={segment.table} />
-        ) : (
-          <span key={i} className="whitespace-pre-wrap break-words">
-            {segment.text}
-          </span>
-        ),
-      )}
+      {parseMarkdownBlocks(body).map((block, i) => (
+        <PreviewBlock key={i} block={block} />
+      ))}
     </span>
   );
 }

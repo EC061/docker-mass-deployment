@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   hasMarkdownTable,
-  renderEmailHtml,
   renderEmailTableHtml,
   splitEmailBody,
 } from "../src/lib/email-tables";
@@ -49,22 +48,7 @@ describe("splitEmailBody", () => {
   });
 });
 
-describe("renderEmailHtml", () => {
-  it("returns undefined when there is no table, keeping mail text-only", () => {
-    expect(renderEmailHtml("Hello\n\nNo tables here.")).toBeUndefined();
-  });
-
-  it("renders the table with inline styles and keeps the surrounding prose", () => {
-    const html = renderEmailHtml(`Heads up:\n\n${SERVER_TABLE}`);
-    expect(html).toContain("<table");
-    expect(html).toContain("border-collapse:collapse");
-    expect(html).toContain("Asimov1");
-    expect(html).toContain("Saturday, September 12 at 11:59 PM ET");
-    expect(html).toContain("Heads up:");
-    // The plain-text shape is preserved elsewhere; the HTML only adds the alternative.
-    expect(html).not.toContain("| Server");
-  });
-
+describe("renderEmailTableHtml", () => {
   it("escapes cell contents so template text cannot inject markup", () => {
     const html = renderEmailTableHtml({
       headers: ["A<script>"],
