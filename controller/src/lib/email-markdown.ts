@@ -38,7 +38,9 @@ const FENCE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 
 /** Split a body into blocks. Blank lines separate paragraphs; nothing else is required. */
 export function parseMarkdownBlocks(body: string): MarkdownBlock[] {
-  const lines = body.split("\n");
+  // Templates pasted from Word/Outlook carry Windows line endings. Normalize first: `.` never
+  // matches `\r`, so every `$`-anchored pattern below would otherwise miss on such input.
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
   const blocks: MarkdownBlock[] = [];
   let i = 0;
 
