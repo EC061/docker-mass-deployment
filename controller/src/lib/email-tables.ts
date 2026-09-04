@@ -118,6 +118,28 @@ export function hasMarkdownTable(body: string): boolean {
   return splitEmailBody(body).some((segment) => segment.type === "table");
 }
 
+/**
+ * Try to parse a pipe table starting at `lines[start]` (header) + `lines[start+1]` (delimiter).
+ * Returns the table and the index of the first line after it, or null when the lines are not a
+ * table. Shared with the Markdown block parser so tables parse identically in both paths.
+ */
+export function matchTableAt(lines: readonly string[], start: number): { table: EmailTable; next: number } | null {
+  const headers = splitTableRow(lines[start] ?? "");
+  const aligns = start + 1 < lines.length ? parseDelimiterRow(lines[start + 1] ?? "") : null;
+  if (!headers || !aligns || aligns.length !== headers.length) return null;
+  const rows: string[][] = [];
+  let j = start + 2;
+  while (j < lines.length) {
+    const cells = splitTableRow(lines[j] ?? "");
+    if (!cells) break;
+    rows.push(headers.map((_, col) => cells[col] ?? ""));
+    j += 1;
+  }
+  // A header plus delimiter alone is prose, not a table.
+  if (rows.length === 0) return null;
+  return { table: { headers, aligns, rows }, next: j };
+}
+
 function alignStyle(align: EmailTableAlign): string {
   return align === "left" ? "" : ` text-align:${align};`;
 }
@@ -135,32 +157,5 @@ export function renderEmailTableHtml(table: EmailTable): string {
   return (
     `<table border="0" cellpadding="0" cellspacing="0" style="border-collapse:collapse;width:100%;margin:16px 0;">` +
     `<thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`
-  );
-}
-
-/** Prose rendered as email-safe HTML, preserving the blank-line/line-break shape of the text part. */
-function renderEmailTextHtml(text: string): string {
-  return text
-    .split(/\n{2,}/)
-    .map((para) => `<p style="margin:0 0 12px 0;">${escapeHtml(para).replace(/\n/g, "<br>")}</p>`)
-    .join("");
-}
-
-/**
- * Render the final plain-text email body (signature already appended) as an HTML alternative.
- * Returns undefined when there is no table so the mailer keeps sending text-only mail exactly
- * as before — most clients then show the same text, and existing behaviour is untouched.
- */
-export function renderEmailHtml(text: string): string | undefined {
-  const segments = splitEmailBody(text);
-  if (!segments.some((segment) => segment.type === "table")) return undefined;
-  const inner = segments
-    .map((segment) =>
-      segment.type === "table" ? renderEmailTableHtml(segment.table) : renderEmailTextHtml(segment.text),
-    )
-    .join("");
-  return (
-    `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;` +
-    `font-size:14px;line-height:1.6;color:#111827;">${inner}</div>`
   );
 }
