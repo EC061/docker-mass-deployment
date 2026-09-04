@@ -83,6 +83,24 @@ describe("sendMail gating", () => {
     expect(sent[0]).not.toHaveProperty("html");
   });
 
+  it("adds an HTML alternative rendering pipe tables, keeping the text part", async () => {
+    configureSmtp();
+    const body = [
+      "Heads up:",
+      "",
+      "| Server | Expected Recovery |",
+      "| ------ | ----------------- |",
+      "| Asimov1 | Monday, September 14 by 8:00 AM ET |",
+    ].join("\n");
+
+    await mailer.sendMail("a@uga.edu", "Subject", body);
+
+    expect(sent[0].text).toContain("| Server | Expected Recovery |");
+    expect(sent[0].html).toContain("<table");
+    expect(sent[0].html).toContain("Asimov1");
+    expect(sent[0].html).toContain("Monday, September 14 by 8:00 AM ET");
+  });
+
   it("adds binary attachments to the SMTP message", async () => {
     configureSmtp();
     const attachment = {
