@@ -47,6 +47,12 @@ export interface SendResult {
   error?: string;
 }
 
+export interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 function transport(config: SmtpConfig) {
   return nodemailer.createTransport({
     host: config.host,
@@ -77,7 +83,12 @@ export function emailContent(body: string): { text: string } {
   };
 }
 
-export async function sendMail(to: string, subject: string, text: string): Promise<SendResult> {
+export async function sendMail(
+  to: string,
+  subject: string,
+  text: string,
+  attachments: readonly MailAttachment[] = [],
+): Promise<SendResult> {
   const configs = getSmtpConfigs().filter((config) => config.host && config.from);
   if (configs.length === 0) return { sent: false, skipped: true };
   if (!to) return { sent: false, skipped: true };
@@ -85,7 +96,15 @@ export async function sendMail(to: string, subject: string, text: string): Promi
   const errors: string[] = [];
   for (const config of configs) {
     try {
-      await transport(config).sendMail({ from: fromHeader(config), to, subject, ...content });
+      await transport(config).sendMail({
+        from: fromHeader(config),
+        to,
+        subject,
+        ...content,
+        ...(attachments.length > 0 && {
+          attachments: attachments.map((attachment) => ({ ...attachment })),
+        }),
+      });
       return { sent: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

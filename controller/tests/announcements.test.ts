@@ -96,6 +96,33 @@ describe("sendAnnouncement", () => {
     expect(aliceCall![2]).toBe("Your address is alice@uga.edu.");
   });
 
+  it("includes attachments for every recipient and records only their names", async () => {
+    settings.setSetting("smtpHost", "smtp.test");
+    settings.setSetting("smtpFrom", "no-reply@uga.edu");
+    sendMail.mockClear();
+    const attachment = {
+      filename: "instructions.pdf",
+      content: Buffer.from("contents"),
+      contentType: "application/pdf",
+    };
+
+    await ann.sendAnnouncement({
+      subject: "Read this",
+      body: "See the attachment.",
+      audiences: ["students"],
+      attachments: [attachment],
+    });
+
+    expect(sendMail).toHaveBeenCalledTimes(2);
+    const calls = sendMail.mock.calls as unknown as [string, string, string, typeof attachment[]][];
+    for (const call of calls) expect(call[3]).toEqual([attachment]);
+    const row = ann.recentAnnouncements(1)[0];
+    expect(row.attachments).toEqual(["instructions.pdf"]);
+    expect(
+      dbmod.db().prepare("SELECT attachments FROM announcements WHERE id = ?").get(row.id),
+    ).toEqual({ attachments: '["instructions.pdf"]' });
+  });
+
   it("substitutes {sender}/{sender_email} when a sender is given, leaves them visible otherwise", async () => {
     settings.setSetting("smtpHost", "smtp.test");
     settings.setSetting("smtpFrom", "no-reply@uga.edu");

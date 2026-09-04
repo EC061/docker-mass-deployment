@@ -83,6 +83,19 @@ describe("sendMail gating", () => {
     expect(sent[0]).not.toHaveProperty("html");
   });
 
+  it("adds binary attachments to the SMTP message", async () => {
+    configureSmtp();
+    const attachment = {
+      filename: "guide.pdf",
+      content: Buffer.from("pdf bytes"),
+      contentType: "application/pdf",
+    };
+
+    await mailer.sendMail("a@uga.edu", "Subject", "Body", [attachment]);
+
+    expect(sent[0].attachments).toEqual([attachment]);
+  });
+
   it("sends under the configured sender name, keeping the provider's own address", async () => {
     configureSmtp();
     settings.setSetting("announcementSenderName", "Research Computing");

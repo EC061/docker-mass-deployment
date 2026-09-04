@@ -4,6 +4,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { requireAdmin } from "@/lib/auth";
 import { clearAnnouncements, deleteAnnouncement, sendAnnouncement } from "@/lib/announcements";
+import { announcementAttachmentsFromForm } from "@/lib/announcement-attachments";
 import { resolveAnnouncementSender } from "@/lib/settings";
 
 export async function sendAnnouncementAction(formData: FormData) {
@@ -21,6 +22,7 @@ export async function sendAnnouncementAction(formData: FormData) {
 
   let msg: string;
   try {
+    const attachments = await announcementAttachmentsFromForm(formData);
     const res = await sendAnnouncement({
       subject,
       body,
@@ -29,6 +31,7 @@ export async function sendAnnouncementAction(formData: FormData) {
       placeholders,
       sender: resolveAnnouncementSender(admin),
       actor: admin.email,
+      attachments,
     });
     msg = res.skipped
       ? `SMTP not configured — nothing sent (${res.recipients} recipient(s) would have been targeted)`
