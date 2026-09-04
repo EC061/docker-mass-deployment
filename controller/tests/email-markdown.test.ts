@@ -69,6 +69,12 @@ describe("parseMarkdownBlocks", () => {
     if (blocks[0]?.type !== "list") throw new Error("expected a list");
     expect(blocks[0].items).toEqual(["☐ save", "☒ done"]);
   });
+
+  it("parses lists from Windows (CRLF) line endings, e.g. pasted from Word/Outlook", () => {
+    const blocks = parseMarkdownBlocks("* Asimov1 wipe: Sep 12\r\n* Asimov2 wipe: Sep 18\r\n");
+    if (blocks[0]?.type !== "list") throw new Error("expected a list");
+    expect(blocks[0].items).toEqual(["Asimov1 wipe: Sep 12", "Asimov2 wipe: Sep 18"]);
+  });
 });
 
 describe("renderInlineHtml", () => {
@@ -108,5 +114,12 @@ describe("renderMarkdownEmailHtml", () => {
     expect(html).toContain("<strong>Save</strong>");
     expect(html).toContain("<ul");
     expect(html).toContain("<code");
+  });
+
+  it("renders lists from a CRLF body without leaking carriage returns", () => {
+    const html = renderMarkdownEmailHtml("* Asimov1 wipe: Sep 12\r\n* Asimov2 wipe: Sep 18\r\n");
+    expect(html).toContain("<ul");
+    expect(html).toContain("Asimov1 wipe: Sep 12");
+    expect(html).not.toContain("\r");
   });
 });
