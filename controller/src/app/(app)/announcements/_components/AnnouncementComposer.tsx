@@ -4,6 +4,7 @@ import { useMemo, useRef, useState } from "react";
 import type { AnnouncementTemplate, Person, RecipientGroup } from "@/lib/announcements";
 import { renderAnnouncementPreview, type AnnouncementPreviewSender } from "@/lib/announcement-preview";
 import { formatEmailFrom, type EmailFrom } from "@/lib/email";
+import { splitEmailBody, type EmailTable } from "@/lib/email-tables";
 import { extractBracketTokens } from "@/lib/template";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -28,6 +29,64 @@ interface Props {
   action: (formData: FormData) => void | Promise<void>;
 }
 
+/**
+ * One pipe table in the live preview, styled with the app's table theme. Cell contents are
+ * plain strings rendered as text (never HTML), matching the mailer's escaped output.
+ */
+function PreviewTable({ table }: { table: EmailTable }) {
+  const alignClass = (align: string) =>
+    align === "center" ? "text-center" : align === "right" ? "text-right" : "text-left";
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full border-collapse text-sm">
+        <thead>
+          <tr>
+            {table.headers.map((cell, col) => (
+              <th
+                key={col}
+                className={`border border-border bg-muted px-3 py-2 font-semibold ${alignClass(table.aligns[col] ?? "left")}`}
+              >
+                {cell}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {table.rows.map((row, r) => (
+            <tr key={r}>
+              {row.map((cell, col) => (
+                <td key={col} className={`border border-border px-3 py-2 align-top ${alignClass(table.aligns[col] ?? "left")}`}>
+                  {cell}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/**
+ * The preview body: prose chunks keep the old whitespace-preserving style and each pipe table
+ * renders as a real table — the same split the mailer uses for the sent HTML alternative.
+ */
+function PreviewBody({ body }: { body: string }) {
+  if (!body) return "Write a message to preview it here.";
+  return (
+    <span className="grid gap-3">
+      {splitEmailBody(body).map((segment, i) =>
+        segment.type === "table" ? (
+          <PreviewTable key={i} table={segment.table} />
+        ) : (
+          <span key={i} className="whitespace-pre-wrap break-words">
+            {segment.text}
+          </span>
+        ),
+      )}
+    </span>
+  );
+}
 /**
  * Compose form for a service announcement. A prebuilt-template picker fills the subject/body fields,
  * and the variable chips insert {tokens} at the cursor — both are starting points the admin edits
@@ -274,9 +333,9 @@ export function AnnouncementComposer({ templates, vars, people, groups, sender, 
               : "None"}
           </dd>
         </dl>
-        <pre className="min-h-40 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words px-3 py-3 font-sans text-sm">
-          {preview.body || "Write a message to preview it here."}
-        </pre>
+        <div className="min-h-40 max-h-[32rem] overflow-auto px-3 py-3 font-sans text-sm">
+          <PreviewBody body={preview.body} />
+        </div>
       </section>
     </form>
   );

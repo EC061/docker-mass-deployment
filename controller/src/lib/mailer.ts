@@ -6,6 +6,7 @@
 
 import nodemailer from "nodemailer";
 import { resolveEmailFrom } from "./email";
+import { renderEmailHtml } from "./email-tables";
 import { emailLabName } from "./email-lab-name";
 import { nameVars } from "./names";
 import { renderTemplate, stripLegacyEmailSignature } from "./template";
@@ -74,13 +75,16 @@ function fromHeader(config: SmtpConfig): string | { name: string; address: strin
   return from.name ? from : from.address;
 }
 
-/** Build the text-only message with the universal signature appended. */
-export function emailContent(body: string): { text: string } {
+/**
+ * Build the message with the universal signature appended. Bodies containing a markdown pipe
+ * table also get an `html` alternative rendering the table; everything else stays text-only.
+ */
+export function emailContent(body: string): { text: string; html?: string } {
   const cleanBody = stripLegacyEmailSignature(body).trimEnd();
   const signatureText = getSetting("emailSignatureText").trim();
-  return {
-    text: [cleanBody, signatureText].filter(Boolean).join("\n\n"),
-  };
+  const text = [cleanBody, signatureText].filter(Boolean).join("\n\n");
+  const html = renderEmailHtml(text);
+  return html ? { text, html } : { text };
 }
 
 export async function sendMail(
