@@ -68,16 +68,22 @@ export function sampleKey(placementId: number, student: number | "L", pool: stri
 
 /** Latest sample per (placement, student|placement-level, pool), indexed for O(1) lookup. */
 export function latestSamples(): Map<string, Cell> {
+  // Single-pass GROUP BY + join, not a correlated MAX(ts) subquery: the correlated form is O(n^2)
+  // when many rows share one placement (every lab-level heartbeat re-reports the same placement),
+  // which blocked the Node event loop past the proxy timeout and 504'd the whole page. `IS`
+  // compares NULL-safe, so lab-level rows (student_id NULL) join as one group.
   const rows = db()
     .prepare(
       `SELECT s.placement_id AS placement_id, s.student_id AS student_id, s.pool AS pool,
               s.used_bytes AS used, s.quota_bytes AS quota, s.ts AS ts
        FROM storage_samples s
-       WHERE s.placement_id IS NOT NULL
-         AND s.ts = (SELECT MAX(ts) FROM storage_samples s2
-                     WHERE s2.placement_id = s.placement_id AND s2.pool = s.pool
-                       AND ((s2.student_id IS NULL AND s.student_id IS NULL)
-                            OR s2.student_id = s.student_id))`,
+       JOIN (SELECT placement_id, pool, student_id, MAX(ts) AS max_ts
+             FROM storage_samples
+             WHERE placement_id IS NOT NULL
+             GROUP BY placement_id, pool, student_id) m
+         ON m.placement_id = s.placement_id AND m.pool = s.pool
+        AND m.student_id IS s.student_id AND m.max_ts = s.ts
+       WHERE s.placement_id IS NOT NULL`,
     )
     .all() as { placement_id: number; student_id: number | null; pool: string; used: number; quota: number | null; ts: number }[];
   const map = new Map<string, Cell>();

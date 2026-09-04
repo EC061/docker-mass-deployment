@@ -740,6 +740,18 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
     ALTER TABLE announcements ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
     `,
   },
+  {
+    // The Stats page's latest-sample lookup GROUPs BY (placement, pool, student); without a
+    // composite index the correlated MAX(ts) form scanned every same-placement row per row (~19s
+    // at 22k rows on one placement) and blocked the event loop past the proxy timeout (504).
+    // The (action, created_at) index serves the usage.scan history scan on the same page.
+    id: "0032_storage_sample_indexes",
+    sql: `
+    CREATE INDEX idx_storage_samples_latest
+      ON storage_samples(placement_id, pool, student_id, ts, id);
+    CREATE INDEX idx_task_log_action_created ON task_log(action, created_at);
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

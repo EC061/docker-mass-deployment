@@ -68,8 +68,10 @@ function shouldSample(
 ): boolean {
   const row = db()
     .prepare(
+      // `IS ?` is NULL-safe equality, so the (placement, pool, student) composite index serves
+      // both lab-level (NULL) and per-student lookups; the ifnull() form defeated the index.
       `SELECT ts, used_bytes AS used FROM storage_samples
-       WHERE placement_id = ? AND ifnull(student_id, -1) = ifnull(?, -1) AND pool = ?
+       WHERE placement_id = ? AND student_id IS ? AND pool = ?
        ORDER BY id DESC LIMIT 1`,
     )
     .get(placementId, studentId, pool) as { ts: number; used: number } | undefined;
@@ -317,16 +319,20 @@ function maybeQuotaAlert(
     .run(placementId, labId, pool, pct, now);
   if (!lab.pi_email) return;
 
-  // Latest per-student usage on this placement+pool for the breakdown.
+  // Latest per-student usage on this placement+pool for the breakdown, via the same single-pass
+  // GROUP BY the Stats page uses — a correlated MAX(ts) here rescans the placement per student.
   const breakdown = (db()
     .prepare(
       `SELECT students.username AS username, s.used_bytes AS used
        FROM storage_samples s JOIN students ON students.id = s.student_id
+       JOIN (SELECT student_id, MAX(ts) AS max_ts FROM storage_samples
+             WHERE placement_id = ? AND pool = ? AND student_id IS NOT NULL
+             GROUP BY student_id) m
+         ON m.student_id = s.student_id AND m.max_ts = s.ts
        WHERE s.placement_id = ? AND s.pool = ? AND s.student_id IS NOT NULL
-         AND s.ts = (SELECT MAX(ts) FROM storage_samples s2 WHERE s2.student_id = s.student_id AND s2.placement_id = s.placement_id AND s2.pool = s.pool)
        GROUP BY students.id ORDER BY used DESC`,
     )
-    .all(placementId, pool) as { username: string; used: number }[]).map((b) => ({
+    .all(placementId, pool, placementId, pool) as { username: string; used: number }[]).map((b) => ({
     username: b.username,
     usedHuman: fmtBytes(b.used),
   }));
