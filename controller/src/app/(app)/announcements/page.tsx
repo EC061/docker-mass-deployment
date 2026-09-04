@@ -128,7 +128,14 @@ export default async function AnnouncementsPage({
                         .map((part) => (part === "students" ? "users" : part))
                         .join(", ")}
                     </TableCell>
-                    <TableCell>{a.subject}</TableCell>
+                    <TableCell>
+                      <div>{a.subject}</div>
+                      {a.attachments.length > 0 && (
+                        <div className="text-xs text-muted-foreground">
+                          Attached: {a.attachments.join(", ")}
+                        </div>
+                      )}
+                    </TableCell>
                     <TableCell>
                       {a.skipped ? (
                         <span className="text-warn">skipped (no SMTP)</span>

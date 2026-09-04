@@ -10,6 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { RecipientPicker } from "./RecipientPicker";
+import {
+  MAX_ANNOUNCEMENT_ATTACHMENTS,
+  MAX_ANNOUNCEMENT_ATTACHMENT_BYTES,
+  MAX_ANNOUNCEMENT_ATTACHMENTS_BYTES,
+} from "@/lib/announcement-attachment-limits";
 
 interface Props {
   templates: AnnouncementTemplate[];
@@ -35,10 +40,12 @@ export function AnnouncementComposer({ templates, vars, people, groups, sender, 
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<{ name: string; size: number }[]>([]);
   // Placeholder values are keyed by token and kept even when a token temporarily disappears while
   // editing, so retyping [DATE] doesn't lose what was already entered.
   const [phValues, setPhValues] = useState<Record<string, string>>({});
   const bodyRef = useRef<HTMLTextAreaElement>(null);
+  const attachmentRef = useRef<HTMLInputElement>(null);
 
   const tokens = useMemo(() => extractBracketTokens(subject + "\n" + body), [subject, body]);
   const peopleByEmail = useMemo(() => new Map(people.map((person) => [person.email, person])), [people]);
@@ -166,6 +173,53 @@ export function AnnouncementComposer({ templates, vars, people, groups, sender, 
           </fieldset>
         )}
 
+        <div>
+          <Label htmlFor="announcement-attachments">Attachments</Label>
+          <Input
+            ref={attachmentRef}
+            id="announcement-attachments"
+            name="attachments"
+            type="file"
+            multiple
+            onChange={(event) =>
+              setAttachments(
+                Array.from(event.target.files ?? [], (file) => ({ name: file.name, size: file.size })),
+              )
+            }
+          />
+          <div className="mt-1.5 flex flex-wrap items-start justify-between gap-2">
+            <p className="text-xs text-muted-foreground">
+              Any file type. Up to {MAX_ANNOUNCEMENT_ATTACHMENTS} files,{
+              " "}{MAX_ANNOUNCEMENT_ATTACHMENT_BYTES / 1024 / 1024} MB each and{
+              " "}{MAX_ANNOUNCEMENT_ATTACHMENTS_BYTES / 1024 / 1024} MB total.
+            </p>
+            {attachments.length > 0 && (
+              <button
+                type="button"
+                className="text-xs text-muted-foreground underline hover:text-foreground"
+                onClick={() => {
+                  if (attachmentRef.current) attachmentRef.current.value = "";
+                  setAttachments([]);
+                }}
+              >
+                Clear attachments
+              </button>
+            )}
+          </div>
+          {attachments.length > 0 && (
+            <ul className="mt-2 space-y-1 text-xs" aria-label="Selected attachments">
+              {attachments.map((attachment, index) => (
+                <li key={`${attachment.name}-${index}`} className="flex justify-between gap-3">
+                  <span className="min-w-0 truncate">{attachment.name}</span>
+                  <span className="shrink-0 text-muted-foreground">
+                    {(attachment.size / 1024).toLocaleString(undefined, { maximumFractionDigits: 1 })} KB
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
         <fieldset className="rounded-md border border-border p-3">
           <legend className="px-1 text-xs text-muted-foreground">Recipients</legend>
           <div className="space-y-1.5">
@@ -213,6 +267,12 @@ export function AnnouncementComposer({ templates, vars, people, groups, sender, 
           </dd>
           <dt className="text-muted-foreground">Subject</dt>
           <dd className="min-w-0 break-words font-medium">{preview.subject || "(No subject yet)"}</dd>
+          <dt className="text-muted-foreground">Attachments</dt>
+          <dd className="min-w-0 break-words">
+            {attachments.length > 0
+              ? attachments.map((attachment) => attachment.name).join(", ")
+              : "None"}
+          </dd>
         </dl>
         <pre className="min-h-40 max-h-[32rem] overflow-auto whitespace-pre-wrap break-words px-3 py-3 font-sans text-sm">
           {preview.body || "Write a message to preview it here."}

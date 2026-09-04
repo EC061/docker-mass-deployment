@@ -18,9 +18,14 @@ const nextConfig = {
   turbopack: { root: import.meta.dirname },
   // better-sqlite3 and honker-node are native modules — keep them external to the server bundle.
   serverExternalPackages: ["better-sqlite3", "@russellthehippo/honker-node"],
-  ...(allowedOrigins.length > 0 && {
-    experimental: { serverActions: { allowedOrigins } },
-  }),
+  experimental: {
+    serverActions: {
+      // Announcement files are capped at 15 MB in application code. Leave room for multipart form
+      // fields while retaining a hard request ceiling before the Server Action runs.
+      bodySizeLimit: "20mb",
+      ...(allowedOrigins.length > 0 && { allowedOrigins }),
+    },
+  },
 };
 
 export default nextConfig;

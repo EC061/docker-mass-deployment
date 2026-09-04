@@ -33,6 +33,7 @@ describe("migrations", () => {
     );
     expect(ids).toContain("0001_init");
     expect(ids).toContain("0002_scrub");
+    expect(ids).toContain("0031_announcement_attachments");
     expect(new Set(ids).size).toBe(ids.length); // no duplicates
   });
 
@@ -51,6 +52,13 @@ describe("migrations", () => {
     const cols = (dbmod.db().prepare("PRAGMA table_info(nodes)").all() as any[]).map((c) => c.name);
     expect(cols).toContain("last_scrub");
     expect(cols).toContain("scrub_status");
+  });
+
+  it("keeps attachment metadata in announcement history", () => {
+    const cols = (dbmod.db().prepare("PRAGMA table_info(announcements)").all() as any[]).map(
+      (column) => column.name,
+    );
+    expect(cols).toContain("attachments");
   });
 
   it("enforces foreign keys (orphan placement insert rejected)", () => {

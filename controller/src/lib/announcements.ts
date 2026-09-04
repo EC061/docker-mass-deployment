@@ -12,7 +12,8 @@
 
 import { audit } from "./labs";
 import { db } from "./db";
-import { sendMail } from "./mailer";
+import { sendMail, type MailAttachment } from "./mailer";
+import { validateAnnouncementAttachments } from "./announcement-attachments";
 import { isSmtpConfigured } from "./settings";
 import { DEGREE_OPTIONS, isFacultyDegree, normalizeDegree } from "./names";
 import { extractBracketTokens, fillBracketTokens, renderTemplate } from "./template";
@@ -310,12 +311,17 @@ export interface AnnouncementRow {
   recipients: number;
   sent: number;
   skipped: number;
+  attachments: string[];
 }
 
 export function recentAnnouncements(limit = 20): AnnouncementRow[] {
-  return db()
+  const rows = db()
     .prepare("SELECT * FROM announcements ORDER BY ts DESC LIMIT ?")
-    .all(limit) as AnnouncementRow[];
+    .all(limit) as (Omit<AnnouncementRow, "attachments"> & { attachments: string })[];
+  return rows.map((row) => ({
+    ...row,
+    attachments: JSON.parse(row.attachments) as string[],
+  }));
 }
 
 export interface AnnouncementResult {
@@ -342,12 +348,16 @@ export async function sendAnnouncement(input: {
   placeholders?: Record<string, string>;
   /** The sending admin, for the {sender}/{sender_email} template variables. */
   sender?: { name: string; email: string };
+  /** Files included in every recipient's email. Contents are not stored in announcement history. */
+  attachments?: readonly MailAttachment[];
   actor?: string;
 }): Promise<AnnouncementResult> {
   let subject = input.subject.trim();
   let body = input.body.trim();
   if (!subject) throw new Error("subject is required");
   if (!body) throw new Error("message is required");
+  const attachments = input.attachments ?? [];
+  validateAnnouncementAttachments(attachments);
 
   // Fill [BRACKET] placeholders up front so the mailed and recorded text are the final text.
   // Validate against the original token list, never a re-scan of the filled output.
@@ -388,20 +398,29 @@ export async function sendAnnouncement(input: {
   const senderVars = input.sender ? { sender: input.sender.name, sender_email: input.sender.email } : {};
   let sent = 0;
   if (!skipped) {
-    const results = await Promise.all(
-      recipients.map((r) => {
-        const vars = {
-          ...senderVars,
-          name: r.name,
-          first_name: r.firstName ?? "",
-          last_name: r.lastName ?? "",
-          degree: r.degree ?? "",
-          email: r.email,
-        };
-        return sendMail(r.email, renderTemplate(subject, vars), renderTemplate(body, vars));
-      }),
-    );
-    sent = results.filter((r) => r.sent).length;
+    const sendTo = (r: Recipient) => {
+      const vars = {
+        ...senderVars,
+        name: r.name,
+        first_name: r.firstName ?? "",
+        last_name: r.lastName ?? "",
+        degree: r.degree ?? "",
+        email: r.email,
+      };
+      return sendMail(
+        r.email,
+        renderTemplate(subject, vars),
+        renderTemplate(body, vars),
+        attachments,
+      );
+    };
+    // Large attachments make an unbounded recipient fan-out expensive. Keep the existing parallel
+    // path for text-only mail and use small batches when every message carries the same files.
+    const batchSize = attachments.length > 0 ? 4 : Math.max(recipients.length, 1);
+    for (let start = 0; start < recipients.length; start += batchSize) {
+      const results = await Promise.all(recipients.slice(start, start + batchSize).map(sendTo));
+      sent += results.filter((result) => result.sent).length;
+    }
   }
 
   // Audience keys stay verbatim for callers that use them; a purely individual send (what the
@@ -412,8 +431,9 @@ export async function sendAnnouncement(input: {
       : [...input.audiences, ...(individuals.length > 0 ? [`${individuals.length} picked`] : [])].join(",");
   db()
     .prepare(
-      `INSERT INTO announcements (ts, actor, audiences, subject, body, recipients, sent, skipped)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO announcements
+         (ts, actor, audiences, subject, body, recipients, sent, skipped, attachments)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(
       Date.now(),
@@ -424,8 +444,17 @@ export async function sendAnnouncement(input: {
       recipients.length,
       sent,
       skipped ? 1 : 0,
+      JSON.stringify(attachments.map((attachment) => attachment.filename)),
     );
-  audit(input.actor, "announcement.send", audienceLabel, `${sent}/${recipients.length} sent`);
+  const attachmentDetail = attachments.length
+    ? `; attachments: ${attachments.map((attachment) => attachment.filename).join(", ")}`
+    : "";
+  audit(
+    input.actor,
+    "announcement.send",
+    audienceLabel,
+    `${sent}/${recipients.length} sent${attachmentDetail}`,
+  );
 
   return { recipients: recipients.length, sent, skipped };
 }

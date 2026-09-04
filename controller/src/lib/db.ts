@@ -732,6 +732,14 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
     ALTER TABLE labs ADD COLUMN alias TEXT;
     `,
   },
+  {
+    // Keep only attachment names in the announcement audit trail. Uploaded bytes are intentionally
+    // ephemeral and are released after the SMTP send completes.
+    id: "0031_announcement_attachments",
+    sql: `
+    ALTER TABLE announcements ADD COLUMN attachments TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
 ];
 
 function migrate(conn: Database.Database): void {
