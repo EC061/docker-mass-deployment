@@ -33,16 +33,40 @@ def test_list_gpu_processes_merges_vram_and_util(monkeypatch):
         return CommandResult(False, argv, 1, "", "n/a")
 
     monkeypatch.setattr(monitor, "run", fake_run)
-    # Avoid touching /proc and docker for resolution.
-    monkeypatch.setattr(monitor, "_container_info", lambda pid: (None, False, None))
-    monkeypatch.setattr(monitor, "_student_user", lambda c, p: None)
+    # Only agent-managed lab containers are reported; use a managed container here.
+    monkeypatch.setattr(monitor, "_container_info", lambda pid: ("lab-bio", True, "bio"))
+    monkeypatch.setattr(monitor, "_student_user", lambda c, p: "alice")
 
     procs = {p["pid"]: p for p in monitor.list_gpu_processes()}
     assert procs[1234]["vram_bytes"] == 2048 * 1024 * 1024
     assert procs[1234]["util"] == 0.0  # idle: holding VRAM, 0% SM
     assert procs[5678]["util"] == 87.0
-    # Unresolved container -> not managed, no lab (so the killer leaves it alone).
-    assert procs[1234]["managed"] is False and procs[1234]["lab"] is None
+    assert procs[1234]["managed"] is True and procs[1234]["lab"] == "bio"
+
+
+def test_list_gpu_processes_skips_unmanaged(monkeypatch):
+    """Host processes and unmanaged containers are not collected at all: no rows for the
+    controller, no docker exec into foreign containers, nothing the killer could act on."""
+    seen_exec: list = []
+
+    def fake_run(args, **kwargs):
+        joined = " ".join(str(a) for a in args)
+        if "--query-compute-apps" in joined:
+            return CommandResult(True, [], 0, "1234, 2048\n", "")
+        if "pmon" in joined:
+            return CommandResult(True, [], 0, "# h\n 0 1234 C 0 1 - - python\n", "")
+        seen_exec.append(joined)
+        return CommandResult(False, [], 1, "", "")
+
+    monkeypatch.setattr(monitor, "run", fake_run)
+    monkeypatch.setattr(monitor, "_container_info", lambda pid: (None, False, None))
+
+    def _fail_user(container, pid):
+        raise AssertionError("must not resolve users for unmanaged processes")
+
+    monkeypatch.setattr(monitor, "_student_user", _fail_user)
+
+    assert monitor.list_gpu_processes() == []
 
 
 def test_parse_inspect_distinguishes_managed_from_unmanaged():

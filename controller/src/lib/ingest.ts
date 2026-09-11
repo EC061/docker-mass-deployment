@@ -164,6 +164,9 @@ export function ingestTelemetry(node: string, payload: any): void {
 
   // GPU snapshot: replace this node's rows with the current process list. The lab a process belongs
   // to is the agent-reported lab-agent.lab label (authoritative); (lab, node) -> placement_id.
+  // Only agent-managed lab processes are stored: host processes and unmanaged containers
+  // (managed === false, e.g. from an older agent) are dropped so foreign work never appears in
+  // the live table and can never be attributed to a lab.
   const gpu = (payload.gpu_processes ?? []) as any[];
   const tx = db().transaction(() => {
     db().prepare("DELETE FROM gpu_snapshot WHERE node = ?").run(node);
@@ -173,6 +176,7 @@ export function ingestTelemetry(node: string, payload: any): void {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const p of gpu) {
+      if (p?.managed === false) continue;
       const labName = typeof p.lab === "string" ? p.lab : null;
       const placementId = labName ? (placementByLabNode(labName, node)?.placement_id ?? null) : null;
       ins.run(node, p.pid, p.user ?? null, labName, placementId, p.vram_bytes ?? null,

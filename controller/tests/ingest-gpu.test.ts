@@ -35,7 +35,7 @@ beforeAll(async () => {
 });
 
 describe("GPU telemetry ingest (Phase 9)", () => {
-  it("attributes a managed process to its placement and leaves host processes unattributed", () => {
+  it("attributes a managed process to its placement and drops host/unmanaged processes", () => {
     ingest.ingestTelemetry("gpu-1", {
       gpu_processes: [
         { pid: 100, lab: "bio", user: "alice", vram_bytes: 1024, util: 0, managed: true,
@@ -55,9 +55,9 @@ describe("GPU telemetry ingest (Phase 9)", () => {
     expect(managed.cmd).toBe("/usr/bin/python3 train.py");
     expect(managed.started_at).toBe(1_700_000_000_000);
 
+    // Host / unmanaged processes (e.g. from an older agent) are dropped, never shown.
     const host = d.prepare("SELECT * FROM gpu_snapshot WHERE node='gpu-1' AND pid=200").get() as any;
-    expect(host.lab).toBeNull();
-    expect(host.placement_id).toBeNull();
+    expect(host).toBeUndefined();
 
     // A lab name with no placement on this node resolves to no placement.
     const ghost = d.prepare("SELECT * FROM gpu_snapshot WHERE node='gpu-1' AND pid=300").get() as any;
