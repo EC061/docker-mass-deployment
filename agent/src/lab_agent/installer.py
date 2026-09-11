@@ -369,6 +369,7 @@ def _rerender_storage_unit(config_path: Path, exec_path: str) -> None:
 
     if not STORAGE_UNIT_PATH.exists():
         return
+    config_path = _unit_config_path(STORAGE_UNIT_PATH.read_text()) or config_path
     STORAGE_UNIT_PATH.write_text(render_storage_unit(str(config_path), exec_path))
 
 
