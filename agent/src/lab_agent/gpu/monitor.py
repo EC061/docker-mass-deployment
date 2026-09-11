@@ -4,9 +4,13 @@
   - `nvidia-smi --query-compute-apps=pid,used_gpu_memory` (VRAM held per PID), and
   - `nvidia-smi pmon -c 1` (per-PID SM utilization), the signal for "idle but holding VRAM".
 
-Each process is resolved to its Docker container (via the host PID's cgroup) and to the student's
-in-container username (via `getent passwd <uid>` inside that container), so the controller can map a
-process to the right lab/student and email them.
+Only processes inside an agent-managed lab container (``lab-agent.managed=true``) are returned.
+Host processes and unmanaged containers are skipped entirely — no ``docker exec`` into foreign
+containers, no rows for the controller, and therefore nothing the idle killer could ever act on.
+
+Each returned process is resolved to its Docker container (via the host PID's cgroup) and to the
+student's in-container username (via `getent passwd <uid>` inside that container), so the
+controller can map a process to the right lab/student and email them.
 """
 
 from __future__ import annotations
@@ -232,11 +236,15 @@ def kill_pid(pid: int, expected_start_time: int | None = None) -> bool:
 
 
 def list_gpu_processes() -> list[dict]:
+    """Only agent-managed lab processes. Host / unmanaged PIDs are skipped before any
+    per-container resolution, so we never ``docker exec`` into a foreign container."""
     vram = _query_compute_apps()
     util = _pmon_util()
     procs: list[dict] = []
     for pid, vram_bytes in vram.items():
         container, managed, lab = _container_info(pid)
+        if not managed:
+            continue
         procs.append(
             asdict(
                 GpuProcess(
