@@ -349,6 +349,35 @@ def _smb_posix_ok(cfg: AgentConfig) -> bool:
             pass
 
 
+def _units_with_missing_exec() -> list[tuple[str, str]]:
+    """Units we own whose ``ExecStart`` names a binary that is not on disk.
+
+    ``lab-agent upgrade`` moves the binary (the legacy per-user copy in /root is uninstalled), and a
+    unit left pointing at the old path fails ``203/EXEC``. For the boot-time storage oneshot that
+    is invisible until the next reboot — where it means the node comes up with no per-lab unions —
+    so the path is checked here rather than discovered by rebooting.
+    """
+    from .hostprep import STORAGE_UNIT_PATH
+    from .installer import SYSTEMD_UNIT_PATH
+
+    broken: list[tuple[str, str]] = []
+    for unit_path in (SYSTEMD_UNIT_PATH, STORAGE_UNIT_PATH):
+        try:
+            text = unit_path.read_text()
+        except OSError:
+            continue  # not installed on this node; nothing to promise about it
+        for line in text.splitlines():
+            if not line.startswith(("ExecStart=", "ExecStop=")):
+                continue
+            # "ExecStart=-/path arg" — strip the optional '-'/'@' prefixes systemd allows.
+            command = line.split("=", 1)[1].strip().lstrip("-@+!:").split()
+            binary = command[0] if command else ""
+            if binary.startswith("/") and not os.path.exists(binary):
+                broken.append((unit_path.name, binary))
+                break  # one report per unit is enough; both lines name the same binary
+    return broken
+
+
 def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
     issues: list[HealthIssue] = []
     zfs_ok = run(["zfs", "version"], timeout=15).ok
@@ -482,6 +511,11 @@ def detect_capabilities(cfg: AgentConfig, *, deep: bool = True) -> Capabilities:
                    "Cold smb storage is unavailable or lacks POSIX numeric ownership")
 
     docker_on_zfs, quota_ok, quota_violations = _docker_and_quota_health(cfg, issues, zfs_ok, deep)
+
+    for unit_name, binary in _units_with_missing_exec():
+        _issue(issues, "unit_exec_missing", "critical",
+               f"{unit_name} runs '{binary}', which does not exist; re-run `lab-agent upgrade` "
+               "(it rewrites both units' ExecStart) or `lab-agent host-prepare`", False)
 
     severity = {"warning": 1, "critical": 2}
     status = "healthy" if not issues else max(issues, key=lambda i: severity[i.severity]).severity
