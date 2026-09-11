@@ -360,3 +360,41 @@ def test_missing_default_security_integration_is_critical(monkeypatch):
     caps = system.detect_capabilities(cfg(), deep=False)
     issue = next(i for i in caps.issues if i.code == "docker_default_security")
     assert issue.severity == "critical"
+
+
+def test_doctor_flags_a_unit_whose_binary_is_gone(monkeypatch, tmp_path):
+    """The failure `lab-agent upgrade` used to leave behind: a unit still naming the uninstalled
+    /root copy. Invisible until the unit next runs — at boot, with no per-lab unions."""
+    from lab_agent import hostprep, installer
+
+    unit = tmp_path / "lab-storage-mounts.service"
+    unit.write_text(hostprep.render_storage_unit("/etc/lab-agent/config.toml",
+                                                 "/root/.local/bin/lab-agent"))
+    monkeypatch.setattr(hostprep, "STORAGE_UNIT_PATH", unit)
+    monkeypatch.setattr(installer, "SYSTEMD_UNIT_PATH", tmp_path / "absent.service")
+    monkeypatch.setattr(system, "run", healthy_runner())
+    monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
+
+    caps = system.detect_capabilities(cfg(), deep=False)
+
+    assert caps.health.status == "critical"
+    issue = next(i for i in caps.issues if i.code == "unit_exec_missing")
+    assert "lab-storage-mounts.service" in issue.message
+    assert "/root/.local/bin/lab-agent" in issue.message
+
+
+def test_doctor_is_quiet_when_every_unit_binary_exists(monkeypatch, tmp_path):
+    from lab_agent import hostprep, installer
+
+    binary = tmp_path / "lab-agent"
+    binary.write_text("#!/bin/sh\n")
+    unit = tmp_path / "lab-storage-mounts.service"
+    unit.write_text(hostprep.render_storage_unit("/etc/lab-agent/config.toml", str(binary)))
+    monkeypatch.setattr(hostprep, "STORAGE_UNIT_PATH", unit)
+    monkeypatch.setattr(installer, "SYSTEMD_UNIT_PATH", tmp_path / "absent.service")
+    monkeypatch.setattr(system, "run", healthy_runner())
+    monkeypatch.setattr(system, "_loaded_driver_version", lambda: "570.1")
+
+    caps = system.detect_capabilities(cfg(), deep=False)
+
+    assert not any(i.code == "unit_exec_missing" for i in caps.issues)
