@@ -353,6 +353,26 @@ def stop_service() -> None:
     os.system(f"systemctl stop {SERVICE}")
 
 
+def _refresh_storage_unit(exec_path: str) -> None:
+    """Repoint ``lab-storage-mounts.service`` at ``exec_path`` (host-prepare writes it naming the
+    same binary this unit does).
+
+    Skipping it is how a node ends up unable to mount storage at boot: ``upgrade`` uninstalls a
+    legacy /root/.local/bin copy, the boot-time oneshot keeps pointing at the deleted path, and
+    nothing runs it again until the next reboot — where it fails 203/EXEC and the node comes up
+    with no per-lab unions at all.
+
+    Rewritten, never restarted. Its ``ExecStop`` unmounts every union, which would pull the bind
+    mounts out from under running lab containers; the new path applies from the next boot.
+    """
+    from .hostprep import STORAGE_UNIT_PATH, render_storage_unit
+
+    if not STORAGE_UNIT_PATH.exists():
+        return
+    config_path = _unit_config_path(STORAGE_UNIT_PATH.read_text()) or DEFAULT_CONFIG_PATH
+    STORAGE_UNIT_PATH.write_text(render_storage_unit(str(config_path), exec_path))
+
+
 def upgrade(ref: str | None = None) -> dict[str, str]:
     """Reinstall lab-agent from the repo (newest, or a pinned ``ref``) and restart the service."""
     _require_root()
@@ -369,11 +389,13 @@ def upgrade(ref: str | None = None) -> dict[str, str]:
     if rc != 0:
         raise RuntimeError(f"upgrade failed (rc={rc}): {out.strip()}")
     exec_path = _uv_tool_exec_path(uv)
-    # The unit may still name the old /root path, so rewrite ExecStart before restarting.
+    # Either unit may still name the old /root path the uninstall above just deleted, so rewrite
+    # EVERY ExecStart we own before restarting.
     if SYSTEMD_UNIT_PATH.exists():
         unit = SYSTEMD_UNIT_PATH.read_text()
         config_path = _unit_config_path(unit) or DEFAULT_CONFIG_PATH
         SYSTEMD_UNIT_PATH.write_text(render_unit(config_path, exec_path))
+    _refresh_storage_unit(exec_path)
     os.system("systemctl daemon-reload")
     os.system(f"systemctl restart {SERVICE}")
     _, ver = _run([exec_path, "--version"])

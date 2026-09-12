@@ -327,3 +327,84 @@ def test_current_branches_parses_the_control_file_value(monkeypatch):
 def test_current_branches_is_empty_when_the_control_file_is_unreadable(monkeypatch):
     monkeypatch.setattr(mfs, "run", lambda args, **kw: CommandResult(False, args, 1, "", "nope"))
     assert mfs.current_branches("/cold-storage/labA") == []
+
+
+# --------------------------------------------------------------------------- daemon ownership
+
+
+def _mount_tier(tmp_path):
+    return make_cfg(cold_pools=["cold1", "cold2"], cold_mount_root=str(tmp_path)).storage.cold
+
+
+def _capturing_run(calls, results):
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        ok = results.pop(0) if results else True
+        return CommandResult(ok, argv, 0 if ok else 1, "", "" if ok else "boom")
+    return fake_run
+
+
+def test_mount_runs_the_daemon_in_its_own_scope(monkeypatch, tmp_path):
+    """mergerfs daemonizes into its spawner's cgroup. Started from an agent task that is
+    lab-agent.service, whose restart (every `lab-agent upgrade` does one) would then take every
+    lab's union down with it and leave running containers binding a dead mount."""
+    t = _mount_tier(tmp_path)
+    monkeypatch.setattr(mfs, "available", lambda: True)
+    monkeypatch.setattr(mfs, "is_mergerfs_mount", lambda p: False)
+    monkeypatch.setattr(mfs, "_systemd_available", lambda: True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(mfs, "run", _capturing_run(calls, []))
+
+    mfs.mount(t, "labA", ["/b1"])
+
+    assert calls[0][:5] == [
+        "systemd-run", "--scope", "--quiet", "--collect", "--unit=lab-mergerfs-cold-labA.scope",
+    ]
+    assert calls[0][5:] == mfs.mount_argv(t, "labA", ["/b1"])
+
+
+def test_mount_is_unwrapped_without_systemd(monkeypatch, tmp_path):
+    t = _mount_tier(tmp_path)
+    monkeypatch.setattr(mfs, "available", lambda: True)
+    monkeypatch.setattr(mfs, "is_mergerfs_mount", lambda p: False)
+    monkeypatch.setattr(mfs, "_systemd_available", lambda: False)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(mfs, "run", _capturing_run(calls, []))
+
+    mfs.mount(t, "labA", ["/b1"])
+
+    assert calls == [mfs.mount_argv(t, "labA", ["/b1"])]
+
+
+def test_a_failed_scope_still_gets_the_union_mounted(monkeypatch, tmp_path):
+    """Where the daemon lands matters less than the lab having its storage: a host with no live
+    bus (or a leftover scope of the same name) falls back to the direct mount."""
+    t = _mount_tier(tmp_path)
+    monkeypatch.setattr(mfs, "available", lambda: True)
+    monkeypatch.setattr(mfs, "is_mergerfs_mount", lambda p: False)
+    monkeypatch.setattr(mfs, "_systemd_available", lambda: True)
+    calls: list[list[str]] = []
+    monkeypatch.setattr(mfs, "run", _capturing_run(calls, [False, True]))
+
+    assert mfs.mount(t, "labA", ["/b1"]) == t.logical_mount("labA")
+    assert len(calls) == 2 and calls[1] == mfs.mount_argv(t, "labA", ["/b1"])
+
+
+def test_a_mounted_union_is_not_mounted_twice_after_a_scope_error(monkeypatch, tmp_path):
+    t = _mount_tier(tmp_path)
+    monkeypatch.setattr(mfs, "available", lambda: True)
+    monkeypatch.setattr(mfs, "_systemd_available", lambda: True)
+    mounted = iter([False, True])  # not a mount when we check, but the failed attempt made one
+    monkeypatch.setattr(mfs, "is_mergerfs_mount", lambda p: next(mounted))
+    calls: list[list[str]] = []
+    monkeypatch.setattr(mfs, "run", _capturing_run(calls, [False]))
+
+    assert mfs.mount(t, "labA", ["/b1"]) == t.logical_mount("labA")
+    assert len(calls) == 1
+
+
+def test_scope_names_are_valid_unit_names(monkeypatch, tmp_path):
+    t = _mount_tier(tmp_path)
+    assert mfs.scope_name(t, "Geng_Yuan_Lab") == "lab-mergerfs-cold-Geng_Yuan_Lab.scope"
+    # A lab name is operator-supplied; anything systemd would reject is escaped.
+    assert mfs.scope_name(t, "lab/one two") == "lab-mergerfs-cold-lab-one-two.scope"

@@ -326,3 +326,54 @@ def test_install_tool_passes_ref_to_uv(monkeypatch, tmp_path):
     monkeypatch.setattr(installer, "_run", fake_run)
     installer._install_tool("v2.0.0")
     assert seen["cmd"][-1] == f"{installer.REPO_URL}@v2.0.0#{installer.REPO_SUBDIR}"
+
+
+def test_upgrade_repoints_the_storage_unit_at_the_new_binary(monkeypatch, tmp_path):
+    """`upgrade` uninstalls the legacy /root copy, so every unit naming it has to be rewritten.
+    Missing lab-storage-mounts.service is how a node silently loses its per-lab unions at the next
+    boot: the oneshot fails 203/EXEC and nothing runs it again until then."""
+    from lab_agent import hostprep
+
+    bin_dir = _redirect_system_dirs(monkeypatch, tmp_path)
+    storage_unit = tmp_path / "lab-storage-mounts.service"
+    storage_unit.write_text(
+        hostprep.render_storage_unit("/etc/lab-agent/config.toml", "/root/.local/bin/lab-agent")
+    )
+    monkeypatch.setattr(hostprep, "STORAGE_UNIT_PATH", storage_unit)
+    monkeypatch.setattr(installer.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(installer, "_find_uv", lambda: "/root/.local/bin/uv")
+    monkeypatch.setattr(installer, "_uv_tool_exec_path", lambda uv: str(bin_dir / "lab-agent"))
+    monkeypatch.setattr(installer, "SYSTEMD_UNIT_PATH", tmp_path / "lab-agent.service")
+    monkeypatch.setattr(installer, "_run", lambda cmd, env=None: (0, "lab-agent 0.1.0\n"))
+    sys_calls: list[str] = []
+    monkeypatch.setattr(installer.os, "system", lambda cmd: sys_calls.append(cmd) or 0)
+
+    installer.upgrade()
+
+    text = storage_unit.read_text()
+    assert f"ExecStart={bin_dir / 'lab-agent'} storage mount" in text
+    assert f"ExecStop={bin_dir / 'lab-agent'} storage unmount" in text
+    assert "/root/.local/bin/lab-agent" not in text
+    # The configured path survives the rewrite.
+    assert "Environment=LAB_AGENT_CONFIG=/etc/lab-agent/config.toml" in text
+    # Rewritten but NOT restarted: its ExecStop unmounts every union, which would pull the bind
+    # mounts out from under running lab containers.
+    assert not any("lab-storage-mounts" in c for c in sys_calls)
+
+
+def test_upgrade_skips_a_storage_unit_that_is_not_installed(monkeypatch, tmp_path):
+    from lab_agent import hostprep
+
+    bin_dir = _redirect_system_dirs(monkeypatch, tmp_path)
+    storage_unit = tmp_path / "absent.service"
+    monkeypatch.setattr(hostprep, "STORAGE_UNIT_PATH", storage_unit)
+    monkeypatch.setattr(installer.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(installer, "_find_uv", lambda: "/usr/local/bin/uv")
+    monkeypatch.setattr(installer, "_uv_tool_exec_path", lambda uv: str(bin_dir / "lab-agent"))
+    monkeypatch.setattr(installer, "SYSTEMD_UNIT_PATH", tmp_path / "lab-agent.service")
+    monkeypatch.setattr(installer, "_run", lambda cmd, env=None: (0, "lab-agent 0.1.0\n"))
+    monkeypatch.setattr(installer.os, "system", lambda cmd: 0)
+
+    installer.upgrade()
+
+    assert not storage_unit.exists()

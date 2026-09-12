@@ -24,6 +24,7 @@ Two safety rules run through everything here:
 from __future__ import annotations
 
 import os
+import re
 import shutil
 from dataclasses import dataclass
 
@@ -32,6 +33,12 @@ from ..executors.base import CommandResult, run
 from .model import TierConfig, scaled_minfreespace
 
 MERGERFS_BIN = "mergerfs"
+SYSTEMD_RUN_BIN = "systemd-run"
+# sd_booted(3): this directory exists only on a systemd-booted host.
+SYSTEMD_MARKER = "/run/systemd/system"
+# A lab name is operator-supplied, and systemd unit names accept only alphanumerics and a short
+# punctuation set; anything else would have to be escaped, so it is folded to '-' instead.
+_SCOPE_UNSAFE = re.compile(r"[^A-Za-z0-9:_.-]")
 # mergerfs exposes a runtime control file inside every mount. Writing the ``user.mergerfs.branches``
 # xattr adds/removes branches on a LIVE mount, so a new disk can join a lab's union without
 # unmounting — which means the lab container's bind mount (and its open file handles) survive.
@@ -216,6 +223,31 @@ def ensure_mountpoint(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
+def scope_name(tier: TierConfig, lab: str) -> str:
+    """Name of the transient scope that owns one lab's union daemon."""
+    return _SCOPE_UNSAFE.sub("-", f"lab-mergerfs-{tier.name}-{lab}") + ".scope"
+
+
+def _systemd_available() -> bool:
+    return os.path.isdir(SYSTEMD_MARKER) and shutil.which(SYSTEMD_RUN_BIN) is not None
+
+
+def scoped_argv(argv: list[str], unit: str) -> list[str]:
+    """Wrap a mount argv so the daemon it leaves behind lands in its OWN transient scope.
+
+    mergerfs daemonizes, so it stays in the cgroup of whatever spawned it. When that is an agent
+    task, the daemon lives in ``lab-agent.service`` — and systemd's default
+    ``KillMode=control-group`` means the next ``systemctl restart lab-agent`` (every
+    ``lab-agent upgrade`` performs one) SIGTERMs every per-lab union along with the agent. Running
+    lab containers are then left binding a dead FUSE mount: every path under /home and
+    /cold-storage returns ENOTCONN until the container is restarted. Its own scope has no such
+    relationship to the agent and survives.
+    """
+    if not _systemd_available():
+        return argv
+    return [SYSTEMD_RUN_BIN, "--scope", "--quiet", "--collect", f"--unit={unit}", *argv]
+
+
 def mount(tier: TierConfig, lab: str, branches: list[str]) -> str:
     """Mount one lab's union. Idempotent: an existing correct mount is left alone."""
     if not available():
@@ -231,9 +263,16 @@ def mount(tier: TierConfig, lab: str, branches: list[str]) -> str:
         raise MergerfsError(
             f"'{target}' is already a mount but is not mergerfs; unmount it before continuing"
         )
-    res = run(mount_argv(tier, lab, branches), timeout=60)
+    argv = mount_argv(tier, lab, branches)
+    res = run(scoped_argv(argv, scope_name(tier, lab)), timeout=60)
     if not res.ok:
-        raise MergerfsError(res.logs)
+        if is_mergerfs_mount(target):
+            return target  # the wrapper complained, but the union is up
+        # Placing the daemon matters less than having the mount at all: a host whose bus is down,
+        # or that already holds a scope of this name, still gets its union the pre-scope way.
+        res = run(argv, timeout=60)
+        if not res.ok:
+            raise MergerfsError(res.logs)
     return target
 
 
