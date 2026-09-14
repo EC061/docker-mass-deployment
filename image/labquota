@@ -177,7 +177,19 @@ def request_refresh(me: str) -> None:
     if not me:
         print("Cannot determine your username; run this as your lab user.", file=sys.stderr)
         sys.exit(1)
-    marker = os.path.join(USERS_DIR, me, REFRESH_MARKER)
+    home = os.path.join(USERS_DIR, me)
+    if not os.path.isdir(home):
+        # The agent only ever stats <fast>/<lab>/<user>/.labquota-refresh for users on the lab
+        # roster, so a marker written anywhere else is never honored. Callers without a lab home
+        # (root via `docker exec`, service accounts) previously got a bare ENOENT here, which reads
+        # like a broken install rather than "this command is for lab members".
+        print(
+            f"No lab home at {home}: --refresh can only be requested by a member of this lab.\n"
+            f"Run it as a lab user, e.g. `docker exec -u <student> <container> labquota --refresh`.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    marker = os.path.join(home, REFRESH_MARKER)
     try:
         with open(marker, "w", encoding="utf-8"):
             pass

@@ -147,11 +147,30 @@ def _cdi_devices() -> list[str]:
 
 
 def _loaded_driver_version() -> str:
+    """The running kernel module's version, from /proc/driver/nvidia/version.
+
+    The banner wording differs between driver flavours, and the version does NOT always follow
+    "Kernel Module" directly::
+
+        NVIDIA UNIX x86_64 Kernel Module  560.35.03            (proprietary)
+        NVIDIA UNIX Open Kernel Module for x86_64  580.173.02  (open)
+
+    Anchoring on "Kernel Module" plus arbitrary non-digit text up to the first dotted version keeps
+    both working. Returning "" here is not harmless: the caller uses this to detect a
+    kernel/userspace mismatch, and an empty value silently disables that check.
+    """
     try:
         text = open("/proc/driver/nvidia/version", encoding="utf-8").read()
     except OSError:
         return ""
-    match = re.search(r"Kernel Module\s+([0-9.]+)", text)
+    return parse_loaded_driver_version(text)
+
+
+def parse_loaded_driver_version(text: str) -> str:
+    """Pure parser for the /proc/driver/nvidia/version banner (see _loaded_driver_version)."""
+    # NOT [^\n\d]* — "for x86_64" contains digits, so a digit-excluding run stops short of the
+    # version. Skip lazily to the first whitespace-delimited dotted number instead.
+    match = re.search(r"Kernel Module[^\n]*?\s(\d+(?:\.\d+)+)(?:\s|$)", text)
     return match.group(1) if match else ""
 
 
@@ -196,7 +215,12 @@ def _stale_bind_propagation_containers() -> list[str]:
     for container in listed.stdout.splitlines():
         result = run([
             "docker", "inspect", "--format",
-            "{{range .HostConfig.Mounts}}{{.Target}}={{.BindOptions.Propagation}} {{end}}",
+            # BindOptions is nil for mounts created without an explicit propagation (the
+            # read-only /run/labquota bind is one). An unguarded {{.BindOptions.Propagation}}
+            # aborts the whole template, and the non-zero exit below would then mark EVERY
+            # managed container stale.
+            "{{range .HostConfig.Mounts}}{{if .BindOptions}}"
+            "{{.Target}}={{.BindOptions.Propagation}} {{end}}{{end}}",
             container,
         ], timeout=20)
         if not result.ok:

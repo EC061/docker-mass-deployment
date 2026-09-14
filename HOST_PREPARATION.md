@@ -319,27 +319,46 @@ node. The pattern is `nvidia-driver-NNN` plus all `libnvidia-*` and
 
 **Create an apt priority pin so apt never considers upgrading them:**
 
+> **Do not glob `libnvidia-*` here.** That pattern also matches
+> `libnvidia-container1` and `libnvidia-container-tools` — the NVIDIA
+> **Container Toolkit**, which is versioned independently of the driver
+> and which `host-prepare` installs and upgrades. Pinning those makes
+> them uninstallable (`apt-cache policy libnvidia-container1` reports
+> `Candidate: (none)`) and the next `host-prepare` fails on an
+> unresolvable dependency. Match the driver branch instead, as below.
+
 ```bash
-sudo tee /etc/apt/preferences.d/nvidia-driver-pin <<'EOF'
-Package: nvidia-driver-* libnvidia-* nvidia-compute-utils-* nvidia-dkms-* nvidia-utils-*
+BRANCH=550   # the branch you installed above
+sudo tee /etc/apt/preferences.d/nvidia-driver-pin <<EOF
+Package: nvidia-driver-$BRANCH* nvidia-dkms-$BRANCH* nvidia-kernel-*-$BRANCH* nvidia-compute-utils-$BRANCH* nvidia-utils-$BRANCH* nvidia-firmware-$BRANCH* libnvidia-*-$BRANCH* xserver-xorg-video-nvidia-$BRANCH*
 Pin: version *
 Pin-Priority: 1001
 EOF
 ```
 
+Every driver package carries the branch number (`libnvidia-compute-550`,
+`nvidia-dkms-550`, and so on), so the `-$BRANCH` suffix selects exactly
+the driver stack and leaves the container toolkit alone.
+
 Priority 1001 forces apt to keep the installed version even when a
 newer version is available in the repo.
+
+Verify the pin caught the driver and spared the toolkit:
+
+```bash
+apt-cache policy nvidia-driver-$BRANCH libnvidia-container1
+```
 
 **Blacklist the packages in unattended-upgrades:**
 
 ```bash
 sudo tee /etc/apt/apt.conf.d/50unattended-upgrades-nvidia <<'EOF'
 Unattended-Upgrade::Package-Blacklist {
-    "nvidia-driver-.*";
-    "libnvidia-.*";
-    "nvidia-compute-utils-.*";
-    "nvidia-dkms-.*";
-    "nvidia-utils-.*";
+    "nvidia-driver-[0-9]+.*";
+    "libnvidia-.*-[0-9]+.*";
+    "nvidia-compute-utils-[0-9]+.*";
+    "nvidia-dkms-[0-9]+.*";
+    "nvidia-utils-[0-9]+.*";
 };
 EOF
 ```
