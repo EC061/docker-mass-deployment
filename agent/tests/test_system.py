@@ -288,7 +288,7 @@ def test_stale_bind_propagation_containers_detects_private_binds(monkeypatch):
     """RETEST-FIND-7: an rprivate bind never shows a per-student dataset mounted after container
     start, so the member silently gets the root-owned directory underneath instead of their own
     storage. Propagation is fixed at creation, so such a container has to be recreated."""
-    inspect = "docker inspect --format {{range .HostConfig.Mounts}}{{.Target}}={{.BindOptions.Propagation}} {{end}}"
+    inspect = "docker inspect --format {{range .HostConfig.Mounts}}{{if .BindOptions}}{{.Target}}={{.BindOptions.Propagation}} {{end}}{{end}}"
     monkeypatch.setattr(system, "run", Runner({
         "docker ps": (True, "lab-old\nlab-half\nlab-current\n"),
         f"{inspect} lab-old": (True, "/home=rprivate /cold-storage=rprivate"),
@@ -329,7 +329,7 @@ def test_deep_doctor_accepts_docker_defaults_and_cuda_toolkit(monkeypatch):
     runner = healthy_runner()
     runner.responses.update({
         "docker ps --filter label=lab-agent.managed=true --format {{.Names}}": (True, "lab-test\n"),
-        "docker inspect --format {{range .HostConfig.Mounts}}{{.Target}}={{.BindOptions.Propagation}} {{end}} lab-test":
+        "docker inspect --format {{range .HostConfig.Mounts}}{{if .BindOptions}}{{.Target}}={{.BindOptions.Propagation}} {{end}}{{end}} lab-test":
             (True, "/home=rslave /cold-storage=rslave"),
         "docker inspect --format {{json .HostConfig.CapAdd}} lab-test": (True, "null"),
         "docker inspect --format {{json .HostConfig.SecurityOpt}}\t{{.AppArmorProfile}} lab-test":
@@ -360,3 +360,72 @@ def test_missing_default_security_integration_is_critical(monkeypatch):
     caps = system.detect_capabilities(cfg(), deep=False)
     issue = next(i for i in caps.issues if i.code == "docker_default_security")
     assert issue.severity == "critical"
+
+
+# ------------------------------------------------------- NVIDIA driver banner / bind propagation
+
+
+# Real banners. The open variant puts "for x86_64" between "Kernel Module" and the version, which a
+# naive r"Kernel Module\s+([0-9.]+)" misses — and an unparsed version silently disables the
+# kernel/userspace mismatch check in detect_capabilities.
+PROPRIETARY_BANNER = (
+    "NVRM version: NVIDIA UNIX x86_64 Kernel Module  560.35.03  "
+    "Release Build  (dvs-builder@U16-I1-N04-12-2)  Fri Aug 16 21:39:15 UTC 2024\n"
+    "GCC version:  gcc version 12.3.0 (Ubuntu 12.3.0-1ubuntu1~22.04)\n"
+)
+OPEN_BANNER = (
+    "NVRM version: NVIDIA UNIX Open Kernel Module for x86_64  580.173.02  "
+    "Release Build  (dvs-builder@U22-I3-AK02-24-4)  Tue Jun 23 08:17:01 UTC 2026\n"
+    "GCC version:  gcc version 13.3.0 (Ubuntu 13.3.0-6ubuntu2~24.04.1)\n"
+)
+
+
+@pytest.mark.parametrize("banner,expected", [
+    (PROPRIETARY_BANNER, "560.35.03"),
+    (OPEN_BANNER, "580.173.02"),
+])
+def test_parses_both_driver_banner_flavours(banner, expected):
+    assert system.parse_loaded_driver_version(banner) == expected
+
+
+def test_unparsable_driver_banner_is_empty():
+    assert system.parse_loaded_driver_version("NVRM version: something else entirely\n") == ""
+
+
+def test_open_driver_still_detects_nvml_mismatch(monkeypatch):
+    """Regression: with the open driver the version failed to parse, so `if loaded and ...` was
+    never entered and a genuine kernel/userspace mismatch went unreported."""
+    runner = healthy_runner()
+    runner.responses["nvidia-smi -L"] = (False, "")
+    runner.responses["nvidia-smi --query-gpu=driver_version"] = (False, "")
+    monkeypatch.setattr(system, "run", runner)
+    # Exercise the real parser on the real banner, without patching builtins.open (which would
+    # break every other file read inside detect_capabilities).
+    monkeypatch.setattr(system, "_loaded_driver_version",
+                        lambda: system.parse_loaded_driver_version(OPEN_BANNER))
+    caps = system.detect_capabilities(cfg(), deep=False)
+    assert caps.nvidia.loaded_driver_version == "580.173.02"
+    assert any(i.code == "nvml_driver_mismatch" for i in caps.issues)
+
+
+def test_mount_without_bind_options_does_not_mark_container_stale(monkeypatch):
+    """Regression: the read-only /run/labquota bind has a nil BindOptions. An unguarded
+    {{.BindOptions.Propagation}} aborted the template, docker inspect exited non-zero, and EVERY
+    managed container was reported as having stale bind propagation."""
+    runner = Runner({
+        "docker ps --filter label=lab-agent.managed=true": (True, "Some_Lab-node1\n"),
+        # A correctly-created container: the two data binds are rslave and /run/labquota, having no
+        # BindOptions, contributes nothing because of the {{if .BindOptions}} guard.
+        "docker inspect --format": (True, "/home=rslave /cold-storage=rslave \n"),
+    })
+    monkeypatch.setattr(system, "run", runner)
+    assert system._stale_bind_propagation_containers() == []
+
+
+def test_rprivate_bind_still_marks_container_stale(monkeypatch):
+    runner = Runner({
+        "docker ps --filter label=lab-agent.managed=true": (True, "Some_Lab-node1\n"),
+        "docker inspect --format": (True, "/home=rprivate /cold-storage=rslave \n"),
+    })
+    monkeypatch.setattr(system, "run", runner)
+    assert system._stale_bind_propagation_containers() == ["Some_Lab-node1"]
