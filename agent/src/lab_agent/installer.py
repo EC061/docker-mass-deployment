@@ -218,6 +218,12 @@ Environment=LAB_AGENT_CONFIG={config_path}
 ExecStart={exec_start}
 Restart=always
 RestartSec=5
+# mergerfs daemons started by an agent TASK (adding a pool to a tier, creating a lab) are children
+# of this unit and therefore land in its cgroup. With systemd's default KillMode=control-group,
+# every `systemctl restart lab-agent` — including the one `lab-agent upgrade` performs — SIGTERMs
+# them, and every per-lab union goes down with the agent. Killing only the main process leaves the
+# unions up; they are torn down deliberately by lab-storage-mounts.service's ExecStop instead.
+KillMode=process
 # The agent shells out to zfs/docker/useradd, which require root.
 User=root
 
@@ -353,6 +359,19 @@ def stop_service() -> None:
     os.system(f"systemctl stop {SERVICE}")
 
 
+def _rerender_storage_unit(config_path: Path, exec_path: str) -> None:
+    """Point lab-storage-mounts.service at ``exec_path``, if host-prepare has installed it.
+
+    Imported lazily: hostprep pulls in the storage stack, and installer is imported by the CLI on
+    every invocation, including on hosts that have never run host-prepare.
+    """
+    from .hostprep import STORAGE_UNIT_PATH, render_storage_unit
+
+    if not STORAGE_UNIT_PATH.exists():
+        return
+    STORAGE_UNIT_PATH.write_text(render_storage_unit(str(config_path), exec_path))
+
+
 def upgrade(ref: str | None = None) -> dict[str, str]:
     """Reinstall lab-agent from the repo (newest, or a pinned ``ref``) and restart the service."""
     _require_root()
@@ -370,10 +389,16 @@ def upgrade(ref: str | None = None) -> dict[str, str]:
         raise RuntimeError(f"upgrade failed (rc={rc}): {out.strip()}")
     exec_path = _uv_tool_exec_path(uv)
     # The unit may still name the old /root path, so rewrite ExecStart before restarting.
+    config_path = DEFAULT_CONFIG_PATH
     if SYSTEMD_UNIT_PATH.exists():
         unit = SYSTEMD_UNIT_PATH.read_text()
         config_path = _unit_config_path(unit) or DEFAULT_CONFIG_PATH
         SYSTEMD_UNIT_PATH.write_text(render_unit(config_path, exec_path))
+    # lab-storage-mounts.service names the same executable. `uv tool uninstall` above deletes the
+    # old path, so re-rendering only lab-agent.service leaves the storage unit pointing at a file
+    # that no longer exists: it fails 203/EXEC, silently, until the next boot tries to mount the
+    # tiers. Keep the two units in lockstep.
+    _rerender_storage_unit(config_path, exec_path)
     os.system("systemctl daemon-reload")
     os.system(f"systemctl restart {SERVICE}")
     _, ver = _run([exec_path, "--version"])

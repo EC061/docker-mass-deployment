@@ -326,3 +326,60 @@ def test_install_tool_passes_ref_to_uv(monkeypatch, tmp_path):
     monkeypatch.setattr(installer, "_run", fake_run)
     installer._install_tool("v2.0.0")
     assert seen["cmd"][-1] == f"{installer.REPO_URL}@v2.0.0#{installer.REPO_SUBDIR}"
+
+
+# ------------------------------------------------- upgrade must not orphan storage (2026-09-14)
+
+
+def test_agent_unit_does_not_reap_task_children():
+    """mergerfs daemons spawned by an agent task live in lab-agent.service's cgroup. Without
+    KillMode=process, every restart (including the one inside `upgrade`) SIGTERMs them and takes
+    each lab's union down with the agent."""
+    unit = installer.render_unit(Path("/etc/lab-agent/config.toml"), "/usr/local/bin/lab-agent")
+    assert "KillMode=process" in unit
+
+
+def test_upgrade_repoints_storage_unit_at_the_new_executable(tmp_path, monkeypatch):
+    """Regression: `uv tool uninstall` deletes the old executable and upgrade re-rendered only
+    lab-agent.service, leaving lab-storage-mounts.service on a dead path (203/EXEC at next boot)."""
+    from lab_agent import hostprep
+
+    agent_unit = tmp_path / "lab-agent.service"
+    storage_unit = tmp_path / "lab-storage-mounts.service"
+    agent_unit.write_text(installer.render_unit(Path("/etc/lab-agent/config.toml"),
+                                                "/root/.local/bin/lab-agent"))
+    storage_unit.write_text(hostprep.render_storage_unit("/etc/lab-agent/config.toml",
+                                                         "/root/.local/bin/lab-agent"))
+    monkeypatch.setattr(installer, "SYSTEMD_UNIT_PATH", agent_unit)
+    monkeypatch.setattr(hostprep, "STORAGE_UNIT_PATH", storage_unit)
+    monkeypatch.setattr(installer, "_require_root", lambda: None)
+    monkeypatch.setattr(installer, "_find_uv", lambda: "/usr/local/bin/uv")
+    monkeypatch.setattr(installer, "_install_uv_on_path", lambda uv: uv)
+    monkeypatch.setattr(installer, "_run", lambda *a, **kw: (0, "lab-agent 0.1.0"))
+    monkeypatch.setattr(installer, "_uv_tool_exec_path", lambda uv: "/usr/local/bin/lab-agent")
+    monkeypatch.setattr(installer.os, "system", lambda cmd: 0)
+
+    installer.upgrade()
+
+    assert "/root/.local/bin/lab-agent" not in storage_unit.read_text()
+    assert "ExecStart=/usr/local/bin/lab-agent storage mount" in storage_unit.read_text()
+    assert "ExecStop=/usr/local/bin/lab-agent storage unmount" in storage_unit.read_text()
+
+
+def test_upgrade_skips_storage_unit_when_host_prepare_never_ran(tmp_path, monkeypatch):
+    from lab_agent import hostprep
+
+    agent_unit = tmp_path / "lab-agent.service"
+    agent_unit.write_text(installer.render_unit(Path("/etc/lab-agent/config.toml"), "/old/lab-agent"))
+    monkeypatch.setattr(installer, "SYSTEMD_UNIT_PATH", agent_unit)
+    monkeypatch.setattr(hostprep, "STORAGE_UNIT_PATH", tmp_path / "absent.service")
+    monkeypatch.setattr(installer, "_require_root", lambda: None)
+    monkeypatch.setattr(installer, "_find_uv", lambda: "/usr/local/bin/uv")
+    monkeypatch.setattr(installer, "_install_uv_on_path", lambda uv: uv)
+    monkeypatch.setattr(installer, "_run", lambda *a, **kw: (0, "lab-agent 0.1.0"))
+    monkeypatch.setattr(installer, "_uv_tool_exec_path", lambda uv: "/usr/local/bin/lab-agent")
+    monkeypatch.setattr(installer.os, "system", lambda cmd: 0)
+
+    installer.upgrade()  # must not raise
+
+    assert not (tmp_path / "absent.service").exists()
