@@ -339,6 +339,7 @@ export interface AnnouncementResult {
  * every attempt.
  */
 export async function sendAnnouncement(input: {
+  requestId?: string;
   subject: string;
   body: string;
   audiences: Audience[];
@@ -392,6 +393,14 @@ export async function sendAnnouncement(input: {
   }
   const recipients = [...byEmail.values()];
   const skipped = !isSmtpConfigured();
+  // Claim before any SMTP await so concurrent requests and replayed forms cannot send twice.
+  // Keep the claim on failure: some recipients may already have received the message.
+  if (input.requestId) {
+    const claim = db().prepare(`INSERT OR IGNORE INTO announcement_submissions
+      (request_id, actor, created_at) VALUES (?, ?, ?)`)
+      .run(input.requestId, input.actor ?? "", Date.now());
+    if (!claim.changes) throw new Error("This announcement submission was already accepted. Check recent announcements before sending a new message.");
+  }
 
   // {name}/{email} are substituted per recipient, {sender}/{sender_email} once per send. sendMail
   // appends the universal signature.

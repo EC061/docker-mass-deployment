@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   ANNOUNCEMENT_VARS,
   listAnnouncementPeople,
@@ -34,6 +35,7 @@ export default async function AnnouncementsPage({
   // the {sender_email} contact the body quotes.
   const from = outboundEmailFrom();
   const signatureText = getSetting("emailSignatureText");
+  const requestId = randomUUID();
 
   return (
     <div className="space-y-4">
@@ -65,6 +67,8 @@ export default async function AnnouncementsPage({
         <CardContent className="space-y-3">
           <h2 className="text-base font-semibold">Send a service announcement</h2>
           <AnnouncementComposer
+            key={requestId}
+            requestId={requestId}
             templates={templates}
             vars={ANNOUNCEMENT_VARS}
             people={people}

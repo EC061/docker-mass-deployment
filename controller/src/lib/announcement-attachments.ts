@@ -44,7 +44,9 @@ function validateSizes(files: { name: string; size: number }[]): void {
 export async function announcementAttachmentsFromForm(formData: FormData): Promise<MailAttachment[]> {
   const files = formData
     .getAll("attachments")
-    .filter((entry): entry is File => typeof entry !== "string" && !!(entry.name || entry.size));
+    // React's multipart serialization can rename the empty file-input sentinel to "blob".
+    .filter((entry): entry is File => typeof entry !== "string" &&
+      (entry.size > 0 || (!!entry.name && entry.name !== "blob")));
   validateSizes(files.map((file) => ({ name: file.name, size: file.size })));
 
   return Promise.all(

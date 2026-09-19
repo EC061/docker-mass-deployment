@@ -26,6 +26,7 @@ import {
   retryPlacement,
   retryPlacementMembers,
   updatePlacementQuota,
+  setPlacementMemberAccess,
 } from "@/lib/placements";
 import { QUOTA_UNIT_BYTES, type QuotaUnit } from "@/lib/format";
 import { TIB } from "@/lib/settings";
@@ -200,6 +201,8 @@ export async function grantNodeAccessAction(formData: FormData) {
     await createPlacement({
       labId,
       nodeId,
+      studentIds: formData.get("accessMode") === "selected"
+        ? formData.getAll("studentIds").map(Number) : undefined,
       fastQuotaBytes: tbToBytes(formData.get("fastTb"), "Fast"),
       coldQuotaBytes: coldTb === null || coldTb === "" ? null : tbToBytes(coldTb, "Cold"),
       studentFastQuotaBytes: formData.get("enableStudentFastQuota") === "on"
@@ -218,6 +221,25 @@ export async function grantNodeAccessAction(formData: FormData) {
   revalidatePath(`/labs/${labId}`);
   const fid = putFlash("Node access granted — provisioning the lab and roster on that node.");
   redirect(`/labs/${labId}?saved=${fid}`);
+}
+
+export async function placementMemberAccessAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const placement = getPlacement(placementId);
+  if (!placement) redirect("/labs");
+  const path = `/labs/${placement.lab_id}/placements/${placementId}`;
+  const allowed = formData.get("allowed") === "1";
+  try {
+    await setPlacementMemberAccess(placementId, Number(formData.get("studentId")), allowed, who);
+  } catch (e) {
+    redirect(`${path}?error=${putFlash(e instanceof Error ? e.message : "Could not change access")}`);
+  }
+  revalidatePath(`/labs/${placement.lab_id}`);
+  revalidatePath(path);
+  redirect(`${path}?saved=${putFlash(allowed
+    ? "Access provisioning queued for this node."
+    : "Account removal queued for this node. Lab membership, other nodes, and data are preserved. Check Tasks for completion; retry removal here if it fails.")}`);
 }
 
 export async function setPlacementQuotaAction(formData: FormData) {

@@ -252,6 +252,7 @@ export default async function LabDetail({
         <CardContent className="space-y-3">
           <h2 className="text-base font-semibold">Grant node access</h2>
           <PlacementForm
+            members={members}
             labId={lab.id}
             nodes={availableNodes}
             defaultFastTb={settings.fastQuotaDefaultBytes / TIB}

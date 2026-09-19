@@ -36,6 +36,17 @@ describe("announcement attachment uploads", () => {
     expect(safeAttachmentFilename("C:\\fakepath\\notes\n.pdf", 0)).toBe("notes_.pdf");
   });
 
+  it("ignores the serialized empty blob but retains real uploads", async () => {
+    const formData = new FormData();
+    formData.append("attachments", new Blob([]));
+    expect(await announcementAttachmentsFromForm(formData)).toEqual([]);
+    formData.append("attachments", new File([], "empty.txt"));
+    formData.append("attachments", new File(["real data"], "blob"));
+    const attachments = await announcementAttachmentsFromForm(formData);
+    expect(attachments.map((a) => a.filename)).toEqual(["empty.txt", "blob"]);
+    expect(attachments[1].content.toString()).toBe("real data");
+  });
+
   it("rejects too many files, an oversized file, and an oversized combined upload", async () => {
     const tooMany = new FormData();
     for (let i = 0; i <= MAX_ANNOUNCEMENT_ATTACHMENTS; i += 1) {

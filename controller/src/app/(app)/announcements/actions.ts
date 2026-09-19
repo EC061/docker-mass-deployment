@@ -22,8 +22,11 @@ export async function sendAnnouncementAction(formData: FormData) {
 
   let msg: string;
   try {
+    const requestId = String(formData.get("requestId") ?? "");
+    if (!/^[0-9a-f-]{36}$/i.test(requestId)) throw new Error("Reload the announcement form before sending.");
     const attachments = await announcementAttachmentsFromForm(formData);
     const res = await sendAnnouncement({
+      requestId,
       subject,
       body,
       audiences: [],

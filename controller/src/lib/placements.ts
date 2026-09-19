@@ -202,6 +202,7 @@ function enqueuePlacementCreate(p: Placement, actor?: string): void {
 }
 
 export interface CreatePlacementInput {
+  studentIds?: number[];
   labId: number;
   nodeId: number;
   fastQuotaBytes: number;
@@ -219,6 +220,13 @@ export interface CreatePlacementInput {
  * current roster member on it. Returns the new placement.
  */
 export async function createPlacement(input: CreatePlacementInput): Promise<Placement> {
+  if (input.studentIds !== undefined) {
+    for (const id of input.studentIds) {
+      if (!db().prepare("SELECT 1 FROM lab_members WHERE lab_id = ? AND student_id = ?").get(input.labId, id)) {
+        throw new Error("Selected student is not a member of this lab");
+      }
+    }
+  }
   const node = db()
     .prepare("SELECT id, name, cold_backend, cold_owner_node_id, cold_ready, capabilities FROM nodes WHERE id = ?")
     .get(input.nodeId) as
@@ -304,6 +312,13 @@ export async function createPlacement(input: CreatePlacementInput): Promise<Plac
       now,
     );
   const placement = getPlacement(Number(info.lastInsertRowid))!;
+  if (input.studentIds !== undefined) {
+    db().prepare("UPDATE lab_placements SET auto_enroll = 0 WHERE id = ?").run(placement.id);
+    for (const id of new Set(input.studentIds)) {
+      db().prepare("INSERT INTO placement_access (placement_id, student_id, allowed) VALUES (?, ?, 1)")
+        .run(placement.id, id);
+    }
+  }
 
   enqueuePlacementCreate(placement, input.actor);
   audit(input.actor, "placement.create", `${placement.lab_name}@${placement.node_name}`);
@@ -371,6 +386,10 @@ export async function provisionMemberOnPlacement(
   student: ProvisionStudent,
   actor?: string,
 ): Promise<MemberProvision | null> {
+  const access = db().prepare(`SELECT COALESCE(a.allowed, p.auto_enroll) AS allowed
+    FROM lab_placements p LEFT JOIN placement_access a ON a.placement_id = p.id AND a.student_id = ?
+    WHERE p.id = ?`).get(student.id, placement.id) as { allowed: number } | undefined;
+  if (!access?.allowed || placement.state === "deleting") return null;
   const existing = db()
     .prepare("SELECT id FROM placement_members WHERE placement_id = ? AND student_id = ?")
     .get(placement.id, student.id);
@@ -584,6 +603,28 @@ export function removeMemberFromPlacement(
   db()
     .prepare("DELETE FROM placement_members WHERE placement_id = ? AND student_id = ?")
     .run(placement.id, student.id);
+}
+
+/** Placement access is independent of the lab roster. Keep shared data on access revocation. */
+export async function setPlacementMemberAccess(
+  placementId: number, studentId: number, allowed: boolean, actor?: string,
+): Promise<void> {
+  const p = getPlacement(placementId);
+  if (!p || p.state === "deleting") throw new Error("Placement is unavailable or being deleted");
+  const student = db().prepare(`SELECT students.* FROM students
+    JOIN lab_members m ON m.student_id = students.id WHERE m.lab_id = ? AND students.id = ?`)
+    .get(p.lab_id, studentId) as ProvisionStudent | undefined;
+  if (!student) throw new Error("Student is not a member of this lab");
+  if (!allowed && db().prepare("SELECT 1 FROM labs WHERE id = ? AND pi_student_id = ?").get(p.lab_id, studentId)) {
+    throw new Error("The PI account is protected from removal");
+  }
+  db().prepare(`INSERT INTO placement_access (placement_id, student_id, allowed) VALUES (?, ?, ?)
+    ON CONFLICT (placement_id, student_id) DO UPDATE SET allowed = excluded.allowed`)
+    .run(placementId, studentId, Number(allowed));
+  if (allowed) await provisionMemberOnPlacement(p, student, actor);
+  else removeMemberFromPlacement(p, student, false, actor);
+  audit(actor, allowed ? "placement.member.grant" : "placement.member.revoke",
+    `${p.lab_name}@${p.node_name}/${student.username}`);
 }
 
 interface RemovalParams {
