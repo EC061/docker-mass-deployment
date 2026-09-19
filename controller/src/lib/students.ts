@@ -1,7 +1,7 @@
 /**
  * Students + logical lab membership. A student is global (reusable across labs). Adding a student to
- * a lab records the membership and provisions them on EVERY placement of that lab (one account per
- * node, with credentials delivered only after agent confirmation); removal reverses every placement.
+ * a lab records membership and provisions them on placements whose access policy allows it (one
+ * account per node, with credentials delivered after agent confirmation). Removal covers all nodes.
  */
 
 import { randomUUID } from "node:crypto";
@@ -210,8 +210,8 @@ export interface AddMemberResult {
 }
 
 /**
- * Add a student to a lab's roster and provision them on every placement. With no placements yet, the
- * student simply joins the roster (and is provisioned automatically when a placement is later added).
+ * Add a student to a lab's roster and provision them on placements allowing automatic enrollment.
+ * With no placements yet, the student simply joins the roster.
  */
 export async function addStudentToLab(
   labId: number,

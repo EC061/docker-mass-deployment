@@ -47,6 +47,58 @@ beforeEach(() => {
 });
 
 const newLab = (name: string) => labs.createLab({ name, actor: "admin" });
+describe("independent placement access", () => {
+  let nodeA: number;
+  let nodeB: number;
+  beforeAll(() => {
+    const insert = dbmod.db().prepare("INSERT INTO nodes (name, online, created_at) VALUES (?, 1, 0)");
+    nodeA = Number(insert.run("access-a").lastInsertRowid);
+    nodeB = Number(insert.run("access-b").lastInsertRowid);
+  });
+  it("provisions only selected members and does not auto-enroll future members", async () => {
+    const lab = newLab("selective-access");
+    const alice = await students.addStudentToLab(lab.id, { username: "select-alice" });
+    const bob = await students.addStudentToLab(lab.id, { username: "select-bob" });
+    const p = await grant(lab.id, nodeA, { studentIds: [alice.student.id] });
+    const empty = await grant(lab.id, nodeB, { studentIds: [] });
+    await students.addStudentToLab(lab.id, { username: "select-carol" });
+    expect(placements.listPlacementMembers(p.id).map((m) => m.id)).toEqual([alice.student.id]);
+    expect(placements.listPlacementMembers(empty.id)).toEqual([]);
+    await placements.setPlacementMemberAccess(p.id, bob.student.id, true, "admin");
+    expect(placements.listPlacementMembers(p.id)).toHaveLength(2);
+  });
+
+  it("revokes only one node, keeps data and roster, and survives automatic provisioning and recreation", async () => {
+    const lab = newLab("revoke-access");
+    const { student } = await students.addStudentToLab(lab.id, { username: "revoke-alice" });
+    const a = await grant(lab.id, nodeA);
+    const b = await grant(lab.id, nodeB);
+    enqueueTask.mockClear();
+    await placements.setPlacementMemberAccess(a.id, student.id, false, "admin");
+    expect(enqueueTask).toHaveBeenCalledWith("access-a", "student.remove", {
+      lab: lab.name, username: student.username, delete_data: false,
+    }, "admin");
+    expect(students.listMembers(lab.id).map((m) => m.id)).toContain(student.id);
+    expect(placements.listPlacementMembers(b.id).map((m) => m.id)).toContain(student.id);
+    expect(await placements.provisionMemberOnPlacement(a, student)).toBeNull();
+    enqueueTask.mockClear();
+    placements.recreatePlacement(a.id, {}, "admin");
+    expect(() => placements.retryPlacementMembers(a.id, "admin")).toThrow("already active");
+    expect(enqueueTask.mock.calls.some((call) => call[1] === "student.add")).toBe(false);
+    await placements.setPlacementMemberAccess(a.id, student.id, true, "admin");
+    expect(placements.listPlacementMembers(a.id).map((m) => m.id)).toContain(student.id);
+  });
+
+  it("rejects nonmembers before creating a placement and protects deleting placements", async () => {
+    const lab = newLab("invalid-access");
+    await expect(grant(lab.id, nodeA, { studentIds: [-1] })).rejects.toThrow("not a member");
+    expect(placements.listPlacements(lab.id)).toEqual([]);
+    const p = await grant(lab.id, nodeA);
+    await expect(placements.setPlacementMemberAccess(p.id, -1, true)).rejects.toThrow("not a member");
+    dbmod.db().prepare("UPDATE lab_placements SET state = 'deleting' WHERE id = ?").run(p.id);
+    await expect(placements.setPlacementMemberAccess(p.id, -1, false)).rejects.toThrow("being deleted");
+  });
+});
 const grant = (labId: number, nodeId: number, extra: Record<string, unknown> = {}) =>
   placements.createPlacement({
     labId,

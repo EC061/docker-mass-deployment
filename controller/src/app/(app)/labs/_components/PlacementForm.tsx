@@ -18,6 +18,7 @@ export interface NodeOpt {
 }
 
 interface Props {
+  members: { id: number; username: string }[];
   labId: number;
   nodes: NodeOpt[]; // nodes the lab is NOT already placed on
   defaultFastTb: number;
@@ -26,7 +27,8 @@ interface Props {
 }
 
 /** "Grant node access": create a placement of the lab on a node with its initial container config. */
-export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, action }: Props) {
+export function PlacementForm({ labId, members, nodes, defaultFastTb, defaultColdTb, action }: Props) {
+  const [accessMode, setAccessMode] = useState("all");
   const [nodeId, setNodeId] = useState<number>(0);
   const noNodeSelected = nodeId === 0;
   if (nodes.length === 0) {
@@ -100,6 +102,19 @@ export function PlacementForm({ labId, nodes, defaultFastTb, defaultColdTb, acti
         <Input name="restart" defaultValue="unless-stopped" />
       </div>
       <StudentQuotaFields allowCold={!isSmb} />
+      <fieldset className="sm:col-span-2 lg:col-span-3 space-y-2">
+        <legend className="text-sm font-medium">Member access</legend>
+        <Select name="accessMode" value={accessMode} onChange={(e) => setAccessMode(e.target.value)}>
+          <option value="all">All current and future lab members</option>
+          <option value="selected">Only selected members</option>
+        </Select>
+        {accessMode === "selected" && <>
+          <p className="text-sm text-muted-foreground">Leave everyone unchecked to provision the node without user access. Future members must be granted access individually on this placement.</p>
+          {members.map((member) => <label key={member.id} className="flex items-center gap-2 text-sm">
+            <input type="checkbox" name="studentIds" value={member.id} />{member.username}
+          </label>)}
+        </>}
+      </fieldset>
       <div className="sm:col-span-2 lg:col-span-3">
         {blocked && (
           <p className="mb-2 text-sm text-amber-600">{selected?.blockedReason}</p>

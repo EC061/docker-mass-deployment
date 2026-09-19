@@ -1,6 +1,8 @@
 "use client";
 
 import { useMemo, useRef, useState } from "react";
+import { useFormStatus } from "react-dom";
+import { SubmitButton } from "@/components/SubmitButton";
 import type { AnnouncementTemplate, Person, RecipientGroup } from "@/lib/announcements";
 import { renderAnnouncementPreview, type AnnouncementPreviewSender } from "@/lib/announcement-preview";
 import { formatEmailFrom, type EmailFrom } from "@/lib/email";
@@ -11,7 +13,6 @@ import {
 } from "@/lib/email-markdown";
 import type { EmailTable } from "@/lib/email-tables";
 import { extractBracketTokens } from "@/lib/template";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,6 +24,7 @@ import {
 } from "@/lib/announcement-attachment-limits";
 
 interface Props {
+  requestId: string;
   templates: AnnouncementTemplate[];
   vars: { key: string; desc: string }[];
   people: Person[];
@@ -154,7 +156,18 @@ function PreviewBody({ body }: { body: string }) {
  * controlled so the picker/inserts and the user's typing agree; the form still submits straight to
  * the server action.
  */
-export function AnnouncementComposer({ templates, vars, people, groups, sender, from, signatureText, action }: Props) {
+function SendAnnouncementButton() {
+  const { pending } = useFormStatus();
+  return <div className="space-y-2">
+    <SubmitButton pendingText="Sending announcement…">Send announcement</SubmitButton>
+    {pending && <p role="status" className="text-sm text-muted-foreground">
+      Sending your announcement. Please wait for the delivery result.
+    </p>}
+  </div>;
+}
+
+export function AnnouncementComposer({ requestId, templates, vars, people, groups, sender, from, signatureText, action }: Props) {
+  const submitting = useRef(false);
   const [subject, setSubject] = useState("");
   const [body, setBody] = useState("");
   const [selectedEmails, setSelectedEmails] = useState<string[]>([]);
@@ -213,7 +226,13 @@ export function AnnouncementComposer({ templates, vars, people, groups, sender, 
   return (
     // Two columns on wide screens: the editable form on the left, the live preview pinned beside it
     // on the right so edits and their rendered result stay in view together. Stacks below xl.
-    <form action={action} className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,28rem)]">
+    <form action={async (data) => {
+      try { await action(data); } finally { submitting.current = false; }
+    }} onSubmit={(event) => {
+      if (submitting.current) event.preventDefault();
+      else submitting.current = true;
+    }} className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(20rem,28rem)]">
+      <input type="hidden" name="requestId" value={requestId} />
       <div className="min-w-0 space-y-3">
         <div>
           <Label htmlFor="ann-template">Start from a template</Label>
@@ -354,7 +373,7 @@ export function AnnouncementComposer({ templates, vars, people, groups, sender, 
           </div>
         </fieldset>
 
-        <Button type="submit">Send announcement</Button>
+        <SendAnnouncementButton />
       </div>
 
       <section

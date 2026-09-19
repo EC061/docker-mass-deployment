@@ -44,6 +44,25 @@ describe("announcement audiences", () => {
 });
 
 describe("sendAnnouncement", () => {
+  it("accepts concurrent and replayed submissions only once", async () => {
+    settings.setSetting("smtpHost", "smtp.test");
+    settings.setSetting("smtpFrom", "no-reply@uga.edu");
+    sendMail.mockClear();
+    const input = {
+      requestId: "test-double-submit", subject: "One send", body: "Hello",
+      audiences: [], individuals: ["alice@uga.edu"], actor: "admin@uga.edu",
+    };
+    const results = await Promise.allSettled([ann.sendAnnouncement(input), ann.sendAnnouncement(input)]);
+    expect(results.map((r) => r.status)).toEqual(["fulfilled", "rejected"]);
+    await expect(ann.sendAnnouncement(input)).rejects.toThrow("already accepted");
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume a submission token on validation failure", async () => {
+    const input = { requestId: "fix-validation", subject: "", body: "Hello", audiences: [], individuals: ["alice@uga.edu"] };
+    await expect(ann.sendAnnouncement(input)).rejects.toThrow("subject");
+    await expect(ann.sendAnnouncement({ ...input, subject: "Fixed" })).resolves.toMatchObject({ recipients: 1 });
+  });
   it("rejects empty subject/body/audience", async () => {
     await expect(ann.sendAnnouncement({ subject: "", body: "x", audiences: ["students"] })).rejects.toThrow();
     await expect(ann.sendAnnouncement({ subject: "s", body: "", audiences: ["students"] })).rejects.toThrow();

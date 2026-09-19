@@ -752,6 +752,26 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
     CREATE INDEX idx_task_log_action_created ON task_log(action, created_at);
     `,
   },
+  {
+    id: "0033_placement_access",
+    sql: `
+    ALTER TABLE lab_placements ADD COLUMN auto_enroll INTEGER NOT NULL DEFAULT 1;
+    CREATE TABLE placement_access (
+      placement_id INTEGER NOT NULL REFERENCES lab_placements(id) ON DELETE CASCADE,
+      student_id INTEGER NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+      allowed INTEGER NOT NULL CHECK (allowed IN (0, 1)),
+      PRIMARY KEY (placement_id, student_id)
+    );
+    `,
+  },
+  {
+    id: "0034_announcement_submissions",
+    sql: `CREATE TABLE announcement_submissions (
+      request_id TEXT PRIMARY KEY,
+      actor TEXT NOT NULL,
+      created_at INTEGER NOT NULL
+    );`,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

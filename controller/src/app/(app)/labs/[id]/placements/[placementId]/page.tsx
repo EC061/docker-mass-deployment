@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { db } from "@/lib/db";
+import { listMembers } from "@/lib/students";
 import { takeFlash } from "@/lib/flash";
 import { bytesToQuotaInput, fmtBytes, pct } from "@/lib/format";
 import {
@@ -26,6 +27,7 @@ import {
   retryPlacementAction,
   retryPlacementMembersAction,
   setPlacementQuotaAction,
+  placementMemberAccessAction,
 } from "../../../actions";
 
 export const dynamic = "force-dynamic";
@@ -106,6 +108,7 @@ export default async function PlacementPage({
   const errorMsg = error ? takeFlash(error) : null;
   const revealedCredential = credential ? takeFlash(credential) : null;
   const members = listPlacementMembers(placement.id);
+  const roster = listMembers(placement.lab_id);
   const labPlacements = listPlacements(placement.lab_id);
   const ownerPlacement = placement.node_cold_owner_node_id
     ? labPlacements.find((candidate) => candidate.node_id === placement.node_cold_owner_node_id)
@@ -334,6 +337,31 @@ export default async function PlacementPage({
               </TableBody>
             </Table>
           )}
+          <div className="mt-4 space-y-2">
+            <h3 className="font-medium">Manage access on this node</h3>
+            <p className="text-sm text-muted-foreground">Removing access keeps lab membership, access on other nodes, and all data. Changes take effect when the agent completes the task. Check <Link href="/logs" className="underline">Logs</Link> for task results; removal can be retried below.</p>
+            {roster.map((member) => {
+              const included = members.some((m) => m.id === member.id);
+              return <div key={member.id} className="flex flex-wrap items-center gap-2 text-sm">
+                <span>{member.username}{member.is_pi ? " (PI)" : ""}</span>
+                {!included && <form action={placementMemberAccessAction}>
+                  <input type="hidden" name="placementId" value={placement.id} />
+                  <input type="hidden" name="studentId" value={member.id} />
+                  <input type="hidden" name="allowed" value="1" />
+                  <Button size="sm" variant="secondary" disabled={!canEdit}>Grant access</Button>
+                </form>}
+                {!member.is_pi && <form action={placementMemberAccessAction}>
+                  <input type="hidden" name="placementId" value={placement.id} />
+                  <input type="hidden" name="studentId" value={member.id} />
+                  <input type="hidden" name="allowed" value="0" />
+                  <ConfirmButton size="sm" variant="destructive" disabled={!canEdit}
+                    confirm={`Remove ${member.username} from ${placement.node_name} only? Membership, other nodes, and data are kept.`}>
+                    {included ? "Remove from this node" : "Retry / enforce removal"}
+                  </ConfirmButton>
+                </form>}
+              </div>;
+            })}
+          </div>
         </CardContent>
       </Card>
 
