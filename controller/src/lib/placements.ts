@@ -605,7 +605,7 @@ export function removeMemberFromPlacement(
     .run(placement.id, student.id);
 }
 
-/** Placement access is independent of the lab roster. Keep shared data on access revocation. */
+/** Revocation deletes the node-local home, retaining the roster and shared cold data. */
 export async function setPlacementMemberAccess(
   placementId: number, studentId: number, allowed: boolean, actor?: string,
 ): Promise<void> {
@@ -622,7 +622,7 @@ export async function setPlacementMemberAccess(
     ON CONFLICT (placement_id, student_id) DO UPDATE SET allowed = excluded.allowed`)
     .run(placementId, studentId, Number(allowed));
   if (allowed) await provisionMemberOnPlacement(p, student, actor);
-  else removeMemberFromPlacement(p, student, false, actor);
+  else removeMemberFromPlacement(p, student, true, actor);
   audit(actor, allowed ? "placement.member.grant" : "placement.member.revoke",
     `${p.lab_name}@${p.node_name}/${student.username}`);
 }

@@ -339,7 +339,7 @@ export default async function PlacementPage({
           )}
           <div className="mt-4 space-y-2">
             <h3 className="font-medium">Manage access on this node</h3>
-            <p className="text-sm text-muted-foreground">Removing access keeps lab membership, access on other nodes, and all data. Changes take effect when the agent completes the task. Check <Link href="/logs" className="underline">Logs</Link> for task results; removal can be retried below.</p>
+            <p className="text-sm text-muted-foreground">Removing access permanently deletes the student’s home directory on this node. Lab membership, access on other nodes, and shared cold storage are kept. Changes take effect when the agent completes the task. Check <Link href="/logs" className="underline">Logs</Link> for task results; removal can be retried below.</p>
             {roster.map((member) => {
               const included = members.some((m) => m.id === member.id);
               return <div key={member.id} className="flex flex-wrap items-center gap-2 text-sm">
@@ -355,7 +355,7 @@ export default async function PlacementPage({
                   <input type="hidden" name="studentId" value={member.id} />
                   <input type="hidden" name="allowed" value="0" />
                   <ConfirmButton size="sm" variant="destructive" disabled={!canEdit}
-                    confirm={`Remove ${member.username} from ${placement.node_name} only? Membership, other nodes, and data are kept.`}>
+                    confirm={`Remove ${member.username} from ${placement.node_name} and permanently delete their home directory on this node? Lab membership, access on other nodes, and shared cold storage are kept.`}>
                     {included ? "Remove from this node" : "Retry / enforce removal"}
                   </ConfirmButton>
                 </form>}

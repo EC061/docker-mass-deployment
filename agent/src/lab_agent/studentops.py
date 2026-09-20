@@ -242,8 +242,8 @@ def _delete_student_branches(cfg: AgentConfig, tier_name: str, lab: str, usernam
         dataset = f"{obs.dataset}/{username}"
         if zfs.dataset_exists(dataset):
             zfs.destroy_dataset(dataset, recursive=True)
-        else:
-            coldfs.remove_child(obs.path, username)
+        # Destroying a quota dataset can leave its mountpoint directory in the parent dataset.
+        coldfs.remove_child(obs.path, username)
 
 
 def remove_student(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
