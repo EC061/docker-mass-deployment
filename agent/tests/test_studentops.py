@@ -1,8 +1,10 @@
+from pathlib import Path
+
 import pytest
 from storagehelp import make_cfg
 
 from lab_agent import studentops
-from lab_agent.executors import zfs
+from lab_agent.executors import coldfs, zfs
 from lab_agent.executors.coldfs import ColdFsError
 from lab_agent.storage import service
 
@@ -250,6 +252,62 @@ def test_remove_data_covers_every_branch(monkeypatch):
     })
     assert removed == [("/mnt/lab-storage/fast1/labs/bio", "alice"),
                        ("/mnt/lab-storage/fast2/labs/bio", "alice")]
+
+
+@pytest.mark.parametrize("tier_name", ["fast", "cold"])
+@pytest.mark.parametrize("quota_dataset", [False, True])
+@pytest.mark.parametrize("pool_count", [1, 2])
+def test_student_deletion_removes_directories_and_preserves_other_students(
+    monkeypatch, tmp_path, tier_name, quota_dataset, pool_count,
+):
+    remove_child = coldfs.remove_child
+    fast_pools = tuple(f"fast{i}" for i in range(pool_count))
+    cold_pools = tuple(f"cold{i}" for i in range(pool_count))
+    _, _, _, datasets = patch_storage(monkeypatch, fast_pools=fast_pools, cold_pools=cold_pools)
+    monkeypatch.setattr(coldfs, "remove_child", remove_child)
+    config = cfg(fast_pools=list(fast_pools), cold_pools=list(cold_pools),
+                 fast_mount_root=str(tmp_path / "fast"),
+                 cold_mount_root=str(tmp_path / "cold"), branch_root=str(tmp_path / "branches"))
+    tier = config.storage.tier(tier_name)
+    homes = []
+    for pool in tier.pools:
+        root = Path(tier.branch_mount(pool, "bio"))
+        home = root / "alice"
+        home.mkdir(parents=True)
+        (home / "work.txt").write_text("student data")
+        other = root / "bob"
+        other.mkdir()
+        (other / "keep.txt").write_text("keep")
+        (home / "cold-storage").symlink_to(other, target_is_directory=True)
+        homes.append(home)
+        if quota_dataset:
+            datasets.add(f"{tier.branch_dataset(pool, 'bio')}/alice")
+    # The fake ZFS destroy leaves the mountpoint behind, as a real destroy may do.
+    if tier_name == "fast":
+        studentops.remove_student(config, {
+            "lab": "bio", "username": "alice", "delete_data": True,
+        })
+    else:
+        studentops.delete_cold_student(config, {"lab": "bio", "username": "alice"})
+    assert not datasets
+    for home in homes:
+        assert not home.exists()
+        assert (home.parent / "bob" / "keep.txt").read_text() == "keep"
+
+
+def test_failed_dataset_destroy_does_not_delete_its_contents(monkeypatch):
+    _, removed, _, datasets = patch_storage(monkeypatch)
+    datasets.add("fast/labs/bio/alice")
+
+    def fail_destroy(*args, **kwargs):
+        raise zfs.ZfsError("dataset is busy")
+
+    monkeypatch.setattr(zfs, "destroy_dataset", fail_destroy)
+    with pytest.raises(zfs.ZfsError, match="busy"):
+        studentops.remove_student(cfg(), {
+            "lab": "bio", "username": "alice", "delete_data": True,
+        })
+    assert removed == []
 
 
 def test_remove_data_refuses_while_a_branch_is_missing(monkeypatch):

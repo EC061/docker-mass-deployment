@@ -68,7 +68,7 @@ describe("independent placement access", () => {
     expect(placements.listPlacementMembers(p.id)).toHaveLength(2);
   });
 
-  it("revokes only one node, keeps data and roster, and survives automatic provisioning and recreation", async () => {
+  it("revokes one node and deletes its home, keeps cold data and roster, and survives recreation", async () => {
     const lab = newLab("revoke-access");
     const { student } = await students.addStudentToLab(lab.id, { username: "revoke-alice" });
     const a = await grant(lab.id, nodeA);
@@ -76,8 +76,9 @@ describe("independent placement access", () => {
     enqueueTask.mockClear();
     await placements.setPlacementMemberAccess(a.id, student.id, false, "admin");
     expect(enqueueTask).toHaveBeenCalledWith("access-a", "student.remove", {
-      lab: lab.name, username: student.username, delete_data: false,
+      lab: lab.name, username: student.username, delete_data: true,
     }, "admin");
+    expect(enqueueTask).toHaveBeenCalledTimes(1);
     expect(students.listMembers(lab.id).map((m) => m.id)).toContain(student.id);
     expect(placements.listPlacementMembers(b.id).map((m) => m.id)).toContain(student.id);
     expect(await placements.provisionMemberOnPlacement(a, student)).toBeNull();

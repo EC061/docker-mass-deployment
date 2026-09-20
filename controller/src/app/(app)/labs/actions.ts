@@ -239,7 +239,7 @@ export async function placementMemberAccessAction(formData: FormData) {
   revalidatePath(path);
   redirect(`${path}?saved=${putFlash(allowed
     ? "Access provisioning queued for this node."
-    : "Account removal queued for this node. Lab membership, other nodes, and data are preserved. Check Tasks for completion; retry removal here if it fails.")}`);
+    : "Account and home directory deletion queued for this node. Lab membership, access on other nodes, and shared cold storage are preserved. Check Tasks for completion; retry removal here if it fails.")}`);
 }
 
 export async function setPlacementQuotaAction(formData: FormData) {
