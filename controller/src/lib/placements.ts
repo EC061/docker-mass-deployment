@@ -766,6 +766,10 @@ export function updatePlacementQuota(
 ): void {
   const p = getPlacement(placementId);
   if (!p) throw new Error("Unknown placement");
+  if (db().prepare("SELECT 1 FROM temporary_quotas WHERE placement_id = ? AND state <> 'restored'")
+    .get(placementId)) {
+    throw new Error("A temporary quota is active or awaiting restoration; resolve it before changing limits");
+  }
   // Measured against what is left AFTER every other lab on this node — see nodeCommitmentBytes.
   const commitment = nodeCommitmentBytes(p.node_id, placementId);
   if (input.fastQuotaBytes !== undefined) {

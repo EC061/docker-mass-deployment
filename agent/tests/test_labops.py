@@ -92,6 +92,21 @@ def test_create_lab_shards_the_quota_across_a_multi_pool_tier(monkeypatch, tmp_p
     assert sum(fast.values()) == 2 * TB
 
 
+def test_expiry_restores_fast_and_cold_to_safe_usage_floors(monkeypatch, tmp_path):
+    _, _, _, usages = _patch_storage(monkeypatch, tmp_path)
+    cfg = _cfg(state_db=str(tmp_path / "state.db"))
+    labops.create_lab(cfg, {"lab": "bio", "fast_quota_bytes": 4 * TB,
+                           "slow_quota_bytes": 4 * TB})
+    usages["fast/labs/bio"] = zfs.Usage("fast/labs/bio", 2 * TB, 4 * TB, 2 * TB)
+    usages["slow/labs/bio"] = zfs.Usage("slow/labs/bio", 3 * TB, 4 * TB, TB)
+    result, _ = labops.set_lab_quota(cfg, {
+        "lab": "bio", "fast_quota_bytes": TB, "slow_quota_bytes": TB, "restore_floor": True,
+    })
+    assert result["fast"]["quota_bytes"] == 2 * TB
+    assert result["slow"]["quota_bytes"] == 3 * TB
+    assert result["fast"]["incomplete"] is False
+
+
 def test_set_lab_quota_live(monkeypatch, tmp_path):
     _c, quotas, _d, _ = _patch_storage(
         monkeypatch, tmp_path, mounted={"fast/labs", "slow/labs", "fast/labs/bio", "slow/labs/bio"}

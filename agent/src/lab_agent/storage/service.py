@@ -17,7 +17,7 @@ Layering:
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from ..executors import zfs
@@ -638,7 +638,8 @@ def mount_lab(
 
 
 def set_lab_quota(
-    cfg: AgentConfig, tier_name: str, lab: str, quota_bytes: int | None
+    cfg: AgentConfig, tier_name: str, lab: str, quota_bytes: int | None,
+    *, restore_floor: bool = False,
 ) -> dict[str, Any]:
     """Change a lab's logical tier quota and reshard it across the branches."""
     lab = validate_lab_name(lab)
@@ -658,7 +659,16 @@ def set_lab_quota(
         # Clearing a lab's quota would leave unlimited datasets behind. Refuse: a tier quota is a
         # hard limit by design, and "unlimited" is expressed as a quota equal to pool capacity.
         raise StorageError("a lab tier quota may not be cleared; set an explicit byte count")
-    allocation = plan_allocation(tier, lab, quota_bytes, branches, state)
+    # ZFS's zero quota means unlimited. Even an empty branch needs a positive expiry limit.
+    planning_branches = [
+        replace(b, used=max(1, b.used)) if restore_floor and b.present else b for b in branches
+    ]
+    allocation = plan_allocation(tier, lab, quota_bytes, planning_branches, state)
+    if restore_floor and allocation.over_committed:
+        # Expired temporary limits reclaim all safe headroom, retaining unavailable allocations.
+        # Persist the enforceable total so subsequent rebalances cannot violate quota accounting.
+        quota_bytes = max(quota_bytes, allocation.total)
+        allocation = plan_allocation(tier, lab, quota_bytes, planning_branches, state)
     if allocation.over_committed:
         # Do not persist a logical quota that the underlying hard quotas physically cannot enforce.
         # The existing allocation remains authoritative until data is removed or the admin chooses
