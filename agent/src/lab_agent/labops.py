@@ -67,18 +67,39 @@ def create_lab(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
 def set_lab_quota(cfg: AgentConfig, params: dict[str, Any]) -> tuple[Any, str]:
     lab = params["lab"]
     logs = []
+    restorations = {}
     if "fast_quota_bytes" in params:
-        result = service.set_lab_quota(cfg, TIER_FAST, lab, params["fast_quota_bytes"])
+        result = service.set_lab_quota(
+            cfg, TIER_FAST, lab, params["fast_quota_bytes"],
+            restore_floor=params.get("restore_floor") is True,
+        )
         split = ", ".join(f"{p}={q}" for p, q in sorted(result.get("allocation", {}).items()))
         logs.append(f"fast quota -> {params['fast_quota_bytes']} ({split or 'no branch'})")
         logs += [w for w in result.get("logs", []) if w.startswith(("PARTIAL", "configured"))]
+        if params.get("restore_floor") is True:
+            restorations["fast"] = result
     if "slow_quota_bytes" in params:
-        logs.append(coldstore.set_lab_quota(cfg, lab, params["slow_quota_bytes"]))
+        if params.get("restore_floor") is True:
+            if not cfg.slow_is_zfs:
+                raise service.StorageError("cold quota must be restored on its storage owner")
+            restored = service.set_lab_quota(
+                cfg, TIER_COLD, lab, params["slow_quota_bytes"], restore_floor=True,
+            )
+            logs.extend(restored.get("logs", []))
+            restorations["slow"] = restored
+        else:
+            logs.append(coldstore.set_lab_quota(cfg, lab, params["slow_quota_bytes"]))
     result = {
         "lab": lab,
         "fast": _usage_dict(_fast_usage(cfg, lab)),
         "slow": _usage_dict(coldstore.lab_usage(cfg, lab)),
     }
+    for tier, restoration in restorations.items():
+        # Report unavailable allocations as committed quota, not apparently reclaimed capacity.
+        quota = result[tier]["quota_bytes"]
+        if quota is not None:
+            result[tier]["quota_bytes"] = quota + restoration["reserved_bytes"]
+        result[tier]["incomplete"] = bool(restoration["usage"]["missing_pools"])
     return result, "; ".join(logs) or "no quota change requested"
 
 

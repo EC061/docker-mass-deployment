@@ -772,6 +772,20 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
       created_at INTEGER NOT NULL
     );`,
   },
+  {
+    id: "0035_temporary_quotas",
+    sql: `CREATE TABLE temporary_quotas (
+      placement_id INTEGER PRIMARY KEY REFERENCES lab_placements(id) ON DELETE CASCADE,
+      original_fast INTEGER,
+      original_cold INTEGER,
+      expires_at INTEGER NOT NULL,
+      state TEXT NOT NULL DEFAULT 'active',
+      task_id TEXT,
+      retry_at INTEGER NOT NULL DEFAULT 0,
+      detail TEXT,
+      notified INTEGER NOT NULL DEFAULT 0
+    );`,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

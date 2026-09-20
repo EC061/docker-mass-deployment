@@ -9,6 +9,8 @@ import { Label } from "@/components/ui/label";
 import { Select } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { db } from "@/lib/db";
+import { temporaryQuota } from "@/lib/temporary-quotas";
+import { QuotaDuration } from "../../../_components/QuotaDuration";
 import { listMembers } from "@/lib/students";
 import { takeFlash } from "@/lib/flash";
 import { bytesToQuotaInput, fmtBytes, pct } from "@/lib/format";
@@ -120,6 +122,8 @@ export default async function PlacementPage({
   const coldUsage = latestUsage(placement.id, "cold");
   const quotaTask = latestTask(placement, "lab.set_quota");
   const quotaState = taskLabel(quotaTask);
+  const temporary = temporaryQuota(placement.id);
+  const quotaLocked = temporary !== undefined && temporary.state !== "restored";
   const recreateState = taskLabel(latestTask(placement, "container.recreate"));
   const destroyTask = latestTask(placement, "lab.destroy");
   // A `deleting` placement whose lab.destroy FAILED is not "queued" — it is stuck, and nothing else
@@ -209,6 +213,18 @@ export default async function PlacementPage({
             {quotaState ? <Badge variant={quotaState.variant}>{quotaState.text}</Badge> : null}
           </div>
           {quotaTask?.error ? <p className="text-sm text-destructive">{quotaTask.error}</p> : null}
+          {temporary && (
+            <div className="rounded-md border p-3 space-y-1" role="status">
+              <p className="font-medium">Temporary increase: {temporary.state}</p>
+              <p className="text-sm">Expires {new Date(temporary.expires_at).toISOString()} · Original limits:
+                {temporary.original_fast !== null ? ` fast ${fmtBytes(temporary.original_fast)}` : ""}
+                {temporary.original_cold !== null ? ` cold ${fmtBytes(temporary.original_cold)}` : ""}</p>
+              {temporary.detail && <p className="text-sm">{temporary.detail}</p>}
+              {quotaLocked && <p className="text-xs text-muted-foreground">Limits are protected until restoration completes.
+                Expiry is checked every minute; incomplete restoration is retried every five minutes.
+                Admin email alerts require alerts and SMTP configured in Settings.</p>}
+            </div>
+          )}
           <form action={setPlacementQuotaAction} className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <input type="hidden" name="placementId" value={placement.id} />
             <div>
@@ -259,7 +275,10 @@ export default async function PlacementPage({
                 </>
               )}
             </div>
-            <div className="flex items-end"><Button type="submit" disabled={!canEdit}>Apply live</Button></div>
+            <div className="space-y-3">
+              <QuotaDuration disabled={!canEdit || quotaLocked} />
+              <Button type="submit" disabled={!canEdit || quotaLocked}>Apply live</Button>
+            </div>
           </form>
         </CardContent>
       </Card>

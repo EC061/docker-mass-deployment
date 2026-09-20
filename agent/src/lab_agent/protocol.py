@@ -13,7 +13,7 @@ from typing import Any
 
 # Wire-protocol version. Bumped on any breaking frame change; the controller refuses a mismatch
 # (this redesign is a clean break — agents are reinstalled, so there is no legacy compatibility).
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 
 # Frame types (agent <-> controller).
 T_HELLO = "hello"  # agent -> controller: identity + capabilities on connect

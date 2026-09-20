@@ -84,6 +84,21 @@ Hard lab quotas remain ZFS quotas. The configured logical quota is split across 
 datasets; allocation changes shrink donors before growing receivers, never move files, never shrink
 below used data, and maintain `sum(branch quotas + missing reservations) <= configured quota`.
 
+Under a placement's **Live quotas**, select a permanent change or a temporary increase for one week,
+two weeks, or a custom number of whole days. Enter the increased total limit, not the extra space.
+The period starts on submission, and the original limits and expiry are saved in the controller DB.
+Expiry runs every minute independently of scheduled rebalancing and catches up after a restart;
+offline nodes apply queued restoration when they reconnect. Temporary limits cannot be overwritten
+while active or awaiting restoration.
+
+If usage exceeds the original quota at expiry, the agent shrinks each branch as far as safely
+possible without removing files or releasing missing-branch reservations. The controller shows the
+violation under Live quotas, records it in Logs, and uses configured admin email alerts to notify
+administrators (enable alerts and SMTP in Settings). Restoration retries every five minutes until
+the original limit can be enforced. Shared cold quotas must be changed on their owner placement.
+This feature requires protocol version 3 on both the controller and node agents; upgrade them
+together.
+
 Per-student quotas, when set, work the same way one level down: the student's directory is promoted
 to a dataset on every branch and their quota is sharded across those datasets under the same
 invariants. A branch with no capacity left to back a positive quota is skipped, not created

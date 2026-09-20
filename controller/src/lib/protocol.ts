@@ -13,7 +13,7 @@
 
 import { z } from "zod";
 
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 const ts = z.number().finite().optional();
 

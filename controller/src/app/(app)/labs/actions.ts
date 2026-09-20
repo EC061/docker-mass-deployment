@@ -32,6 +32,7 @@ import { QUOTA_UNIT_BYTES, type QuotaUnit } from "@/lib/format";
 import { TIB } from "@/lib/settings";
 import { addStudentToLab, copyMembers, ensurePiAccess, removeStudentFromLab } from "@/lib/students";
 import { composeName } from "@/lib/names";
+import { increaseTemporaryQuota } from "@/lib/temporary-quotas";
 
 // Enforcing auth gate: throws/redirects when the caller is not a live admin, and returns the
 // verified email used as the audit actor. Call as the first line of every action.
@@ -249,8 +250,16 @@ export async function setPlacementQuotaAction(formData: FormData) {
   if (!placement) return;
   const fastAmount = formData.get("fastAmount");
   const coldAmount = formData.get("coldAmount");
+  const duration = formData.get("quotaDuration") ?? "permanent";
   try {
-    updatePlacementQuota(
+    const applyQuota = duration === "permanent" ? updatePlacementQuota : (
+      id: number, input: Parameters<typeof updatePlacementQuota>[1], actor?: string,
+    ) => {
+      if (!["7", "14", "custom"].includes(String(duration))) throw new Error("Invalid duration");
+      const days = Number(duration === "custom" ? formData.get("quotaDays") : duration);
+      increaseTemporaryQuota(id, input, days, actor!);
+    };
+    applyQuota(
       placementId,
       {
         fastQuotaBytes:
@@ -271,7 +280,9 @@ export async function setPlacementQuotaAction(formData: FormData) {
   }
   revalidatePath(`/labs/${placement.lab_id}`);
   revalidatePath(`/labs/${placement.lab_id}/placements/${placement.id}`);
-  const fid = putFlash("Quota update queued. Desired and agent-reported values are shown separately until it applies.");
+  const fid = putFlash(duration === "permanent"
+    ? "Quota update queued. Desired and agent-reported values are shown separately until it applies."
+    : "Temporary increase queued. The expiry period starts now; original limits will be restored automatically.");
   redirect(`/labs/${placement.lab_id}/placements/${placement.id}?saved=${fid}`);
 }
 

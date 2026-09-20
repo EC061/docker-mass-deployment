@@ -8,6 +8,7 @@ import { db } from "./db";
 import { enqueueTask } from "./queue";
 import { getSetting } from "./settings";
 import { nodeHasZfs } from "./storage";
+import { scheduleTemporaryQuotas } from "./temporary-quotas";
 
 // Approximate byte size of a single `logs` row's textual content. SQLite has no cheap per-table
 // size, so we sum the text-column lengths plus a fixed estimate for the int columns + row overhead.
@@ -320,7 +321,12 @@ export function scheduleUsageScans(now = Date.now()): string[] {
  */
 export function startMaintenance(): NodeJS.Timeout {
   pruneOldData();
+  scheduleTemporaryQuotas();
+  let lastHourly = Date.now();
   const tick = () => {
+    scheduleTemporaryQuotas();
+    if (Date.now() - lastHourly < 60 * 60 * 1000) return;
+    lastHourly = Date.now();
     pruneOldData();
     scheduleScrubs();
     scheduleUsageScans();
@@ -329,5 +335,5 @@ export function startMaintenance(): NodeJS.Timeout {
     // is computed off durable state rather than an in-memory counter.
     if (backupDue()) void backupAll();
   };
-  return setInterval(tick, 60 * 60 * 1000);
+  return setInterval(tick, 60 * 1000);
 }

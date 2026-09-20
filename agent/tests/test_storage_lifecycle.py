@@ -477,6 +477,41 @@ def test_quota_reduction_below_used_is_rejected_without_changing_the_record(monk
     assert state.lab_or_none("cold", "labA").configured_quota_bytes == 2 * TB
 
 
+def test_expired_quota_shrinks_to_usage_then_restores_after_cleanup(monkeypatch, tmp_path):
+    fake, c = _two_pool_lab(monkeypatch, tmp_path)
+    service.set_lab_quota(c, "cold", "labA", TB, restore_floor=True)
+    assert fake.datasets["cold1/labs/labA"].quota == 800 * GB
+    assert fake.datasets["cold2/labs/labA"].quota == 500 * GB
+    state = StorageState.load(c.storage_state_path)
+    assert state.lab_or_none("cold", "labA").configured_quota_bytes == 1300 * GB
+    fake.datasets["cold1/labs/labA"].used = 100 * GB
+    service.set_lab_quota(c, "cold", "labA", TB, restore_floor=True)
+    assert sum(fake.datasets[n].quota for n in
+               ("cold1/labs/labA", "cold2/labs/labA")) == TB
+
+
+def test_expired_quota_does_not_leave_an_empty_branch_with_temporary_headroom(monkeypatch, tmp_path):
+    fake, c = _two_pool_lab(monkeypatch, tmp_path)
+    fake.datasets["cold2/labs/labA"].used = 0
+    service.set_lab_quota(c, "cold", "labA", 100 * GB, restore_floor=True)
+    assert fake.datasets["cold2/labs/labA"].quota == 1
+    state = StorageState.load(c.storage_state_path)
+    total = sum(fake.datasets[n].quota for n in ("cold1/labs/labA", "cold2/labs/labA"))
+    assert total == state.lab_or_none("cold", "labA").configured_quota_bytes
+
+
+def test_expired_quota_retains_missing_branch_reservations(monkeypatch, tmp_path):
+    fake, c = _two_pool_lab(monkeypatch, tmp_path)
+    missing_quota = fake.datasets["cold1/labs/labA"].quota
+    fake.drop_pool("cold1")
+    result = service.set_lab_quota(c, "cold", "labA", TB, restore_floor=True)
+    assert result["reserved_bytes"] == missing_quota
+    assert fake.datasets["cold2/labs/labA"].quota == 500 * GB
+    assert result["usage"]["missing_pools"] == ["cold1"]
+    state = StorageState.load(c.storage_state_path)
+    assert state.lab_or_none("cold", "labA").configured_quota_bytes == missing_quota + 500 * GB
+
+
 def test_no_branch_is_left_without_a_quota(monkeypatch, tmp_path):
     fake, c = _two_pool_lab(monkeypatch, tmp_path)
     fake.add_pool("cold3", 8 * TB)
