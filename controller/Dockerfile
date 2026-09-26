@@ -3,7 +3,7 @@
 
 # Base image pinned by digest for reproducible, tamper-evident builds (M-09). Dependabot bumps the
 # digest; the tag comment keeps it readable.
-FROM node:26-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS deps
+FROM node:26-bookworm-slim@sha256:662933cf47f013bc8e4beb31a6116448427a82057ba7c42c97e4c5ba766504c2 AS deps
 WORKDIR /app
 # Build tools for native modules (better-sqlite3 / honker-node) if no prebuild is available.
 RUN apt-get update && apt-get install -y --no-install-recommends python3 make g++ \
@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends python3 make g+
 COPY package.json package-lock.json* ./
 RUN npm ci
 
-FROM node:26-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS build
+FROM node:26-bookworm-slim@sha256:662933cf47f013bc8e4beb31a6116448427a82057ba7c42c97e4c5ba766504c2 AS build
 WORKDIR /app
 # honker-node >= 0.4.0 links the system SQLite dynamically (0.3.x bundled it statically), and the
 # slim base does not ship libsqlite3. `next build` loads the native module while collecting page
@@ -23,7 +23,7 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-FROM node:26-bookworm-slim@sha256:cd9f682fa2885cd1056e830424764158570061c59736a1da836bc3d73df095ae AS runtime
+FROM node:26-bookworm-slim@sha256:662933cf47f013bc8e4beb31a6116448427a82057ba7c42c97e4c5ba766504c2 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 # Runtime half of the honker-node SQLite dependency described in the build stage.
