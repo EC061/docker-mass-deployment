@@ -11,6 +11,7 @@ import { db } from "@/lib/db";
 import { fmtBytes } from "@/lib/format";
 import { nodeCommitmentBytes } from "@/lib/placements";
 import { parseJsonObject, parsePoolTelemetry } from "@/lib/storage";
+import { describeTask } from "@/lib/task-description";
 import {
   attachStoragePoolAction,
   createStoragePoolAction,
@@ -35,6 +36,7 @@ interface NodeRow {
 interface TaskRow {
   task_uuid: string;
   action: string;
+  params: string | null;
   state: string;
   error: string | null;
   created_at: number;
@@ -90,7 +92,7 @@ export default async function NodeStoragePage({
   const freeDevices = devices.filter((d) => d.by_id && !d.in_use && !d.mounted && !d.zfs_pool);
   const unattachedPools = pools.filter((p) => !Array.isArray(p.tiers) || p.tiers.length === 0);
   const tasks = db().prepare(
-    `SELECT task_uuid, action, state, error, created_at FROM task_log
+    `SELECT task_uuid, action, params, state, error, created_at FROM task_log
      WHERE node = ? AND (action LIKE 'storage.%' OR action = 'node.scrub')
      ORDER BY created_at DESC LIMIT 12`,
   ).all(name) as TaskRow[];
@@ -295,7 +297,12 @@ export default async function NodeStoragePage({
         <Table><TableHeader><TableRow><TableHead>Action</TableHead><TableHead>State</TableHead><TableHead>Time</TableHead><TableHead>Detail</TableHead></TableRow></TableHeader>
           <TableBody>{tasks.length === 0 ? <TableRow><TableCell colSpan={4} className="text-muted-foreground">No storage tasks yet.</TableCell></TableRow> : tasks.map((task) => (
             <TableRow key={task.task_uuid}>
-              <TableCell>{task.action}</TableCell>
+              <TableCell>
+                <Link href={`/tasks/${encodeURIComponent(task.task_uuid)}`} className="text-primary hover:underline">
+                  {describeTask(task.action, task.params)}
+                </Link>
+                <div className="text-xs text-muted-foreground">{node.name} · <code>{task.action}</code></div>
+              </TableCell>
               <TableCell><Badge variant={task.state === "ok" ? "ok" : task.state === "failed" ? "err" : "warn"}>{task.state}</Badge></TableCell>
               <TableCell>{new Date(task.created_at).toLocaleString()}</TableCell>
               <TableCell className="max-w-xl text-xs text-warn">{task.error ?? ""}</TableCell>

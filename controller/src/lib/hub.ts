@@ -15,6 +15,7 @@ import { alertNodeOffline, alertTaskFailed, maybeAlertOnLog } from "./alerts";
 import { db } from "./db";
 import { env } from "./env";
 import { ingestTelemetry } from "./ingest";
+import { recordTaskResultLog } from "./logs";
 import {
   completeStudentRemoval,
   confirmPlacementDestroyed,
@@ -367,14 +368,7 @@ function handleResult(node: string, frame: any): void {
       completeStudentRemoval(frame.id);
     }
   }
-  if (frame.logs) {
-    db()
-      .prepare(
-        `INSERT INTO logs (ts, level, source, task_id, msg, detail)
-         VALUES (?, ?, 'task', ?, ?, ?)`,
-      )
-      .run(Date.now(), frame.ok ? "INFO" : "ERROR", frame.id, `task ${frame.ok ? "ok" : "failed"}`, frame.logs);
-  }
+  if (t) recordTaskResultLog(t, frame);
 }
 
 function handleLog(node: string, frame: any): void {
