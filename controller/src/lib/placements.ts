@@ -1048,3 +1048,38 @@ export function confirmPlacementDestroyed(labName: string, nodeName: string): vo
     db().prepare("DELETE FROM lab_placements WHERE id = ?").run(p.id);
   }
 }
+
+export interface PlacementTaskStatus {
+  state: string;
+  error: string | null;
+  updated_at: number;
+}
+
+/**
+ * Newest task of `action` for this placement, for the status badge on its page. A failed
+ * container.recreate or lab.set_quota queued before a later successful lab.create is dropped: that
+ * lab.create rebuilt the container and set the quotas from the placement's authoritative row, so the
+ * failure no longer describes the node, and nothing else would ever replace it as the newest row.
+ */
+export function latestPlacementTask(p: Placement, action: string): PlacementTaskStatus | null {
+  const row = db()
+    .prepare(
+      `SELECT state, error, created_at, updated_at FROM task_log
+       WHERE node = ? AND action = ? AND json_extract(params, '$.lab') = ?
+       ORDER BY created_at DESC LIMIT 1`,
+    )
+    .get(p.node_name, action, p.lab_name) as (PlacementTaskStatus & { created_at: number }) | undefined;
+  if (!row) return null;
+  if (row.state === "failed" && (action === "container.recreate" || action === "lab.set_quota")) {
+    const rebuilt = db()
+      .prepare(
+        `SELECT 1 FROM task_log
+         WHERE node = ? AND action = 'lab.create' AND state = 'ok'
+           AND json_extract(params, '$.lab') = ? AND created_at > ?
+         LIMIT 1`,
+      )
+      .get(p.node_name, p.lab_name, row.created_at);
+    if (rebuilt) return null;
+  }
+  return { state: row.state, error: row.error, updated_at: row.updated_at };
+}

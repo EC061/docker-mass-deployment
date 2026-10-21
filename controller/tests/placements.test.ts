@@ -663,3 +663,36 @@ describe("forceDeletePlacement", () => {
     d.prepare("UPDATE nodes SET online = 1 WHERE name IN ('own-1','smb-1')").run();
   });
 });
+
+describe("latestPlacementTask", () => {
+  let n = 0;
+  const log = (p: { node_name: string; lab_name: string }, action: string, state: string, at: number) =>
+    dbmod.db().prepare(
+      `INSERT INTO task_log (task_uuid, node, action, params, state, error, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(`latest-${n++}`, p.node_name, action, JSON.stringify({ lab: p.lab_name }), state,
+      state === "failed" ? "boom" : null, at, at);
+
+  it("drops a failed recreate or quota change superseded by a later successful lab.create", async () => {
+    const lab = newLab("superseded-badge");
+    const p = await grant(lab.id, nodeA);
+    log(p, "container.recreate", "failed", 100);
+    log(p, "lab.set_quota", "failed", 100);
+    expect(placements.latestPlacementTask(p, "container.recreate")?.state).toBe("failed");
+    log(p, "lab.create", "failed", 200);
+    expect(placements.latestPlacementTask(p, "lab.set_quota")?.state).toBe("failed");
+    log(p, "lab.create", "ok", 300);
+    expect(placements.latestPlacementTask(p, "container.recreate")).toBeNull();
+    expect(placements.latestPlacementTask(p, "lab.set_quota")).toBeNull();
+  });
+
+  it("keeps a failure queued after the lab.create, and failures of other actions", async () => {
+    const lab = newLab("current-failure-badge");
+    const p = await grant(lab.id, nodeA);
+    log(p, "lab.destroy", "failed", 100);
+    log(p, "lab.create", "ok", 200);
+    log(p, "container.recreate", "failed", 300);
+    expect(placements.latestPlacementTask(p, "container.recreate")).toMatchObject({ state: "failed", error: "boom" });
+    expect(placements.latestPlacementTask(p, "lab.destroy")?.state).toBe("failed");
+  });
+});
