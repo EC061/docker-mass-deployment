@@ -17,11 +17,13 @@ import { bytesToQuotaInput, fmtBytes, pct } from "@/lib/format";
 import {
   containerOptionsOf,
   getPlacement,
+  latestPlacementTask,
   listPlacementMembers,
   listPlacements,
   nodePoolCapacityBytes,
   placementHostname,
   type Placement,
+  type PlacementTaskStatus,
 } from "@/lib/placements";
 import {
   removePlacementAction,
@@ -49,12 +51,6 @@ interface Usage {
   ts: number;
 }
 
-interface TaskStatus {
-  state: string;
-  error: string | null;
-  updated_at: number;
-}
-
 function latestUsage(placementId: number, pool: string): Usage | null {
   const row = db()
     .prepare(
@@ -65,18 +61,7 @@ function latestUsage(placementId: number, pool: string): Usage | null {
   return row ?? null;
 }
 
-function latestTask(placement: Placement, action: string): TaskStatus | null {
-  const row = db()
-    .prepare(
-      `SELECT state, error, updated_at FROM task_log
-       WHERE node = ? AND action = ? AND json_extract(params, '$.lab') = ?
-       ORDER BY created_at DESC LIMIT 1`,
-    )
-    .get(placement.node_name, action, placement.lab_name) as TaskStatus | undefined;
-  return row ?? null;
-}
-
-function taskLabel(task: TaskStatus | null): { text: string; variant: "ok" | "warn" | "err" } | null {
+function taskLabel(task: PlacementTaskStatus | null): { text: string; variant: "ok" | "warn" | "err" } | null {
   if (!task) return null;
   if (task.state === "ok") return { text: "applied", variant: "ok" };
   if (task.state === "failed") return { text: "failed", variant: "err" };
@@ -120,12 +105,12 @@ export default async function PlacementPage({
   );
   const fastUsage = latestUsage(placement.id, "fast");
   const coldUsage = latestUsage(placement.id, "cold");
-  const quotaTask = latestTask(placement, "lab.set_quota");
+  const quotaTask = latestPlacementTask(placement, "lab.set_quota");
   const quotaState = taskLabel(quotaTask);
   const temporary = temporaryQuota(placement.id);
   const quotaLocked = temporary !== undefined && temporary.state !== "restored";
-  const recreateState = taskLabel(latestTask(placement, "container.recreate"));
-  const destroyTask = latestTask(placement, "lab.destroy");
+  const recreateState = taskLabel(latestPlacementTask(placement, "container.recreate"));
+  const destroyTask = latestPlacementTask(placement, "lab.destroy");
   // A `deleting` placement whose lab.destroy FAILED is not "queued" — it is stuck, and nothing else
   // in the UI can move it: granting node access reports the lab is already placed everywhere. Offer
   // the removal again so it can be retried once the underlying cause (a missing pool, say) is fixed.
