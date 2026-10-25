@@ -5,17 +5,45 @@ Run `bash scripts/connectivity-watch.sh` on each affected node and on the contro
 are required. Requires Bash, curl, GNU timeout, and standard Linux network tools. Each request
 has a five-second limit; HTTP probes run sequentially and have their own UTC timestamps.
 
-For a detached 24-hour recording, first check `tmux ls`, then start a named session:
+The recorder runs continuously and deletes expired log files as it samples. Minute-sized files
+retain approximately the last 24 hours (up to one minute of extra history, plus one sampling
+cycle). Expiration uses the last write time, including after service restarts. `RETENTION`
+overrides the retention window in seconds. Only timestamped recorder logs are pruned.
+
+For a temporary detached recording, first check `tmux ls`, then start a named session:
 
 ```bash
 tmux new-session -d -s lab-connectivity \
   'bash /path/to/connectivity-watch.sh > /tmp/lab-connectivity-launch.log 2>&1'
 ```
 
-On the controller use `--controller`. The launcher log prints the output directory. Recordings
-use private directories and hourly files. They stop after 24 hours; logs remain for inspection.
-Use `DURATION=172800` for 48 hours. To stop early: `tmux kill-session -t lab-connectivity`.
-Run with `--once` for a quick check. Use a fresh `OUTPUT_DIR` for each invocation.
+On the controller use `--controller`. The launcher log prints the output directory. To stop:
+`tmux kill-session -t lab-connectivity`. Use `DURATION=3600` for a one-hour run, or `--once` for
+a quick check. `DURATION=0` (the default) has no time limit. Existing output directories must
+be owned by the recorder's user, have mode 0700, and must not be symlinks. An exclusive lock
+prevents two recorders writing the same directory.
+
+For continuous recording across reboots, install the systemd service on each host:
+
+```bash
+sudo install -d -m 755 /usr/local/lib/lab-connectivity
+sudo install -m 644 scripts/connectivity-watch.sh /usr/local/lib/lab-connectivity/
+sudo install -m 644 scripts/lab-connectivity.service /etc/systemd/system/
+# On the controller only (create this dedicated configuration file):
+echo 'CONTROLLER_MODE=1' | sudo tee /etc/default/lab-connectivity
+sudo systemctl daemon-reload
+sudo systemctl enable --now lab-connectivity
+```
+
+The service writes private logs under `/var/lib/lab-connectivity/`, restarts on failure, and
+starts at boot. It runs as root to read the agent journal, with filesystem writes restricted to
+its state directory. It does not restart or change the controller, agents, or labs. Stop it with
+`sudo systemctl disable --now lab-connectivity`. Inspect it with
+`sudo systemctl status lab-connectivity --no-pager` and
+`sudo journalctl -u lab-connectivity -n 30 --no-pager`.
+
+Copy logs outside the recorder directory before investigating an incident if they must survive
+the retention window. Stopping the recorder suspends pruning; startup removes expired files.
 
 The default IP is the current controller IP. Override `CONTROLLER_IP` when that changes.
 All requests bypass HTTP proxy environment variables and validate TLS certificates, including

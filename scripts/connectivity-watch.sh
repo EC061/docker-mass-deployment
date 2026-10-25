@@ -7,7 +7,7 @@ usage() {
   cat <<'EOF'
 Usage: connectivity-watch.sh [--controller] [--once]
 
-Read-only connectivity recorder; defaults to 24 hours, one sample every 20 seconds.
+Read-only connectivity recorder; runs continuously, retaining the last 24 hours.
 --controller also probes the backend and TLS proxy over loopback.
 --once records one sample and exits (including when probes fail).
 
@@ -16,14 +16,17 @@ Environment:
   CONTROLLER_IP    150.136.85.210 (pin independently of DNS)
   BACKEND_URL      http://127.0.0.1:8443/login
   CONTROL_URL      https://example.com/ (independent Internet reachability)
+  CONTROLLER_MODE  1 enables --controller probes (for systemd installations)
   INTERVAL        20 seconds between samples
-  DURATION        86400 seconds; a sample in progress may finish after this limit
+  DURATION        0 (continuous); positive seconds to limit a diagnostic run
+  RETENTION       86400 seconds of logs, with one-minute rotation granularity
   PROBE_TIMEOUT   5 seconds per request
   OUTPUT_DIR      /tmp/lab-connectivity-HOSTNAME-UTC_TIMESTAMP
 EOF
 }
 
 controller=false
+if [[ ${CONTROLLER_MODE:-0} == 1 ]]; then controller=true; fi
 once=false
 for arg in "$@"; do
   case "$arg" in
@@ -39,22 +42,34 @@ CONTROLLER_IP=${CONTROLLER_IP:-150.136.85.210}
 BACKEND_URL=${BACKEND_URL:-http://127.0.0.1:8443/login}
 CONTROL_URL=${CONTROL_URL:-https://example.com/}
 INTERVAL=${INTERVAL:-20}
-DURATION=${DURATION:-86400}
+DURATION=${DURATION:-0}
+RETENTION=${RETENTION:-86400}
 PROBE_TIMEOUT=${PROBE_TIMEOUT:-5}
-for value in "$INTERVAL" "$DURATION" "$PROBE_TIMEOUT"; do
+for value in "$INTERVAL" "$RETENTION" "$PROBE_TIMEOUT"; do
   if [[ ! "$value" =~ ^[1-9][0-9]{0,5}$ ]]; then
-    echo 'INTERVAL, DURATION and PROBE_TIMEOUT must be positive integers <= 999999' >&2
+    echo 'INTERVAL, RETENTION and PROBE_TIMEOUT must be positive integers <= 999999' >&2
     exit 2
   fi
 done
-for cmd in curl timeout date hostname; do
+if [[ ! "$DURATION" =~ ^(0|[1-9][0-9]{0,5})$ ]]; then
+  echo 'DURATION must be an integer from 0 to 999999' >&2
+  exit 2
+fi
+for cmd in curl timeout date hostname find flock stat; do
   command -v "$cmd" >/dev/null || { echo "Missing command: $cmd" >&2; exit 2; }
 done
 
 OUTPUT_DIR=${OUTPUT_DIR:-/tmp/lab-connectivity-$(hostname)-$(date -u +%Y%m%dT%H%M%SZ)}
-# Refuse existing directories so another user cannot redirect privileged log writes.
-mkdir -m 700 -- "$OUTPUT_DIR" || exit 2
-echo "Recording to $OUTPUT_DIR for $DURATION seconds"
+# Persistent services reuse their private state directory after restarts.
+if [[ ! -e "$OUTPUT_DIR" ]]; then mkdir -m 700 -- "$OUTPUT_DIR" || exit 2; fi
+if [[ -L "$OUTPUT_DIR" || ! -d "$OUTPUT_DIR" || ! -O "$OUTPUT_DIR" ||
+      $(stat -c %a -- "$OUTPUT_DIR") != 700 ]]; then
+  echo 'OUTPUT_DIR must be an owned, private (0700), non-symlink directory' >&2
+  exit 2
+fi
+exec 9>"$OUTPUT_DIR/.lock"
+flock -n 9 || { echo 'Another recorder is using OUTPUT_DIR' >&2; exit 2; }
+echo "Recording to $OUTPUT_DIR (duration=$DURATION; retention=$RETENTION seconds)"
 trap 'exit 0' INT TERM
 
 probe() {
@@ -78,7 +93,10 @@ snapshot() {
   timeout "$PROBE_TIMEOUT" ip route get "$CONTROLLER_IP" || true
   timeout "$PROBE_TIMEOUT" ss -tin dst "$CONTROLLER_IP" || true
   # No sudo prompts and no credentials/configuration dumps.
-  if command -v sudo >/dev/null; then
+  if (( EUID == 0 )); then
+    timeout "$PROBE_TIMEOUT" journalctl -u lab-agent --since '-2 minutes' \
+      -n 60 --no-pager 2>&1 || true
+  elif command -v sudo >/dev/null; then
     timeout "$PROBE_TIMEOUT" sudo -n journalctl -u lab-agent --since '-2 minutes' \
       -n 60 --no-pager 2>&1 || true
   fi
@@ -86,7 +104,10 @@ snapshot() {
 
 start=$SECONDS
 while :; do
-  logfile="$OUTPUT_DIR/$(date -u +%Y%m%dT%H).log"
+  cutoff=$(($(date -u +%s) - RETENTION))
+  find "$OUTPUT_DIR" -maxdepth 1 -type f -name '????????T????.log' \
+    ! -newermt "@$cutoff" -delete || exit 1
+  logfile="$OUTPUT_DIR/$(date -u +%Y%m%dT%H%M).log"
   {
     echo "$(date -u +%FT%TZ) sample host=$(hostname)"
     failed=false
@@ -101,10 +122,12 @@ while :; do
     fi
     if "$failed"; then snapshot; fi
   } >> "$logfile" 2>&1
-  if "$once" || (( SECONDS - start >= DURATION )); then break; fi
-  remaining=$((DURATION - (SECONDS - start)))
+  if "$once" || (( DURATION > 0 && SECONDS - start >= DURATION )); then break; fi
   delay=$INTERVAL
-  if (( remaining < delay )); then delay=$remaining; fi
+  if (( DURATION > 0 )); then
+    remaining=$((DURATION - (SECONDS - start)))
+    if (( remaining < delay )); then delay=$remaining; fi
+  fi
   sleep "$delay"
-  if (( SECONDS - start >= DURATION )); then break; fi
+  if (( DURATION > 0 && SECONDS - start >= DURATION )); then break; fi
 done

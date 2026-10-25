@@ -1,0 +1,27 @@
+[Unit]
+Description=Rolling controller connectivity diagnostics
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/bin/bash /usr/local/lib/lab-connectivity/connectivity-watch.sh
+Environment=OUTPUT_DIR=/var/lib/lab-connectivity
+EnvironmentFile=-/etc/default/lab-connectivity
+StateDirectory=lab-connectivity
+StateDirectoryMode=0700
+Restart=always
+RestartSec=10
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+CapabilityBoundingSet=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
