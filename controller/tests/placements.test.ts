@@ -2,6 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { decryptSecret } from "../src/lib/secrets";
 
 const tmp = mkdtempSync(join(tmpdir(), "lab-ctl-placements-"));
 process.env.DB_PATH = join(tmp, "controller.db");
@@ -396,6 +397,59 @@ describe("retryPlacementMembers", () => {
     setMemberState(p.id, "done", "failed");
     placements.destroyPlacement(p.id, "admin");
     expect(() => placements.retryPlacementMembers(p.id, "admin")).toThrow(/being removed/);
+  });
+});
+
+describe("resetPlacementMemberPassword", () => {
+  it("re-queues student.add for one active member and keeps the controller's copy of the new password", async () => {
+    const lab = newLab("reset-password");
+    const { student } = await students.addStudentToLab(lab.id, { username: "rotate" }, "admin");
+    await students.addStudentToLab(lab.id, { username: "keep" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    setMemberState(p.id, "rotate", "active");
+    setMemberState(p.id, "keep", "active");
+    // Delivery (or a one-time reveal) burns the stored secret, so an active member has none left to
+    // re-send -- which is why a reset has to generate a new password rather than replay the old one.
+    dbmod.db().prepare("UPDATE placement_members SET credential_secret = NULL WHERE placement_id = ?").run(p.id);
+    const keepBefore = memberRow(p.id, "keep").credential_secret;
+    enqueueTask.mockClear();
+
+    placements.resetPlacementMemberPassword(p.id, student.id, "admin");
+
+    const adds = enqueueTask.mock.calls.filter((c) => c[1] === "student.add");
+    expect(adds).toHaveLength(1);
+    expect(adds[0][0]).toBe("node-a");
+    const params = adds[0][2] as any;
+    expect(params).toMatchObject({
+      lab: lab.name, username: "rotate", uid: student.linux_uid, gid: student.linux_uid,
+    });
+    expect(params.password).toBeTruthy();
+
+    const rotated = memberRow(p.id, "rotate");
+    expect(rotated.state).toBe("provisioning");
+    expect(rotated.last_error).toBeNull();
+    // The stored secret must be exactly the password the agent sets: that is what the welcome email
+    // delivers once the node confirms.
+    expect(decryptSecret(rotated.credential_secret!)).toBe(params.password);
+    // The other member's credential and state are untouched.
+    expect(memberRow(p.id, "keep").credential_secret).toBe(keepBefore);
+    expect(memberRow(p.id, "keep").state).toBe("active");
+  });
+
+  it("refuses a member that is not active, a stranger, and a placement being removed", async () => {
+    const lab = newLab("reset-password-guard");
+    const { student } = await students.addStudentToLab(lab.id, { username: "stuck-reset" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    setMemberState(p.id, "stuck-reset", "failed");
+    expect(() => placements.resetPlacementMemberPassword(p.id, student.id, "admin"))
+      .toThrow(/Only an active member/);
+    expect(() => placements.resetPlacementMemberPassword(p.id, -1, "admin"))
+      .toThrow(/not on this placement/);
+
+    setMemberState(p.id, "stuck-reset", "active");
+    placements.destroyPlacement(p.id, "admin");
+    expect(() => placements.resetPlacementMemberPassword(p.id, student.id, "admin"))
+      .toThrow(/being removed/);
   });
 });
 
