@@ -343,8 +343,9 @@ export default async function PlacementPage({
                           <form action={resetMemberPasswordAction}>
                             <input type="hidden" name="placementId" value={placement.id} />
                             <input type="hidden" name="studentId" value={member.id} />
-                            <ConfirmButton size="sm" variant="secondary" disabled={!canEdit}
-                              confirm={`Reset ${member.username}'s password on ${placement.node_name}? A new password is generated, the node proves it over SSH, and the student is emailed it. Their current password stops working; files and running sessions are untouched.`}>
+                            <ConfirmButton size="sm" variant="secondary"
+                              disabled={!canEdit || placement.state !== "active"}
+                              confirm={`Reset ${member.username}'s password on ${placement.node_name}? A new password is generated, the node proves it over SSH, and the student is emailed it. Their current password stops working immediately. Their home directory and files are kept, but storage permissions and per-student quotas are re-applied by the provisioning step.`}>
                               Reset password
                             </ConfirmButton>
                           </form>

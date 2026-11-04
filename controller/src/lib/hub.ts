@@ -22,7 +22,7 @@ import {
   deliverPlacementCredential,
   maybeDeliverPlacementCompletion,
   getPlacementByLabNode,
-  markPlacementMemberState,
+  recordPlacementMemberAddResult,
   markPlacementStateByLabNode,
 } from "./placements";
 import { nodeStillAuthorized, verifyNodeAuth } from "./nodes";
@@ -335,11 +335,11 @@ function handleResult(node: string, frame: any): void {
       if (frame.ok) confirmPlacementDestroyed(labName, node);
       else markPlacementStateByLabNode(labName, node, "deleting", frame.error ?? "lab.destroy failed");
     } else if (labName && params.username && t.action === "student.add") {
-      markPlacementMemberState(
+      recordPlacementMemberAddResult(
         labName,
         node,
         params.username,
-        frame.ok ? "active" : "failed",
+        frame.ok,
         frame.ok ? undefined : (frame.error ?? "student.add failed"),
       );
       if (frame.ok) {

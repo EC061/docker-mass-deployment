@@ -786,6 +786,15 @@ If you have questions, reply to this email and {sender} ({sender_email}) will ge
       notified INTEGER NOT NULL DEFAULT 0
     );`,
   },
+  {
+    // A password reset re-dispatches student.add for a member that was already `active`. The agent
+    // runs chpasswd before its SSH check, so a failure can leave the NEW password live and the old
+    // one gone. Marking that member `failed` hides the pending credential from both the welcome
+    // email and the one-time reveal, locking the student out; remembering the pre-reset state lets
+    // the failure path keep them active with the error recorded. NULL means "not a reset".
+    id: "0036_member_reset_state",
+    sql: `ALTER TABLE placement_members ADD COLUMN state_before_reset TEXT;`,
+  },
 ];
 
 function migrate(conn: Database.Database): void {

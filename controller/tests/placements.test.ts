@@ -144,6 +144,24 @@ const setMemberState = (placementId: number, username: string, state: string, er
     )
     .run(state, error, placementId, username);
 
+const resetMarker = (placementId: number, username: string) =>
+  (dbmod.db()
+    .prepare(
+      `SELECT pm.state_before_reset AS v FROM placement_members pm
+       JOIN students ON students.id = pm.student_id
+       WHERE pm.placement_id = ? AND students.username = ?`,
+    )
+    .get(placementId, username) as { v: string | null }).v;
+
+const credentialDeliveredAt = (placementId: number, username: string) =>
+  (dbmod.db()
+    .prepare(
+      `SELECT pm.credential_delivered_at AS v FROM placement_members pm
+       JOIN students ON students.id = pm.student_id
+       WHERE pm.placement_id = ? AND students.username = ?`,
+    )
+    .get(placementId, username) as { v: number | null }).v;
+
 describe("createPlacement", () => {
   it("keeps student quota mode disabled unless explicitly supplied", async () => {
     const lab = newLab("no-student-quota");
@@ -406,6 +424,7 @@ describe("resetPlacementMemberPassword", () => {
     const { student } = await students.addStudentToLab(lab.id, { username: "rotate" }, "admin");
     await students.addStudentToLab(lab.id, { username: "keep" }, "admin");
     const p = await grant(lab.id, nodeA);
+    placements.markPlacementState(p.id, "active");
     setMemberState(p.id, "rotate", "active");
     setMemberState(p.id, "keep", "active");
     // Delivery (or a one-time reveal) burns the stored secret, so an active member has none left to
@@ -428,18 +447,82 @@ describe("resetPlacementMemberPassword", () => {
     const rotated = memberRow(p.id, "rotate");
     expect(rotated.state).toBe("provisioning");
     expect(rotated.last_error).toBeNull();
+    // A reset re-uses student.add on an active member, so the failure path must be able to tell a
+    // reset apart from a first-time provisioning failure and keep the credential revealable.
+    expect(resetMarker(p.id, "rotate")).toBe("active");
+    expect(credentialDeliveredAt(p.id, "rotate")).toBeNull();
     // The stored secret must be exactly the password the agent sets: that is what the welcome email
     // delivers once the node confirms.
     expect(decryptSecret(rotated.credential_secret!)).toBe(params.password);
     // The other member's credential and state are untouched.
     expect(memberRow(p.id, "keep").credential_secret).toBe(keepBefore);
     expect(memberRow(p.id, "keep").state).toBe("active");
+    // Audited, without the password.
+    const entry = dbmod.db()
+      .prepare("SELECT target, detail FROM audit_log WHERE action = 'placement.reset_member_password'")
+      .get() as { target: string; detail: string };
+    expect(entry.target).toBe(`${lab.name}@node-a`);
+    expect(entry.detail).toBe("rotate");
   });
 
-  it("refuses a member that is not active, a stranger, and a placement being removed", async () => {
+  it("keeps a failed reset revealable instead of stranding the only working password", async () => {
+    const lab = newLab("reset-failure");
+    const { student } = await students.addStudentToLab(lab.id, { username: "rotate-fail" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    placements.markPlacementState(p.id, "active");
+    setMemberState(p.id, "rotate-fail", "active");
+    placements.resetPlacementMemberPassword(p.id, student.id, "admin");
+    const pending = memberRow(p.id, "rotate-fail").credential_secret;
+    expect(pending).toBeTruthy();
+
+    // The agent already ran chpasswd, so the old password is gone; the SSH check is what failed.
+    placements.recordPlacementMemberAddResult(lab.name, "node-a", "rotate-fail", false, "ssh_askpass: Permission denied");
+
+    const row = memberRow(p.id, "rotate-fail");
+    expect(row.state).toBe("active");
+    expect(row.last_error).toBe("ssh_askpass: Permission denied");
+    expect(row.credential_secret).toBe(pending);
+    expect(resetMarker(p.id, "rotate-fail")).toBeNull();
+    // ...so the admin can still reveal it.
+    expect(placements.consumePlacementCredential(p.id, student.id, "admin").password)
+      .toBe(decryptSecret(pending!));
+  });
+
+  it("still marks a first-time provisioning failure as failed", async () => {
+    const lab = newLab("reset-first-time");
+    const { student } = await students.addStudentToLab(lab.id, { username: "fresh" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    placements.markPlacementState(p.id, "active");
+    setMemberState(p.id, "fresh", "provisioning");
+
+    placements.recordPlacementMemberAddResult(lab.name, "node-a", "fresh", false, "no fast branch mounted");
+
+    expect(memberRow(p.id, "fresh").state).toBe("failed");
+    expect(memberRow(p.id, "fresh").last_error).toBe("no fast branch mounted");
+    expect(() => placements.resetPlacementMemberPassword(p.id, student.id, "admin"))
+      .toThrow(/Only an active member/);
+  });
+
+  it("clears the marker when the reset succeeds", async () => {
+    const lab = newLab("reset-success");
+    const { student } = await students.addStudentToLab(lab.id, { username: "rotate-ok" }, "admin");
+    const p = await grant(lab.id, nodeA);
+    placements.markPlacementState(p.id, "active");
+    setMemberState(p.id, "rotate-ok", "active");
+    placements.resetPlacementMemberPassword(p.id, student.id, "admin");
+
+    placements.recordPlacementMemberAddResult(lab.name, "node-a", "rotate-ok", true);
+
+    expect(memberRow(p.id, "rotate-ok").state).toBe("active");
+    expect(memberRow(p.id, "rotate-ok").last_error).toBeNull();
+    expect(resetMarker(p.id, "rotate-ok")).toBeNull();
+  });
+
+  it("refuses a member that is not active, a stranger, and a placement that is not active", async () => {
     const lab = newLab("reset-password-guard");
     const { student } = await students.addStudentToLab(lab.id, { username: "stuck-reset" }, "admin");
     const p = await grant(lab.id, nodeA);
+    placements.markPlacementState(p.id, "active");
     setMemberState(p.id, "stuck-reset", "failed");
     expect(() => placements.resetPlacementMemberPassword(p.id, student.id, "admin"))
       .toThrow(/Only an active member/);
@@ -449,7 +532,7 @@ describe("resetPlacementMemberPassword", () => {
     setMemberState(p.id, "stuck-reset", "active");
     placements.destroyPlacement(p.id, "admin");
     expect(() => placements.resetPlacementMemberPassword(p.id, student.id, "admin"))
-      .toThrow(/being removed/);
+      .toThrow(/Only an active placement/);
   });
 });
 
