@@ -332,11 +332,21 @@ export default async function PlacementPage({
                       {member.state === "active" ? (
                         <div className="flex flex-wrap items-center gap-2">
                           {member.credential_available ? (
-                            <form action={revealPlacementCredentialAction}>
-                              <input type="hidden" name="placementId" value={placement.id} />
-                              <input type="hidden" name="studentId" value={member.id} />
-                              <Button type="submit" variant="secondary" size="sm">Reveal once</Button>
-                            </form>
+                            <div className="space-y-1">
+                              <form action={revealPlacementCredentialAction}>
+                                <input type="hidden" name="placementId" value={placement.id} />
+                                <input type="hidden" name="studentId" value={member.id} />
+                                <Button type="submit" variant="secondary" size="sm">Reveal once</Button>
+                              </form>
+                              {member.last_error ? (
+                                // A reset that failed before chpasswd leaves a stored password the node
+                                // never set; the student's old one still works. Say so rather than
+                                // hand the admin a credential that silently does nothing.
+                                <p className="text-xs text-muted-foreground">
+                                  Unverified — the node reported an error, so this password may never have been set.
+                                </p>
+                              ) : null}
+                            </div>
                           ) : (
                             <span className="text-sm text-muted-foreground">Delivered or revealed</span>
                           )}
