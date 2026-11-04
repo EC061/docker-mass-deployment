@@ -23,6 +23,7 @@ import {
   getPlacement,
   nextSshPortForNode,
   recreatePlacement,
+  resetPlacementMemberPassword,
   retryPlacement,
   retryPlacementMembers,
   updatePlacementQuota,
@@ -360,6 +361,26 @@ export async function retryPlacementMembersAction(formData: FormData) {
   revalidatePath(`/labs/${placement!.lab_id}/placements/${placementId}`);
   const fid = putFlash(
     `Re-queued ${queued} member${queued === 1 ? "" : "s"} with a fresh password; each gets a new welcome email on success.`,
+  );
+  redirect(`/labs/${placement!.lab_id}/placements/${placementId}?saved=${fid}`);
+}
+
+export async function resetMemberPasswordAction(formData: FormData) {
+  const who = await actor();
+  const placementId = Number(formData.get("placementId"));
+  const studentId = Number(formData.get("studentId"));
+  const placement = getPlacement(placementId);
+  if (!placement) redirect("/labs");
+  try {
+    resetPlacementMemberPassword(placementId, studentId, who);
+  } catch (e) {
+    const fid = putFlash(e instanceof Error ? e.message : "Could not reset this password");
+    redirect(`/labs/${placement!.lab_id}/placements/${placementId}?error=${fid}`);
+  }
+  revalidatePath(`/labs/${placement!.lab_id}`);
+  revalidatePath(`/labs/${placement!.lab_id}/placements/${placementId}`);
+  const fid = putFlash(
+    "Password reset queued. The node sets a new password and proves it over SSH, then the student is emailed it.",
   );
   redirect(`/labs/${placement!.lab_id}/placements/${placementId}?saved=${fid}`);
 }

@@ -861,6 +861,64 @@ export function retryPlacementMembers(placementId: number, actor?: string): numb
   return queued;
 }
 
+/**
+ * Rotate one active member's password without recreating the container or touching their data.
+ *
+ * `student.add` is idempotent for an account that already exists: the agent keeps the uid, group,
+ * home and sudoers rule, and its final `chpasswd` sets the new password, which it then proves over
+ * SSH before reporting success. Re-sending the task is therefore a password reset — and unlike a
+ * manual `chpasswd` on the node it keeps the controller's deferred-credential flow, so the student
+ * is emailed the new password (welcome template) once the node confirms.
+ */
+export function resetPlacementMemberPassword(
+  placementId: number,
+  studentId: number,
+  actor?: string,
+): void {
+  const p = getPlacement(placementId);
+  if (!p) throw new Error("Unknown placement");
+  if (p.state === "deleting") throw new Error("This placement is being removed");
+  const member = db()
+    .prepare(
+      `SELECT pm.state, students.username AS username, students.linux_uid AS linux_uid
+       FROM placement_members pm JOIN students ON students.id = pm.student_id
+       WHERE pm.placement_id = ? AND pm.student_id = ?`,
+    )
+    .get(placementId, studentId) as
+    | { state: MemberState; username: string; linux_uid: number }
+    | undefined;
+  if (!member) throw new Error("That student is not on this placement");
+  // A member that never reached `active` has no working password to rotate; it needs the retry
+  // path, which also re-creates a container that failed to come up.
+  if (member.state !== "active") {
+    throw new Error("Only an active member has a password to reset; retry the unfinished member instead");
+  }
+  const password = generatePassword();
+  db()
+    .prepare(
+      `UPDATE placement_members
+       SET state = 'provisioning', last_error = NULL, credential_secret = ?,
+           credential_delivered_at = NULL, updated_at = ?
+       WHERE placement_id = ? AND student_id = ?`,
+    )
+    .run(encryptSecret(password), Date.now(), placementId, studentId);
+  enqueueTask(
+    p.node_name,
+    "student.add",
+    {
+      lab: p.lab_name,
+      username: member.username,
+      password,
+      uid: member.linux_uid,
+      gid: member.linux_uid,
+      student_fast_quota_bytes: p.student_fast_quota_bytes,
+      student_cold_quota_bytes: p.student_cold_quota_bytes,
+    },
+    actor,
+  );
+  audit(actor, "placement.reset_member_password", `${p.lab_name}@${p.node_name}`, member.username);
+}
+
 /** Recreate the container with a (possibly changed) image / container options. Preserves data. */
 export function recreatePlacement(
   placementId: number,

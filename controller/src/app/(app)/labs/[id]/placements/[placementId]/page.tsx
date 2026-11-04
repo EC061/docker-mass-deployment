@@ -27,6 +27,7 @@ import {
 } from "@/lib/placements";
 import {
   removePlacementAction,
+  resetMemberPasswordAction,
   revealPlacementCredentialAction,
   retryPlacementAction,
   retryPlacementMembersAction,
@@ -328,13 +329,27 @@ export default async function PlacementPage({
                     <TableCell><Badge variant={STATE_VARIANT[member.state] ?? "warn"}>{member.state}</Badge></TableCell>
                     <TableCell className="text-destructive">{member.last_error ?? "—"}</TableCell>
                     <TableCell>
-                      {member.state === "active" && member.credential_available ? (
-                        <form action={revealPlacementCredentialAction}>
-                          <input type="hidden" name="placementId" value={placement.id} />
-                          <input type="hidden" name="studentId" value={member.id} />
-                          <Button type="submit" variant="secondary" size="sm">Reveal once</Button>
-                        </form>
-                      ) : member.state === "active" ? "Delivered or revealed" : "Available after success"}
+                      {member.state === "active" ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          {member.credential_available ? (
+                            <form action={revealPlacementCredentialAction}>
+                              <input type="hidden" name="placementId" value={placement.id} />
+                              <input type="hidden" name="studentId" value={member.id} />
+                              <Button type="submit" variant="secondary" size="sm">Reveal once</Button>
+                            </form>
+                          ) : (
+                            <span className="text-sm text-muted-foreground">Delivered or revealed</span>
+                          )}
+                          <form action={resetMemberPasswordAction}>
+                            <input type="hidden" name="placementId" value={placement.id} />
+                            <input type="hidden" name="studentId" value={member.id} />
+                            <ConfirmButton size="sm" variant="secondary" disabled={!canEdit}
+                              confirm={`Reset ${member.username}'s password on ${placement.node_name}? A new password is generated, the node proves it over SSH, and the student is emailed it. Their current password stops working; files and running sessions are untouched.`}>
+                              Reset password
+                            </ConfirmButton>
+                          </form>
+                        </div>
+                      ) : "Available after success"}
                     </TableCell>
                   </TableRow>
                 ))}
