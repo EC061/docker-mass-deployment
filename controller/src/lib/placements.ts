@@ -877,7 +877,7 @@ export function resetPlacementMemberPassword(
 ): void {
   const p = getPlacement(placementId);
   if (!p) throw new Error("Unknown placement");
-  if (p.state === "deleting") throw new Error("This placement is being removed");
+  if (p.state !== "active") throw new Error("Only an active placement can reset a password");
   const member = db()
     .prepare(
       `SELECT pm.state, students.username AS username, students.linux_uid AS linux_uid
@@ -898,10 +898,10 @@ export function resetPlacementMemberPassword(
     .prepare(
       `UPDATE placement_members
        SET state = 'provisioning', last_error = NULL, credential_secret = ?,
-           credential_delivered_at = NULL, updated_at = ?
+           credential_delivered_at = NULL, state_before_reset = ?, updated_at = ?
        WHERE placement_id = ? AND student_id = ?`,
     )
-    .run(encryptSecret(password), Date.now(), placementId, studentId);
+    .run(encryptSecret(password), member.state, Date.now(), placementId, studentId);
   enqueueTask(
     p.node_name,
     "student.add",
@@ -1097,6 +1097,46 @@ export function markPlacementMemberState(
       .prepare("UPDATE placement_members SET state = ?, last_error = ?, updated_at = ? WHERE id = ?")
       .run(state, lastError ?? null, Date.now(), row.id);
   }
+}
+
+/**
+ * Record a `student.add` result, honouring a password reset that is in flight.
+ *
+ * The agent runs `chpasswd` before its SSH verification, so a reset can fail *after* the new
+ * password is live and the old one is gone. Marking that member `failed` would hide the pending
+ * credential from both the welcome email and the one-time reveal, locking the student out; put them
+ * back to the state they had before the reset and keep the error visible instead. A first-time
+ * provisioning failure has no pre-reset state and keeps the ordinary `failed` path, where retrying
+ * is the correct remedy.
+ */
+export function recordPlacementMemberAddResult(
+  labName: string,
+  nodeName: string,
+  username: string,
+  ok: boolean,
+  lastError?: string,
+): void {
+  const row = db()
+    .prepare(
+      `SELECT pm.id AS id, pm.state_before_reset AS state_before_reset FROM placement_members pm
+       JOIN lab_placements p ON p.id = pm.placement_id
+       JOIN labs ON labs.id = p.lab_id
+       JOIN nodes ON nodes.id = p.node_id
+       JOIN students ON students.id = pm.student_id
+       WHERE labs.name = ? AND nodes.name = ? AND students.username = ?`,
+    )
+    .get(labName, nodeName, username) as
+    | { id: number; state_before_reset: MemberState | null }
+    | undefined;
+  if (!row) return;
+  const state: MemberState = ok ? "active" : (row.state_before_reset ?? "failed");
+  db()
+    .prepare(
+      `UPDATE placement_members
+       SET state = ?, last_error = ?, state_before_reset = NULL, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(state, ok ? null : (lastError ?? "student.add failed"), Date.now(), row.id);
 }
 
 /** Agent confirmed a lab.destroy: drop the placement row (cascades members + samples). */
